@@ -1,0 +1,808 @@
+<?php
+
+declare(strict_types=1);
+
+/**
+ * NTDST Bootstrap
+ *
+ * Orchestrates service registration and initialization with clear lifecycle phases
+ * Generic infrastructure - works with any theme configuration
+ *
+ * Lifecycle:
+ * 1. Register    - Services added to DI container (immediate)
+ * 2. Boot Core   - Critical services initialized (after_setup_theme:5)
+ * 3. Boot Theme  - Theme setup (after_setup_theme:10)
+ * 4. Boot Features - Remaining services initialized (after_setup_theme:15)
+ *
+ * @package ntdst-core
+ */
+
+defined('ABSPATH') || exit;
+
+/**
+ * Hook + filter naming conventions:
+ *  - Actions: `ntdst/*` (e.g. `ntdst/core_ready`)
+ *  - Database options: `ntdst_service_*`
+ *  - Filters: `ntdst_service_{slug}_config` and `ntdst_service_{slug}_enabled` —
+ *    the per-service extension API, keyed by service slug, matching the option
+ *    prefix above.
+ *
+ * RETIRED NAMES (S9/T02, 2026-08). Before this rename the two filters above were
+ * spelled `netdust_{slug}_config` and `netdust_{slug}_enabled`. There is no shim:
+ * a listener on either retired name is now silently inert. Note especially that
+ * the `_enabled` filter is a DENY filter, so the rename FAILS OPEN — a fork
+ * carrying `add_filter` on the retired `_enabled` name to disable a service will
+ * find that service booting again. The full mapping lands in
+ * `docs/architecture/ntdst-core-migration-S9-S10.md` (S9/T13, not yet written);
+ * until it exists, this paragraph is the record.
+ *
+ * A service's config override is declared at
+ * `config['services']['overrides'][$slug]`. It nests under the existing
+ * `services` key rather than replacing it — `services.discovery_paths` and
+ * friends already live there.
+ *
+ * SLUG DERIVATION — read this before writing an override. `{slug}` above is NOT
+ * the class name lowercased. When a service declares no `metadata()['name']`,
+ * `getServiceSlugCached()` strips EVERY occurrence of `Service` — not just a
+ * trailing one — and converts the rest from camelCase to snake_case, keeping a
+ * run of consecutive capitals together as ONE token:
+ *
+ *     AdminUIService     -> admin_ui
+ *     APIRouterService   -> api_router
+ *     CacheHeadersService-> cache_headers
+ *     ProfileService     -> profile
+ *
+ * "Every occurrence" is literal (`str_replace`, not an anchored `/Service$/`),
+ * and it is stated because the difference only shows on names nobody has
+ * written yet: `ServiceRegistryService -> registry`, `MyServiceHandlerService ->
+ * my_handler`, and `ServiceService -> ''` — an EMPTY slug, i.e. the filter
+ * `ntdst_service__enabled` and the option `ntdst_service_`. Declare
+ * `metadata()['name']` on any such class rather than relying on the derivation.
+ *
+ * To pin a slug that the derivation would not produce, declare it —
+ * `metadata()['name']` takes precedence over the derivation entirely (it is
+ * whitespace-split and lowercased, never collapsed), but note that in the real
+ * registration flow `isServiceEnabled()` derives and caches the slug from the
+ * CLASS NAME first, so the metadata name only takes effect if nothing warmed
+ * the cache before it.
+ *
+ * RETIRED DERIVATION (S9/T14, 2026-08). Before this fix a `_` was inserted
+ * before EVERY internal capital, so consecutive capitals each got their own
+ * separator: `AdminUIService -> admin_u_i`, `APIRouterService -> a_p_i_router`.
+ * Every slug that contained no consecutive capitals is UNMOVED. There is no
+ * shim: a listener on a mangled key is now inert, and because `_enabled` is a
+ * DENY filter that FAILS OPEN — a fork disabling a service via
+ * `ntdst_service_admin_u_i_enabled` will find it booting again. This was
+ * harmless internal plumbing until T02 promoted the slug into the user-facing
+ * extension key, at which point the mangling became a broken public API: nobody
+ * guesses `ntdst_service_admin_u_i_config` on the first try.
+ *
+ * Boot order with equal priority is best-effort (PHP's uasort isn't stable).
+ * If two services depend on each other, set their priorities — never rely on
+ * registration order.
+ */
+class NTDST_Bootstrap
+{
+    private array $config;
+    private array $services = [];
+    private array $bootedServices = [];
+    private bool $servicesRegistered = false;
+    private bool $coreBooted = false;
+    private bool $featuresBooted = false;
+
+    /**
+     * Sector registry for sector-aware service loading
+     */
+    private readonly NTDST_SectorRegistry $sectors;
+
+    /**
+     * PERFORMANCE: Cache for service slugs to avoid repeated regex operations
+     */
+    private array $slugCache = [];
+
+    /**
+     * PERFORMANCE: Pre-merged per-service config overrides (avoids filter overhead)
+     */
+    private array $serviceConfigCache = [];
+
+    /**
+     * Constructor
+     *
+     * @param array $config Configuration array from theme config.php
+     */
+    public function __construct(array $config)
+    {
+        $this->config = $config;
+        $this->sectors = ntdst_sectors();
+
+        // Always log bootstrap creation
+        ntdst_log()->debug('NTDST Bootstrap: Instance created with ' . count($config) . ' config keys');
+    }
+
+    // ========================================
+    // PHASE 1: REGISTRATION
+    // ========================================
+
+    /**
+     * Register all services in the DI container
+     * Called immediately, no hooks
+     *
+     * @return self
+     */
+    public function register(): self
+    {
+        if ($this->servicesRegistered) {
+            return $this;
+        }
+
+        $countBefore = count($this->services);
+
+        // Auto-discover root services if enabled (sector-independent)
+        if ($this->config['services']['auto_discover'] ?? false) {
+            $this->discoverServices();
+        }
+
+        // Auto-discover sector services from enabled sectors
+        $this->discoverSectorServices();
+
+        // If auto-discovery was on but found nothing, flag it — usually a misconfigured path.
+        if (($this->config['services']['auto_discover'] ?? false) && count($this->services) === $countBefore) {
+            $paths = $this->config['services']['discovery_paths'] ?? [];
+            ntdst_log()->debug('NTDST Bootstrap: auto-discovery found 0 services. Paths scanned: ' . implode(', ', $paths));
+        }
+
+        // Register explicitly configured core services
+        foreach ($this->config['services']['core'] ?? [] as $service) {
+            $this->registerService($service);
+        }
+
+        // Register admin services (conditionally)
+        if (is_admin()) {
+            foreach ($this->config['services']['admin'] ?? [] as $service) {
+                $this->registerService($service);
+            }
+        }
+
+        // Register conditional services (non-sector conditions)
+        foreach ($this->config['services']['conditional'] ?? [] as $key => $spec) {
+            if (isset($spec['condition']) && is_callable($spec['condition']) && $spec['condition']()) {
+                $this->registerService($spec['service']);
+            }
+        }
+
+        // Always log registration summary
+        ntdst_log()->debug('NTDST Bootstrap: Registered ' . count($this->services) . ' services');
+
+        $this->servicesRegistered = true;
+
+        do_action('ntdst/services_registered', $this);
+
+        return $this;
+    }
+
+    /**
+     * Register a single service
+     *
+     * @param string $class Fully qualified class name
+     * @return void
+     */
+    private function registerService(string $class): void
+    {
+
+        // Skip if already registered
+        if (isset($this->services[$class])) {
+            return;
+        }
+
+        // For namespaced services, try to load the file first
+        // Maps namespace to file path, e.g. ntdstheme\services\gallery\ArtistService => services/gallery/ArtistService.php
+        $attemptedPaths = [];
+        if (!class_exists($class) && str_contains($class, '\\')) {
+            foreach ($this->config['services']['discovery_paths'] ?? [] as $basePath) {
+                $relativePath = str_replace('\\', '/', $class) . '.php';
+
+                // Strip theme namespace prefix if present (e.g., ntdstheme/)
+                // This allows namespaces like ntdstheme\services\gallery\... to map to services/gallery/...
+                $themeSlug = basename(get_stylesheet_directory());
+                if (str_starts_with($relativePath, $themeSlug . '/')) {
+                    $relativePath = substr($relativePath, strlen($themeSlug) + 1);
+                }
+
+                $filePath = dirname($basePath) . '/' . $relativePath;
+                $attemptedPaths[] = $filePath;
+
+                if (file_exists($filePath)) {
+                    require_once $filePath;
+                    break;
+                }
+            }
+        }
+
+        // Check if class exists
+        if (!class_exists($class)) {
+            $detail = $attemptedPaths ? ' (attempted: ' . implode(', ', $attemptedPaths) . ')' : '';
+            ntdst_log()->debug("NTDST Bootstrap: Service class {$class} not found{$detail}");
+            return;
+        }
+
+        // Get metadata if available
+        $metadata = $this->getServiceMetadata($class);
+
+        // Check sector requirements (new sector-based loading)
+        if (!$this->checkSectorRequirements($metadata)) {
+            return;
+        }
+
+        // Check if service is enabled (3-level control)
+        if (!$this->isServiceEnabled($class, $metadata)) {
+            return;
+        }
+
+        // Check admin context
+        if (($metadata['admin_only'] ?? false) && !is_admin()) {
+            return;
+        }
+
+        // PERFORMANCE: Pre-compute slug and cache the service's config override
+        // This replaces the per-service filter with direct config lookup.
+        // Overrides nest UNDER the existing `services` key (beside `core`,
+        // `admin`, `conditional`, `auto_discover`, `discovery_paths`) rather
+        // than occupying it, which is already taken.
+        $slug = $this->getServiceSlugCached($class, $metadata);
+        if (isset($this->config['services']['overrides'][$slug])) {
+            $this->serviceConfigCache[$slug] = $this->config['services']['overrides'][$slug];
+        }
+
+        // Register in DI container
+        ntdst_set($class);
+
+        // Track service
+        $this->services[$class] = [
+            'class' => $class,
+            'metadata' => $metadata,
+            'booted' => false,
+            'priority' => $metadata['priority'] ?? 10,
+        ];
+    }
+
+    // ========================================
+    // PHASE 2: BOOT CORE
+    // ========================================
+
+    /**
+     * Boot core services (critical services that must run early)
+     * Hook: after_setup_theme:5
+     *
+     * @return self
+     */
+    public function bootCore(): self
+    {
+        if ($this->coreBooted) {
+            return $this;
+        }
+
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            ntdst_log()->debug('NTDST Bootstrap: Starting bootCore()');
+            ntdst_log()->debug('NTDST Bootstrap: Registered services: ' . count($this->services));
+        }
+
+        // Sort by priority so within-core ordering is deterministic.
+        uasort($this->services, fn($a, $b) => $a['priority'] <=> $b['priority']);
+
+        // Boot services with priority < 10 (critical services)
+        foreach ($this->services as $class => $service) {
+            if ($service['priority'] < 10 && !$service['booted']) {
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    ntdst_log()->debug("NTDST Bootstrap: Booting core service {$class} (priority: {$service['priority']})");
+                }
+                $this->bootService($class);
+            }
+        }
+
+        $this->coreBooted = true;
+
+        do_action('ntdst/core_ready', $this);
+
+        return $this;
+    }
+
+    // ========================================
+    // PHASE 3: BOOT FEATURES
+    // ========================================
+
+    /**
+     * Boot feature services (all remaining services)
+     * Hook: after_setup_theme:15
+     *
+     * @return self
+     */
+    public function bootFeatures(): self
+    {
+        if ($this->featuresBooted) {
+            return $this;
+        }
+
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            ntdst_log()->debug('NTDST Bootstrap: Starting bootFeatures()');
+            ntdst_log()->debug('NTDST Bootstrap: Unbooted services: ' . count(array_filter($this->services, fn($s) => !$s['booted'])));
+        }
+
+        // Sort services by priority
+        uasort($this->services, fn($a, $b) => $a['priority'] <=> $b['priority']);
+
+        // Boot all unbooted services
+        foreach ($this->services as $class => $service) {
+            if (!$service['booted']) {
+                if (defined('WP_DEBUG') && WP_DEBUG) {
+                    ntdst_log()->debug("NTDST Bootstrap: Booting feature service {$class} (priority: {$service['priority']})");
+                }
+                $this->bootService($class);
+            }
+        }
+
+        $this->featuresBooted = true;
+
+        if (defined('WP_DEBUG') && WP_DEBUG) {
+            ntdst_log()->debug('NTDST Bootstrap: All services booted. Total: ' . count($this->bootedServices));
+        }
+
+        do_action('ntdst/features_ready', $this);
+
+        return $this;
+    }
+
+    /**
+     * Boot a single service
+     *
+     * @param string $class Service class name
+     * @return void
+     */
+    private function bootService(string $class): void
+    {
+        if (!isset($this->services[$class]) || $this->services[$class]['booted']) {
+            return;
+        }
+
+        try {
+            // Fire before hook
+            do_action("ntdst/service_before_boot/{$class}", $this);
+
+            // PERFORMANCE: Register config filter only when service boots (lazy loading)
+            // This ensures filters are only added for services that actually instantiate
+            $this->registerServiceConfigFilter($class);
+
+            // Instantiate service (constructor runs init logic)
+            $instance = ntdst_get($class);
+
+            // Mark as booted
+            $this->services[$class]['booted'] = true;
+            $this->bootedServices[] = $class;
+
+            // Debug logging
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                ntdst_log()->debug("NTDST Bootstrap: Successfully booted {$class}");
+            }
+
+            // Fire after hook
+            do_action("ntdst/service_after_boot/{$class}", $instance, $this);
+
+        } catch (\Throwable $e) {
+            // Log at error level so failures are visible without WP_DEBUG.
+            // Catches Error subclasses (TypeError, RuntimeException) too, so a
+            // service whose constructor throws fails loudly instead of silently
+            // disappearing from the boot list.
+            ntdst_log()->error("NTDST Bootstrap: Failed to boot service {$class}: " . $e->getMessage());
+            ntdst_log()->debug($e->getTraceAsString());
+
+            // In debug mode, rethrow so the error surfaces in dev environments.
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                throw $e;
+            }
+        }
+    }
+
+    // ========================================
+    // AUTO-DISCOVERY
+    // ========================================
+
+    /**
+     * Auto-discover services from configured paths
+     *
+     * @return void
+     */
+    private function discoverServices(): void
+    {
+        $paths = $this->config['services']['discovery_paths'] ?? [];
+
+        foreach ($paths as $path) {
+            if (!is_dir($path)) {
+                continue;
+            }
+
+            $this->discoverServicesInPath($path);
+        }
+    }
+
+    /**
+     * Discover services in a specific path
+     *
+     * @param string $path Directory path
+     * @return void
+     */
+    private function discoverServicesInPath(string $path): void
+    {
+        // Only discover root-level services (no subdirectory scanning)
+        // Services in subdirectories must have namespaces and be explicitly
+        // registered in theme-config.php (core, admin, or conditional)
+        $files = glob($path . '/*Service.php');
+
+        foreach ($files as $file) {
+            // Load the file first so class_exists() will work
+            require_once $file;
+
+            $className = $this->getClassNameFromFile($file);
+
+            if ($className && !in_array($className, $this->config['services']['core'] ?? [])) {
+                // Skip if service is in conditional config (let conditional handle it)
+                if ($this->isInConditionalConfig($className)) {
+                    continue;
+                }
+                $this->registerService($className);
+            }
+        }
+    }
+
+    /**
+     * Check if a service class is defined in the conditional config
+     *
+     * @param string $className Service class name
+     * @return bool
+     */
+    private function isInConditionalConfig(string $className): bool
+    {
+        foreach ($this->config['services']['conditional'] ?? [] as $key => $spec) {
+            $serviceClass = $spec['service'] ?? '';
+            // Normalize class names for comparison (handle namespace variations)
+            $normalizedService = ltrim(str_replace('/', '\\', $serviceClass), '\\');
+            $normalizedClass = ltrim(str_replace('/', '\\', $className), '\\');
+
+            if ($normalizedService === $normalizedClass) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Check if a service class is defined in the core config
+     *
+     * @param string $className Service class name
+     * @return bool
+     */
+    private function isInCoreConfig(string $className): bool
+    {
+        foreach ($this->config['services']['core'] ?? [] as $service) {
+            $normalizedService = ltrim(str_replace('/', '\\', $service), '\\');
+            $normalizedClass = ltrim(str_replace('/', '\\', $className), '\\');
+            if ($normalizedService === $normalizedClass) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * Auto-discover services from enabled sector directories
+     *
+     * Services in sector folders (e.g., services/gallery/, services/artist/)
+     * are auto-discovered when that sector is enabled.
+     *
+     * @return void
+     */
+    private function discoverSectorServices(): void
+    {
+        $basePath = $this->config['services']['discovery_paths'][0] ?? get_stylesheet_directory() . '/services';
+        $basePath = dirname($basePath); // Get theme root (e.g., ntdstheme/)
+
+        $sectorPaths = $this->sectors->getDiscoveryPaths($basePath);
+
+        foreach ($sectorPaths as $sector => $path) {
+            if (!is_dir($path)) {
+                continue;
+            }
+
+            $files = glob($path . '/*Service.php');
+
+            foreach ($files as $file) {
+                // Load the file first so class_exists() will work
+                require_once $file;
+
+                $className = $this->getClassNameFromFile($file);
+
+                if ($className && !$this->isInCoreConfig($className) && !$this->isInConditionalConfig($className)) {
+                    $this->registerService($className);
+                }
+            }
+        }
+    }
+
+    /**
+     * Check if service sector requirements are met
+     *
+     * Delegates to SectorRegistry::checkRequirements()
+     * Services without 'sectors' metadata always load (backwards compatible)
+     *
+     * @param array $metadata Service metadata
+     * @return bool
+     */
+    private function checkSectorRequirements(array $metadata): bool
+    {
+        $requirements = $metadata['sectors'] ?? null;
+        return $this->sectors->checkRequirements($requirements);
+    }
+
+    /**
+     * Extract class name from file
+     *
+     * @param string $file File path
+     * @return string|null Class name or null
+     */
+    private function getClassNameFromFile(string $file): ?string
+    {
+        $content = file_get_contents($file);
+        if ($content === false) {
+            return null;
+        }
+
+        $namespace = '';
+        $class = '';
+
+        // Extract namespace
+        if (preg_match('/^\s*namespace\s+([^;]+);/m', $content, $matches)) {
+            $namespace = trim($matches[1]);
+        }
+
+        // Extract class name (allow final/abstract modifiers)
+        if (preg_match('/^\s*(?:abstract\s+|final\s+)?class\s+(\w+)/m', $content, $matches)) {
+            $class = $matches[1];
+        }
+
+        if (empty($class)) {
+            return null;
+        }
+
+        $fqcn = $namespace ? $namespace . '\\' . $class : $class;
+
+        return class_exists($fqcn) ? $fqcn : null;
+    }
+
+    // ========================================
+    // METADATA & CONFIGURATION
+    // ========================================
+
+    /**
+     * Get service metadata
+     *
+     * @param string $class Service class name
+     * @return array Metadata array
+     */
+    private function getServiceMetadata(string $class): array
+    {
+        $defaults = [
+            'name' => $this->getServiceName($class),
+            'description' => '',
+            'admin_only' => false,
+            'enabled' => true,
+            'priority' => 10,
+        ];
+
+        // Check if service implements metadata interface
+        if (method_exists($class, 'metadata')) {
+            return array_merge($defaults, $class::metadata());
+        }
+
+        return $defaults;
+    }
+
+    /**
+     * Get human-readable service name from class name
+     *
+     * @param string $class Class name
+     * @return string Service name
+     */
+    private function getServiceName(string $class): string
+    {
+        $name = basename(str_replace('\\', '/', $class));
+        $name = str_replace('Service', '', $name);
+        return ucwords(preg_replace('/(?<!^)[A-Z]/', ' $0', $name));
+    }
+
+    /**
+     * Check if service is enabled
+     *
+     * @param string $class Service class name
+     * @param array $metadata Service metadata
+     * @return bool
+     */
+    private function isServiceEnabled(string $class, array $metadata): bool
+    {
+        // Check metadata
+        if (isset($metadata['enabled']) && !$metadata['enabled']) {
+            return false;
+        }
+
+        // Check filter
+        $slug = $this->getServiceSlug($class);
+        $enabled = apply_filters("ntdst_service_{$slug}_enabled", true);
+
+        if (!$enabled) {
+            return false;
+        }
+
+        // Check database option
+        $db_enabled = get_option("ntdst_service_{$slug}", '1');
+
+        return $db_enabled === '1';
+    }
+
+    /**
+     * Get service slug from class name (with caching)
+     * PERFORMANCE: Caches slug to avoid repeated regex operations
+     *
+     * @param string $class Class name
+     * @param array|null $metadata Optional metadata to use name from
+     * @return string Slug
+     */
+    private function getServiceSlugCached(string $class, ?array $metadata = null): string
+    {
+        if (isset($this->slugCache[$class])) {
+            return $this->slugCache[$class];
+        }
+
+        // Use metadata name if available (more reliable)
+        if ($metadata && !empty($metadata['name'])) {
+            $slug = strtolower(preg_replace('/\s+/', '_', trim($metadata['name'])));
+        } else {
+            $name = basename(str_replace('\\', '/', $class));
+            $name = str_replace('Service', '', $name);
+
+            // Standard camelCase -> snake_case, in this order. Rule 1 splits a
+            // run of capitals only before its LAST one, so an acronym stays one
+            // token and hands the following word back (APIRouter -> API_Router);
+            // rule 2 then breaks the ordinary lower/digit-to-upper boundaries
+            // (Admin_UI, Cache_Headers, T02_Probe). A trailing acronym is
+            // covered by rule 2 alone, since rule 1 needs a lowercase after the
+            // run (AdminUI -> Admin_UI). `\d` is in rule 2's first class so a
+            // digit closes a token the way a lowercase does (S3Storage ->
+            // S3_Storage).
+            $name = preg_replace('/([A-Z]+)([A-Z][a-z])/', '$1_$2', $name);
+            $name = preg_replace('/([a-z\d])([A-Z])/', '$1_$2', $name);
+
+            $slug = strtolower($name);
+        }
+
+        $this->slugCache[$class] = $slug;
+        return $slug;
+    }
+
+    /**
+     * Get service slug from class name
+     *
+     * @param string $class Class name
+     * @return string Slug
+     */
+    private function getServiceSlug(string $class): string
+    {
+        return $this->getServiceSlugCached($class);
+    }
+
+    /**
+     * Get the declared config override for a service
+     * PERFORMANCE: Direct lookup instead of filter chain
+     *
+     * @param string $slug Service slug
+     * @return array Service configuration override
+     */
+    public function getServiceConfig(string $slug): array
+    {
+        return $this->serviceConfigCache[$slug] ?? [];
+    }
+
+    /**
+     * Register config filter for a service (lazy loading)
+     * PERFORMANCE: Only registers filter when service actually boots
+     *
+     * @param string $class Service class name
+     * @return void
+     */
+    private function registerServiceConfigFilter(string $class): void
+    {
+        $slug = $this->getServiceSlugCached($class);
+
+        // Skip if no config override exists for this service
+        if (!isset($this->serviceConfigCache[$slug])) {
+            return;
+        }
+
+        $serviceConfig = $this->serviceConfigCache[$slug];
+
+        // Register the filter with cached config (no closure over $this->config)
+        add_filter("ntdst_service_{$slug}_config", function ($defaults) use ($serviceConfig) {
+            return array_merge($defaults, $serviceConfig);
+        }, 1);
+    }
+
+    /**
+     * Get configuration value
+     *
+     * @param string|null $key Configuration key (dot notation supported)
+     * @param mixed $default Default value
+     * @return mixed
+     */
+    public function config(?string $key = null, mixed $default = null): mixed
+    {
+        if ($key === null) {
+            return $this->config;
+        }
+
+        // Support dot notation: 'services.overrides.barba.animationDuration'
+        // array_key_exists so a literal null value round-trips through config().
+        $keys = explode('.', $key);
+        $value = $this->config;
+
+        foreach ($keys as $k) {
+            if (!is_array($value) || !array_key_exists($k, $value)) {
+                return $default;
+            }
+            $value = $value[$k];
+        }
+
+        return $value;
+    }
+
+    /**
+     * Get all registered services
+     *
+     * @return array
+     */
+    public function getServices(): array
+    {
+        return $this->services;
+    }
+
+    /**
+     * Get all booted services
+     *
+     * @return array
+     */
+    public function getBootedServices(): array
+    {
+        return $this->bootedServices;
+    }
+
+    /**
+     * Check if a service is registered through this Bootstrap.
+     *
+     * Note: this is Bootstrap-scope only. Services registered directly via
+     * ntdst_set() (e.g. repositories in stride-core.php) are not tracked here.
+     * To check the DI container, use ntdst_container()->has($class).
+     *
+     * @param string $class Service class name
+     * @return bool
+     */
+    public function hasService(string $class): bool
+    {
+        return isset($this->services[$class]);
+    }
+
+    /**
+     * Check if a service is booted
+     *
+     * @param string $class Service class name
+     * @return bool
+     */
+    public function isBooted(string $class): bool
+    {
+        return isset($this->services[$class]) && $this->services[$class]['booted'];
+    }
+}
