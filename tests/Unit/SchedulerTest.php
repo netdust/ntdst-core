@@ -49,4 +49,56 @@ final class SchedulerTest extends TestCase
         $this->assertTrue(function_exists('ntdst_clear_recurring'));
         ntdst_schedule_recurring('my_hook', 'daily', fn() => null);
     }
+
+    public function test_registry_tracks_and_clears_hooks(): void
+    {
+        Functions\when('wp_next_scheduled')->justReturn(false);
+        Functions\when('wp_schedule_event')->justReturn(true);
+        Functions\when('add_action')->justReturn(true);
+        Functions\when('wp_clear_scheduled_hook')->justReturn(true);
+
+        $scheduler = new NTDST_Scheduler();
+        $scheduler->schedule('a', 'daily', fn() => null);
+        $scheduler->schedule('b', 'hourly', fn() => null);
+
+        $this->assertSame(['a' => 'daily', 'b' => 'hourly'], $scheduler->hooks());
+
+        $scheduler->clear('a');
+
+        $this->assertSame(['b' => 'hourly'], $scheduler->hooks());
+    }
+
+    public function test_is_scheduled_reflects_wp_next_scheduled(): void
+    {
+        Functions\when('wp_next_scheduled')->justReturn(1754900000);
+        $this->assertTrue((new NTDST_Scheduler())->isScheduled('my_hook'));
+
+        Functions\when('wp_next_scheduled')->justReturn(false);
+        $this->assertFalse((new NTDST_Scheduler())->isScheduled('my_hook'));
+    }
+
+    public function test_next_run_returns_timestamp_or_null(): void
+    {
+        Functions\when('wp_next_scheduled')->justReturn(1754900000);
+        $this->assertSame(1754900000, (new NTDST_Scheduler())->nextRun('my_hook'));
+
+        Functions\when('wp_next_scheduled')->justReturn(false);
+        $this->assertNull((new NTDST_Scheduler())->nextRun('my_hook'));
+    }
+
+    public function test_scheduler_facade_returns_same_instance(): void
+    {
+        $this->assertSame(ntdst_scheduler(), ntdst_scheduler());
+    }
+
+    public function test_schedule_recurring_facade_registers_into_shared_instance(): void
+    {
+        Functions\when('wp_next_scheduled')->justReturn(false);
+        Functions\when('wp_schedule_event')->justReturn(true);
+        Functions\when('add_action')->justReturn(true);
+
+        ntdst_schedule_recurring('shared_hook', 'weekly', fn() => null);
+
+        $this->assertSame('weekly', ntdst_scheduler()->hooks()['shared_hook'] ?? null);
+    }
 }
