@@ -164,6 +164,9 @@ class NTDST_Data_Model
     {
         return match ($type) {
             'int', 'integer' => 'absint',
+            // signed_int: an int that may be negative (e.g. a price discount in cents).
+            // absint() was the original bug — it strips the sign (Stride 744b5b05).
+            'signed_int' => fn($v) => is_array($v) ? 0 : (int) $v,
             'float', 'double' => 'floatval',
             'bool', 'boolean' => fn($v) => $this->sanitizeBoolean($v),
             'email' => 'sanitize_email',
@@ -193,7 +196,7 @@ class NTDST_Data_Model
             // sanitize_text_field is how a `wysiwig` field loses its markup
             // with nothing failing. Fail loudly at registration instead.
             default => throw new InvalidArgumentException(
-                "Unknown field type '{$type}'. Supported: int, float, bool, email, url, "
+                "Unknown field type '{$type}'. Supported: int, signed_int, float, bool, email, url, "
                 . "text, textarea, html, array, json, relation, gallery, repeater, "
                 . "select, date, wysiwyg, image, file, person, post_relation.",
             ),
@@ -1760,6 +1763,7 @@ class NTDST_Data_Model
             // Type cast (with null safety for json_decode in PHP 8.1+)
             $formatted[$field] = match ($type) {
                 'int', 'integer' => (int) $value,
+                'signed_int' => (int) $value,
                 'float', 'double' => (float) $value,
                 'bool', 'boolean' => $this->sanitizeBoolean($value),
                 'array' => is_array($value) ? $value : [],
