@@ -1,4 +1,5 @@
 <?php // tests/bootstrap.php
+PHP_SAPI === 'cli' || exit; // phpunit runs CLI; a web hit is not CLI
 require_once __DIR__ . '/../vendor/autoload.php';
 define('ABSPATH', '/tmp/wordpress/'); // satisfies the defined-guard in class files
 require_once __DIR__ . '/../core/Container.php';

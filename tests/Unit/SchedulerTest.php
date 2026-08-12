@@ -1,4 +1,6 @@
 <?php // tests/Unit/SchedulerTest.php
+defined('ABSPATH') || exit; // direct web hit: ABSPATH undefined → exit; under phpunit the bootstrap defines it first
+
 use Brain\Monkey;
 use Brain\Monkey\Functions;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;

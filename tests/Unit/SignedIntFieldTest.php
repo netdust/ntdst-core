@@ -1,4 +1,5 @@
 <?php // tests/Unit/SignedIntFieldTest.php
+defined('ABSPATH') || exit; // direct web hit: ABSPATH undefined → exit; under phpunit the bootstrap defines it first
 
 use PHPUnit\Framework\TestCase;
 

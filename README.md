@@ -10,7 +10,7 @@ Stride) instead of a per-project vendored copy that drifts.
 - `core/` — Foundation (Container, Bootstrap, Theme, Router)
 - `api/` — Request flow (Endpoints, Data, Response)
 - `admin/` — Admin UI (MetaboxGenerator, RelationField)
-- `services/` — Built-in services (Logger, Mailer)
+- `services/` — Built-in services (Logger, Mailer, Scheduler)
 - `ntdst-core.php` — package-root loader; adopters require it via an explicit
   one-line shim, not a directory scan
 

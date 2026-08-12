@@ -9,6 +9,7 @@
     "scripts": {
         "test": "phpunit",
         "lint": "find . -name '*.php' -not -path './vendor/*' -print0 | xargs -0 -n1 php -l",
-        "gate": ["@lint", "@test"]
+        "guard": "bash bin/guard.sh",
+        "gate": ["@lint", "@test", "@guard"]
     }
 }
