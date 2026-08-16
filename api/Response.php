@@ -243,7 +243,17 @@ class NTDST_Response
     }
 
     /**
-     * Render HTML template
+     * Render HTML template.
+     *
+     * Commits its OWN HTTP status before emitting, exactly as json() does
+     * (http_response_code at the top of json()). This matters because render()
+     * exits and never returns: a route callback that renders can never hand a
+     * Response back to the Router's deferred commitOk(), so render() must own
+     * its status here. A normal render clears WordPress's pre-set 404 for an
+     * unmatched URL and sends 200; an error render (error set, or template
+     * not found) routes through renderError(), which commits its own >=400
+     * status instead — so `error(...)->render()` / `notFound()->render()`
+     * still yield the non-200 the caller asked for.
      */
     public function render(string $template, array $data = []): never
     {
@@ -257,11 +267,29 @@ class NTDST_Response
             $this->error("Template not found: {$template}", 404)->renderError();
         }
 
+        $this->commitRenderStatus();
+
         $data = array_merge($this->data, $data);
         extract($data, EXTR_SKIP);
 
         include $file;
         exit;
+    }
+
+    /**
+     * Commit the render status: clear the 404 WordPress pre-set for an
+     * unmatched URL and send $this->status (200 for a normal render). Guarded,
+     * so it is a safe no-op when nothing set 404. Mirrors Router::commitOk()'s
+     * intent for the render-and-exit path; protected so tests can seam it
+     * without reaching the exit in render().
+     */
+    protected function commitRenderStatus(): void
+    {
+        global $wp_query;
+        if ($wp_query && $wp_query->is_404()) {
+            $wp_query->is_404 = false;
+        }
+        status_header($this->status);
     }
 
     /**

@@ -351,8 +351,10 @@ class NTDST_Router
 
         if ($result === null || $result === true) {
             // Handled output: the callback owns its status. commitOk() is a
-            // no-op if the callback already committed (a streaming callback
-            // must, since the 404 commit is deferred).
+            // no-op if the callback already committed — which the framework's
+            // own render-and-exit path DOES via NTDST_Response::render()
+            // (commitRenderStatus), so a callback that renders through the
+            // Response object never depends on this deferred commit.
             $this->commitOk();
 
             return null;
