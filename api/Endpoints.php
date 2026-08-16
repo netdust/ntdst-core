@@ -253,6 +253,23 @@ final class NTDST_Endpoints
      */
     public function check_action_permission(WP_REST_Request $request): WP_Error|bool
     {
+        // POST /action verifies the request Origin (CSRF) — a fetch() carries
+        // an Origin header the browser sets and cannot be forged cross-site.
+        return $this->checkDispatchPermission($request, verifyOrigin: true);
+    }
+
+    /**
+     * The shared dispatch gate for /action and /download: rate limit, optional
+     * Origin/CSRF check, then the anonymous-only-for-public-actions auth gate.
+     * ONE policy, two entry points — /action opts into the Origin check, the
+     * GET /download opts out (a <a href> navigation sends no Origin; its nonce
+     * is the CSRF gate instead).
+     *
+     * @return WP_Error|bool WP_Error(429) when rate-limited; bare false for
+     *                       origin/auth denials (401 rest_forbidden).
+     */
+    private function checkDispatchPermission(WP_REST_Request $request, bool $verifyOrigin): WP_Error|bool
+    {
         $params = $this->get_request_params($request);
         $action = sanitize_text_field($params['action'] ?? '');
 
@@ -261,8 +278,8 @@ final class NTDST_Endpoints
             return $this->rateLimitedError();
         }
 
-        // CSRF: Verify request origin
-        if (!$this->verifyOrigin()) {
+        // CSRF: verify request origin (POST /action only — see method doc).
+        if ($verifyOrigin && !$this->verifyOrigin()) {
             return false;
         }
 
@@ -280,12 +297,19 @@ final class NTDST_Endpoints
     }
 
     /**
-     * Permission for the GET download endpoint. Full policy lands in Task 4;
-     * this stub keeps the route valid meanwhile (denies by default).
+     * Permission for the GET /download endpoint: the SAME gate as /action
+     * (rate limit + public-action + auth), minus the Origin/CSRF check.
+     *
+     * A download is a top-level <a href> GET navigation, which browsers send
+     * WITHOUT an Origin header — so verifyOrigin() would deny every legitimate
+     * download (empty Origin + present auth cookie => false). The per-action
+     * nonce carried in the URL, verified in handle_download(), is this
+     * surface's CSRF protection: an attacker's cross-site context cannot mint
+     * a valid nonce for a non-public action.
      */
     public function check_download_permission(WP_REST_Request $request): WP_Error|bool
     {
-        return false;
+        return $this->checkDispatchPermission($request, verifyOrigin: false);
     }
 
     /**

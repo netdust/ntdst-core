@@ -28,6 +28,15 @@ if (!class_exists('WP_REST_Response')) {
         public function get_status(): int { return $this->status; }
     }
 }
+if (!class_exists('WP_Error')) {
+    class WP_Error
+    {
+        public function __construct(private string $code = '', private string $msg = '', private mixed $data = null) {}
+        public function get_error_code(): string { return $this->code; }
+        public function get_error_message(): string { return $this->msg; }
+        public function get_error_data(): mixed { return $this->data; }
+    }
+}
 if (!class_exists('WP_REST_Request')) {
     class WP_REST_Request
     {
@@ -196,6 +205,92 @@ final class DownloadDispatchTest extends TestCase
 
         $this->assertSame('download_not_emitted', $this->errorCode($res));
         $this->assertSame(500, $res->get_status());
+    }
+
+
+    // =====================================================================
+    // Task 4 — security parity: check_download_permission() shares the
+    // /action policy (rate-limit + public-action + auth gate). It does NOT
+    // apply the Origin/CSRF check /action uses, because a <a href> download
+    // is a top-level GET navigation with no Origin header — the per-action
+    // nonce (verified in handle_download) is this surface's CSRF gate.
+    //
+    // These four denial paths ARE the threat-model coverage for the new GET
+    // surface. Driven through the real callback with Brain Monkey stubs.
+    // =====================================================================
+
+    private function endpointsWithPublicActions(array $public): NTDST_Endpoints
+    {
+        // public_actions is read via the ntdst/api/public_actions filter.
+        Functions\when('apply_filters')->alias(function ($hook, $value, ...$rest) use ($public) {
+            if ($hook === 'ntdst/api/public_actions') { return $public; }
+            // rate-limit / window filters pass their default through
+            return $value;
+        });
+        return new NTDST_Endpoints();
+    }
+
+    public function test_download_denies_anonymous_non_public_action(): void
+    {
+        Functions\when('sanitize_text_field')->returnArg();
+        Functions\when('get_transient')->justReturn(0);
+        Functions\when('set_transient')->justReturn(true);
+        Functions\when('get_current_user_id')->justReturn(0);
+        Functions\when('is_user_logged_in')->justReturn(false);
+
+        $endpoints = $this->endpointsWithPublicActions([]); // nothing public
+        $decision = $endpoints->check_download_permission($this->request(['action' => 'stride_quote_pdf']));
+
+        $this->assertFalse($decision, 'anonymous caller must be denied a non-public download action');
+    }
+
+    public function test_download_allows_anonymous_only_when_action_is_public(): void
+    {
+        Functions\when('sanitize_text_field')->returnArg();
+        Functions\when('get_transient')->justReturn(0);
+        Functions\when('set_transient')->justReturn(true);
+        Functions\when('get_current_user_id')->justReturn(0);
+        Functions\when('is_user_logged_in')->justReturn(false);
+
+        $endpoints = $this->endpointsWithPublicActions(['public_flyer']); // explicitly public
+        $decision = $endpoints->check_download_permission($this->request(['action' => 'public_flyer']));
+
+        $this->assertTrue($decision, 'an action listed in ntdst/api/public_actions is reachable anonymously');
+    }
+
+    public function test_download_rate_limited_returns_429(): void
+    {
+        Functions\when('sanitize_text_field')->returnArg();
+        Functions\when('__')->returnArg();
+        Functions\when('get_current_user_id')->justReturn(7);
+        // At the limit already → consumeRateBudget returns false → 429.
+        Functions\when('get_transient')->justReturn(999999);
+        Functions\when('set_transient')->justReturn(true);
+        Functions\when('is_user_logged_in')->justReturn(true);
+
+        $endpoints = $this->endpointsWithPublicActions([]);
+        $decision = $endpoints->check_download_permission($this->request(['action' => 'stride_quote_pdf']));
+
+        $this->assertInstanceOf(WP_Error::class, $decision, 'a rate-limited download is a WP_Error');
+        $this->assertSame(429, $decision->get_error_data()['status'] ?? null);
+    }
+
+    public function test_download_authenticated_user_is_allowed(): void
+    {
+        // The common case: a logged-in admin clicking a download link, no
+        // Origin header (GET navigation) — must be allowed. This is exactly
+        // the case /action's verifyOrigin() would wrongly deny, proving the
+        // download gate correctly omits the origin check.
+        Functions\when('sanitize_text_field')->returnArg();
+        Functions\when('get_transient')->justReturn(0);
+        Functions\when('set_transient')->justReturn(true);
+        Functions\when('get_current_user_id')->justReturn(7);
+        Functions\when('is_user_logged_in')->justReturn(true);
+
+        $endpoints = $this->endpointsWithPublicActions([]);
+        $decision = $endpoints->check_download_permission($this->request(['action' => 'stride_quote_pdf']));
+
+        $this->assertTrue($decision, 'a logged-in user may reach a non-public download without an Origin header');
     }
 
 }
