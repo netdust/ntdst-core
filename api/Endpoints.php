@@ -141,6 +141,7 @@ final class NTDST_Endpoints
     {
         $this->register_nonce_endpoint();
         $this->register_action_endpoint();
+        $this->register_download_endpoint();
     }
 
     private function register_nonce_endpoint(): void
@@ -164,6 +165,34 @@ final class NTDST_Endpoints
             'methods'             => 'POST',
             'callback'            => [$this, 'handle_action'],
             'permission_callback' => [$this, 'check_action_permission'],
+            'args'                => [
+                'action' => [
+                    'required'          => true,
+                    'sanitize_callback' => 'sanitize_text_field',
+                ],
+                'nonce' => [
+                    'required'          => true,
+                    'sanitize_callback' => 'sanitize_text_field',
+                ],
+            ],
+        ]);
+    }
+
+    /**
+     * The v2.3 GET download entry — a sibling of /action for file downloads.
+     *
+     * GET (not POST) because a download is a plain <a href> navigation: the
+     * browser sends no request body and no Origin header. The nonce carried in
+     * the URL is the CSRF gate (an attacker's cross-site context cannot mint a
+     * valid per-action nonce), which is why check_download_permission() does
+     * NOT apply the Origin check /action uses — see that method.
+     */
+    private function register_download_endpoint(): void
+    {
+        register_rest_route(self::REST_NAMESPACE, '/download', [
+            'methods'             => 'GET',
+            'callback'            => [$this, 'handle_download'],
+            'permission_callback' => [$this, 'check_download_permission'],
             'args'                => [
                 'action' => [
                     'required'          => true,
@@ -248,6 +277,15 @@ final class NTDST_Endpoints
         }
 
         return true;
+    }
+
+    /**
+     * Permission for the GET download endpoint. Full policy lands in Task 4;
+     * this stub keeps the route valid meanwhile (denies by default).
+     */
+    public function check_download_permission(WP_REST_Request $request): WP_Error|bool
+    {
+        return false;
     }
 
     /**
@@ -522,6 +560,45 @@ final class NTDST_Endpoints
         }
 
         return $this->success(is_array($data) ? $data : []);
+    }
+
+    /**
+     * Dispatch a GET download to its ntdst/api_download/{action} handler.
+     *
+     * Same gate order as handle_action: reject missing params, verify the
+     * per-action nonce (the CSRF protection for this GET surface), refuse an
+     * unregistered action. The registered handler is expected to emit the file
+     * via Response::download()/inline() and EXIT — so control never returns
+     * here. If it DOES return, the download action is misconfigured: this
+     * fails loud with a 500 rather than shipping a blank 200.
+     *
+     * The dispatcher never reads a filename or path from the request: the
+     * handler supplies both to Response, and fileHeaders() sanitizes the name.
+     * No path-traversal surface.
+     */
+    public function handle_download(WP_REST_Request $request): WP_REST_Response
+    {
+        $params = $this->get_request_params($request);
+        $action = sanitize_text_field($params['action'] ?? '');
+        $nonce  = sanitize_text_field($params['nonce'] ?? '');
+
+        if (empty($action) || empty($nonce)) {
+            return $this->error('Missing action or nonce', 'missing_params');
+        }
+
+        if (!wp_verify_nonce($nonce, $action)) {
+            return $this->error('Invalid or expired nonce', 'invalid_nonce');
+        }
+
+        if (!has_filter("ntdst/api_download/{$action}")) {
+            return $this->error('Unknown download request', 'unknown_action', 404);
+        }
+
+        // The handler emits via Response::download()/inline() and exits;
+        // control does not return past this line on success.
+        apply_filters("ntdst/api_download/{$action}", null, $params);
+
+        return $this->error('Download handler did not emit a file', 'download_not_emitted', 500);
     }
 
 
