@@ -174,26 +174,21 @@ class NTDST_Logger
     }
 
     /**
-     * Get client IP address (secure implementation)
-     * Only trusts X-Forwarded-For from known proxies
+     * Get client IP address for the log record.
+     *
+     * Delegates to the one canonical resolver (support/ClientIp.php). This
+     * method used to carry a third copy of the trusted-proxy logic that took
+     * the LEFTMOST X-Forwarded-For entry — the spoofable end, since nginx
+     * appends the observed peer — so a proxied request could write any
+     * attacker-chosen address into the audit log. That is fixed by delegating.
+     *
+     * The historical 'unknown' placeholder stays a Logger decision: the shared
+     * primitive returns '' for an unidentifiable peer, and this call site
+     * coalesces so log rows read the same as before.
      */
     protected function getClientIp(): string
     {
-        $remote_ip = $_SERVER['REMOTE_ADDR'] ?? 'unknown';
-
-        // Define trusted proxies
-        $trusted_proxies = apply_filters('netdust_trusted_proxies', ['127.0.0.1', '::1']);
-
-        // Only trust forwarded headers from trusted proxies
-        if (in_array($remote_ip, $trusted_proxies, true) && !empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-            $forwarded_ips = array_map('trim', explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']));
-            $client_ip = $forwarded_ips[0];
-            if (filter_var($client_ip, FILTER_VALIDATE_IP)) {
-                return $client_ip;
-            }
-        }
-
-        return filter_var($remote_ip, FILTER_VALIDATE_IP) ? $remote_ip : 'unknown';
+        return NTDST_ClientIp::detect($_SERVER) ?: 'unknown';
     }
 
     /**

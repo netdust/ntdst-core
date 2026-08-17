@@ -91,36 +91,8 @@ final class NTDST_Endpoints
      */
     private array $public_actions = [];
 
-    /**
-     * Memoized rate decisions: request object => [action => decision].
-     *
-     * WP core invokes a route's `permission_callback` TWICE per served HTTP
-     * request — a fact this code cannot show, so it is stated here:
-     *  1. in `WP_REST_Server::respond_to_request()` (the dispatch-time
-     *     permission check), and
-     *  2. in `rest_send_allow_header()` (hooked on `rest_post_dispatch`),
-     *     which re-invokes every matched handler's permission_callback to
-     *     compute the `Allow` response header — on every response, error
-     *     responses included, since `set_matched_route()` is unconditional.
-     * Without memoization each invocation ran the transient increment, so one
-     * HTTP request consumed TWO budget units and every configured limit was
-     * halved on the wire (fleet default 30 behaved as 15; verified live:
-     * limit 3 passed exactly 2 requests).
-     *
-     * Keyed on the WP_REST_Request OBJECT because both core invocations
-     * receive the same request instance, while two different HTTP requests
-     * can never share one — the memo is per-request by construction, needs no
-     * reset, and cannot become a persistent bypass. WeakMap entries die with
-     * the request object.
-     *
-     * @var \WeakMap<\WP_REST_Request, array<string, bool>>
-     */
-    private \WeakMap $rateDecisions;
-
     public function __construct()
     {
-        $this->rateDecisions = new \WeakMap();
-
         add_action('rest_api_init', [$this, 'register_routes']);
 
         // No data actions are registered here. The framework ships a ROUTER —
@@ -278,66 +250,67 @@ final class NTDST_Endpoints
      * Limits and windows are filterable per-action so sensitive operations
      * (e.g. magic-link send) can be much stricter than the default 30/min.
      *
-     * The decision is memoized per (request, action) — see $rateDecisions:
-     * WP invokes the permission callback twice per served request (dispatch +
-     * `rest_send_allow_header()`), and only the FIRST invocation may consume
-     * a budget unit, or every limit is effectively halved. The memo can only
-     * make the limiter MORE permissive within a single request (one unit
-     * instead of two); a caller cannot steer it, since the key is the
-     * server-created request object plus the action within one PHP request
-     * lifecycle.
+     * This method owns everything that names THIS caller — the per-action
+     * limit and window filters over the class constants, and the (user|ip,
+     * action) bucket. The counting itself belongs to nobody in particular, so
+     * it lives in the one shared primitive (support/RateLimiter.php) that the
+     * todai intake counts against too. The transient key, the prefix, the
+     * bucket derivation, the filters and the sliding TTL are all unchanged —
+     * existing sites keep the buckets they already have (FR-3).
+     *
+     * The `$request` goes in as the limiter's memo scope, which is what keeps
+     * the double-invocation guarantee alive after the extraction: WP invokes
+     * the permission callback twice per served request (dispatch +
+     * `rest_send_allow_header()`), and only the FIRST invocation may consume a
+     * budget unit, or every configured limit is halved on the wire. The memo
+     * can only make the limiter MORE permissive within a single request (one
+     * unit instead of two), and a caller cannot steer it: the identity is the
+     * server-created request object, within one PHP request lifecycle.
+     *
+     * Two deliberate, non-behavioural differences, declared rather than
+     * hidden — both are extra resolutions of PURE value filters, and neither
+     * moves a bucket, a count or a decision:
+     *  - the limit/window filters now resolve on BOTH permission-callback
+     *    invocations, where the old in-class memo short-circuited the second;
+     *  - the bucket key is now built before the `<= 0` disabled-limit check
+     *    rather than after it, so a site that has switched its limit off
+     *    still resolves the current user and `ntdst/trusted_proxies`.
+     * The alternative to the second is a duplicate `<= 0` branch here, which
+     * would put the disabling rule in two places — the exact split this task
+     * exists to remove.
      *
      * @return bool false when limit exceeded
      */
     private function checkRateLimit(string $action, WP_REST_Request $request): bool
     {
-        $decisions = $this->rateDecisions[$request] ?? [];
-
-        if (array_key_exists($action, $decisions)) {
-            return $decisions[$action];
-        }
-
-        $decision = $this->consumeRateBudget($action);
-
-        $decisions[$action]            = $decision;
-        $this->rateDecisions[$request] = $decisions;
-
-        return $decision;
-    }
-
-    /**
-     * The unmemoized decision: read the (user|ip, action) bucket and consume
-     * one unit when under the limit. The transient TTL resets on every
-     * increment (sliding window) — long-standing behaviour, deliberately
-     * unchanged here.
-     *
-     * @return bool false when limit exceeded
-     */
-    private function consumeRateBudget(string $action): bool
-    {
         $limit = (int) apply_filters("ntdst/api/rate_limit/{$action}", self::RATE_LIMIT, $action);
         $window = (int) apply_filters("ntdst/api/rate_window/{$action}", self::RATE_WINDOW, $action);
 
-        if ($limit <= 0) {
-            // A filter explicitly disabled the limit.
-            return true;
-        }
+        // A filter can explicitly disable the limit with <= 0; the limiter
+        // honours that and keeps no counter for it.
+        return NTDST_RateLimiter::attempt(
+            $this->rateBucketKey($action),
+            $limit,
+            $window,
+            $request,
+        );
+    }
 
+    /**
+     * The transient key for this caller's bucket: per (user_id, action) when
+     * logged in — fair to NAT'd users — and per (ip, action) otherwise.
+     *
+     * Shape is byte-identical to the pre-extraction key, prefix included, so
+     * no live counter is orphaned by this change.
+     */
+    private function rateBucketKey(string $action): string
+    {
         $userId = function_exists('get_current_user_id') ? (int) get_current_user_id() : 0;
         $bucket = $userId > 0
             ? "u{$userId}"
             : 'ip' . md5($this->getClientIp());
-        $key = 'ntdst_rate_' . md5($bucket . '|' . $action);
 
-        $count = (int) get_transient($key);
-
-        if ($count >= $limit) {
-            return false;
-        }
-
-        set_transient($key, $count + 1, $window);
-
-        return true;
+        return 'ntdst_rate_' . md5($bucket . '|' . $action);
     }
 
     /**
@@ -401,47 +374,24 @@ final class NTDST_Endpoints
     }
 
     /**
-     * Get client IP for rate limiting (secure implementation)
+     * Get client IP for rate limiting.
      *
-     * The LEFTMOST X-Forwarded-For end is attacker-authored: under the
-     * standard nginx→FPM topology, nginx's default
-     * `$proxy_add_x_forwarded_for` APPENDS the connecting address to whatever
-     * header the client sent, so anything left of the infrastructure-appended
-     * hops is client-supplied fiction. Only the RIGHTMOST hop NOT in the
-     * trusted-proxy list — the address that actually connected to trusted
-     * infrastructure — is load-bearing for rate-bucket identity.
+     * Delegates to the one canonical resolver (support/ClientIp.php). The
+     * right-to-left skip-trusted walk this method used to carry now lives
+     * there, joined to CIDR-aware trust matching, and the local exact-match
+     * copy is gone — one implementation, one place to review.
+     *
+     * `NTDST_ClientIp::detect()` applies `ntdst/trusted_proxies` and then the
+     * historical `netdust_trusted_proxies`, over the same loopback default
+     * this method used, so a site's existing filter keeps working unchanged.
+     *
+     * An unusable REMOTE_ADDR now yields '' rather than the old '0.0.0.0'
+     * placeholder — see support/ClientIp.php. The only consumer is the
+     * rate-bucket hash below, which takes any string.
      */
     private function getClientIp(): string
     {
-        $remote_ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
-
-        // Define trusted proxies
-        $trusted_proxies = apply_filters('netdust_trusted_proxies', ['127.0.0.1', '::1']);
-
-        // Only trust X-Forwarded-For if behind trusted proxy
-        if (!in_array($remote_ip, $trusted_proxies, true) || empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-            return $remote_ip;
-        }
-
-        // Walk the chain right-to-left, skipping trusted proxies; the first
-        // untrusted hop is the client. Attacker-prepended garbage on the left
-        // is never reached. A malformed candidate terminates the walk — fall
-        // back to the trusted proxy's address rather than trust anything to
-        // its left.
-        $forwarded_ips = array_map('trim', explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']));
-
-        foreach (array_reverse($forwarded_ips) as $candidate) {
-            if (!filter_var($candidate, FILTER_VALIDATE_IP)) {
-                return $remote_ip;
-            }
-            if (in_array($candidate, $trusted_proxies, true)) {
-                continue;
-            }
-            return $candidate;
-        }
-
-        // Every hop in the chain is a trusted proxy — internal traffic.
-        return $remote_ip;
+        return NTDST_ClientIp::detect($_SERVER);
     }
 
     // =========================================================================
