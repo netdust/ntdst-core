@@ -5,6 +5,7 @@ define('ABSPATH', '/tmp/wordpress/'); // satisfies the defined-guard in class fi
 require_once __DIR__ . '/../core/Container.php';
 require_once __DIR__ . '/../support/Cidr.php';
 require_once __DIR__ . '/../support/ClientIp.php';
+require_once __DIR__ . '/../support/RateLimiter.php';
 require_once __DIR__ . '/../api/Data.php';
 require_once __DIR__ . '/../admin/MetaboxGenerator.php';
 require_once __DIR__ . '/../services/Scheduler.php';

@@ -7,7 +7,7 @@
  *
  * Architecture:
  * - core/     → Foundation (Container, Bootstrap, Theme, Router)
- * - support/  → Shared primitives with no dependencies (ClientIp, Cidr)
+ * - support/  → Shared primitives with no dependencies (ClientIp, Cidr, RateLimiter)
  * - api/      → Request Flow (Endpoints, Data, Response)
  * - admin/    → Admin UI (MetaboxGenerator, RelationField)
  * - services/ → Built-in services (Logger, Mailer, Scheduler)
@@ -34,6 +34,7 @@ require_once NTDST_PATH . '/core/Bootstrap.php';
 // Load shared support primitives (no dependencies; consumed by api/ + services/)
 require_once NTDST_PATH . '/support/Cidr.php';
 require_once NTDST_PATH . '/support/ClientIp.php';
+require_once NTDST_PATH . '/support/RateLimiter.php';
 
 // Load API layer (request flow)
 require_once NTDST_PATH . '/api/Data.php';
