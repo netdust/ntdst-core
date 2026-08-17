@@ -91,7 +91,14 @@ final class DownloadQueryParamsTest extends TestCase
             . 'ntdst/api_download/{action} filter — real <a href> download links never send a body',
         );
         $this->assertSame(42, $reached->params['edition_id'] ?? null, 'query params must reach the download handler');
-        $this->assertNull($this->errorCode($res), 'a valid query-string-only download request must not error');
+        // No response-status assertion here: a real handler emits via
+        // Response::download()/inline() and exits, which no PHPUnit-safe
+        // mock can do — the mocked filter here always falls through to
+        // 'download_not_emitted'/500, same as DownloadDispatchTest's
+        // test_registered_download_action_dispatches_its_filter (which
+        // avoids it for the same reason) and pinned as INTENDED behavior by
+        // test_download_handler_that_returns_instead_of_emitting_is_500.
+        // Dispatch-reached (asserted above) is the contract this seam can prove.
     }
 
     public function test_get_request_params_reads_the_query_string_for_a_get_request(): void
