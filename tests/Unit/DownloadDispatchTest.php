@@ -40,11 +40,23 @@ if (!class_exists('WP_Error')) {
 if (!class_exists('WP_REST_Request')) {
     class WP_REST_Request
     {
+        private array $queryParams = [];
+
         public function __construct(private array $params = []) {}
         public function get_json_params(): array { return $this->params; }
         public function get_body_params(): array { return []; }
-        public function get_param(string $k): mixed { return $this->params[$k] ?? null; }
+        public function get_param(string $k): mixed { return $this->params[$k] ?? $this->queryParams[$k] ?? null; }
         public function get_file_params(): array { return []; }
+
+        // Real WP_REST_Request models the query string as its OWN param source,
+        // distinct from JSON/body params — a GET request built from a URL
+        // querystring (the shape a real <a href> download link produces) has
+        // params ONLY here. Added to reproduce the real double: the prior stub
+        // conflated constructor params with JSON params only, so no test could
+        // exercise a query-string-shaped request — which is why the missing
+        // get_query_params() read in get_request_params() went undetected.
+        public function set_query_params(array $params): void { $this->queryParams = $params; }
+        public function get_query_params(): array { return $this->queryParams; }
     }
 }
 
