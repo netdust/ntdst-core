@@ -511,7 +511,20 @@ final class NTDST_Endpoints
     // =========================================================================
 
     /**
-     * Extract request params from JSON body or form-data.
+     * Extract request params from the query string, form-data, or JSON body.
+     *
+     * Three transports, precedence low to high — query params (FALLBACK),
+     * then body params, then JSON params — mirroring the merge order
+     * WP_REST_Request::get_params() itself uses. Query params are the
+     * fallback because a real GET navigation (e.g. `<a href="...?action=X">`)
+     * sends no body at all: /download is reached this way, never via
+     * JSON/form body, so without this layer every real anchor click 400s
+     * with `missing_params` (v2.3.0 regression, found by Stride's Task-10
+     * browser drive — invisible to filter-level tests because they never
+     * exercise the query-string-only shape a browser navigation actually
+     * sends). JSON/body still WIN over query params: /action is POSTed with
+     * a JSON or form body today, and that body must remain authoritative
+     * over anything also present in the query string.
      *
      * Supports both application/json and multipart/form-data content types,
      * allowing the same ntdst/api_data filters to handle file uploads.
@@ -519,10 +532,16 @@ final class NTDST_Endpoints
      */
     private function get_request_params(WP_REST_Request $request): array
     {
-        $params = $request->get_json_params();
+        $params = $request->get_query_params();
 
-        if (empty($params)) {
-            $params = $request->get_body_params();
+        $body = $request->get_body_params();
+        if (!empty($body)) {
+            $params = array_merge($params, $body);
+        }
+
+        $json = $request->get_json_params();
+        if (!empty($json)) {
+            $params = array_merge($params, $json);
         }
 
         // `_files` is RESERVED, so it is written unconditionally — including
