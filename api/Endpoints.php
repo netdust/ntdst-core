@@ -401,47 +401,24 @@ final class NTDST_Endpoints
     }
 
     /**
-     * Get client IP for rate limiting (secure implementation)
+     * Get client IP for rate limiting.
      *
-     * The LEFTMOST X-Forwarded-For end is attacker-authored: under the
-     * standard nginx→FPM topology, nginx's default
-     * `$proxy_add_x_forwarded_for` APPENDS the connecting address to whatever
-     * header the client sent, so anything left of the infrastructure-appended
-     * hops is client-supplied fiction. Only the RIGHTMOST hop NOT in the
-     * trusted-proxy list — the address that actually connected to trusted
-     * infrastructure — is load-bearing for rate-bucket identity.
+     * Delegates to the one canonical resolver (support/ClientIp.php). The
+     * right-to-left skip-trusted walk this method used to carry now lives
+     * there, joined to CIDR-aware trust matching, and the local exact-match
+     * copy is gone — one implementation, one place to review.
+     *
+     * `NTDST_ClientIp::detect()` applies `ntdst/trusted_proxies` and then the
+     * historical `netdust_trusted_proxies`, over the same loopback default
+     * this method used, so a site's existing filter keeps working unchanged.
+     *
+     * An unusable REMOTE_ADDR now yields '' rather than the old '0.0.0.0'
+     * placeholder — see support/ClientIp.php. The only consumer is the
+     * rate-bucket hash below, which takes any string.
      */
     private function getClientIp(): string
     {
-        $remote_ip = $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
-
-        // Define trusted proxies
-        $trusted_proxies = apply_filters('netdust_trusted_proxies', ['127.0.0.1', '::1']);
-
-        // Only trust X-Forwarded-For if behind trusted proxy
-        if (!in_array($remote_ip, $trusted_proxies, true) || empty($_SERVER['HTTP_X_FORWARDED_FOR'])) {
-            return $remote_ip;
-        }
-
-        // Walk the chain right-to-left, skipping trusted proxies; the first
-        // untrusted hop is the client. Attacker-prepended garbage on the left
-        // is never reached. A malformed candidate terminates the walk — fall
-        // back to the trusted proxy's address rather than trust anything to
-        // its left.
-        $forwarded_ips = array_map('trim', explode(',', $_SERVER['HTTP_X_FORWARDED_FOR']));
-
-        foreach (array_reverse($forwarded_ips) as $candidate) {
-            if (!filter_var($candidate, FILTER_VALIDATE_IP)) {
-                return $remote_ip;
-            }
-            if (in_array($candidate, $trusted_proxies, true)) {
-                continue;
-            }
-            return $candidate;
-        }
-
-        // Every hop in the chain is a trusted proxy — internal traffic.
-        return $remote_ip;
+        return NTDST_ClientIp::detect($_SERVER);
     }
 
     // =========================================================================
