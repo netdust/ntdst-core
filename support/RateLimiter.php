@@ -22,7 +22,7 @@ declare(strict_types=1);
  * consuming site's buckets and filter the callers' numbers twice.
  *
  * ── WHY THE MEMO EXISTS — a fact this code cannot show ────────────────────
- * (The full statement lives at api/Endpoints.php:95-115; it is repeated here
+ * (The full statement lives at api/Endpoints.php's checkRateLimit() docblock; it is repeated here
  * because the guarantee moved into this class.) WordPress invokes a route's
  * `permission_callback` TWICE per served HTTP request:
  *  1. in `WP_REST_Server::respond_to_request()` (the dispatch-time check), and
@@ -50,6 +50,13 @@ defined('ABSPATH') || exit;
 
 final class NTDST_RateLimiter
 {
+    /**
+     * Window used when a caller asks for one that cannot be honoured (<= 0).
+     * Matches NTDST_Endpoints' own RATE_WINDOW so a clamped bucket behaves
+     * like the fleet default rather than inventing a third number.
+     */
+    private const FALLBACK_WINDOW = 60;
+
     /**
      * Memoized decisions: memo scope object => [transient key => decision].
      *
@@ -123,6 +130,26 @@ final class NTDST_RateLimiter
      */
     private static function consume(string $key, int $limit, int $window): bool
     {
+        // A window of 0 means NO EXPIRATION to set_transient(), so the bucket
+        // would never reset and the caller would be denied forever — a
+        // permanent lockout removable only by hand from wp_options. A negative
+        // window writes a timeout in the past, so get_transient() treats the
+        // counter as already expired and the limit is silently never enforced.
+        // Both are one filter typo away (`fn() => 0`), and (int) casting turns
+        // any non-numeric filter return into 0. Neither failure is one a
+        // limiter may accept: clamp to a sane window and say so.
+        if ($window <= 0) {
+            $window = self::FALLBACK_WINDOW;
+
+            if (function_exists('error_log')) {
+                error_log(sprintf(
+                    'NTDST_RateLimiter: a window of <= 0 was requested for a bucket and would '
+                    . 'never expire; clamped to %ds. Check the rate-window filter for this action.',
+                    self::FALLBACK_WINDOW
+                ));
+            }
+        }
+
         $count = (int) get_transient($key);
 
         if ($count >= $limit) {

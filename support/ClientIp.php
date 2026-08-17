@@ -48,7 +48,22 @@ final class NTDST_ClientIp
      */
     public static function detect(array $server): string
     {
+        // Unslash HERE, in the WordPress-facing half, so no call site can get
+        // it wrong. wp_magic_quotes() slashes $_SERVER globally; a mangled
+        // address only ever FAILS inet_pton() — it can never manufacture a
+        // valid one — so this was never exploitable, but two of the three call
+        // sites disagreed about whose job it was and the fail-closed walk was
+        // what absorbed the difference. Guarded because resolve() and this
+        // class are exercised without a WordPress runtime.
+        if (function_exists('wp_unslash')) {
+            $server = (array) wp_unslash($server);
+        }
+
         $trustedProxies = apply_filters('ntdst/trusted_proxies', self::DEFAULT_TRUSTED_PROXIES);
+        // Coerce BETWEEN the two filters: the historical name's existing
+        // consumers type-hint `array $proxies`, so handing them a non-array
+        // returned by the new filter would be a TypeError in their code.
+        $trustedProxies = is_array($trustedProxies) ? $trustedProxies : [];
         $trustedProxies = apply_filters('netdust_trusted_proxies', $trustedProxies);
 
         return self::resolve($server, is_array($trustedProxies) ? $trustedProxies : []);
