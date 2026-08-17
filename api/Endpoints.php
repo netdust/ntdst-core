@@ -638,8 +638,21 @@ final class NTDST_Endpoints
         }
 
         // The handler emits via Response::download()/inline() and exits;
-        // control does not return past this line on success.
-        apply_filters("ntdst/api_download/{$action}", null, $params);
+        // control does not return past this line on success. A handler MAY
+        // instead deny with a WP_Error (same convention as handle_action):
+        // honour its declared status/code/message rather than collapsing
+        // every denial to a 500 — a denial is not a server fault (Stride
+        // Phase-2 B3 review, finding C1). Default to 403 (not handle_action's
+        // 400) when the handler didn't declare a status: this surface's own
+        // denial default, since a download is always a permission question.
+        $result = apply_filters("ntdst/api_download/{$action}", null, $params);
+
+        if (is_wp_error($result)) {
+            $errorData = $result->get_error_data();
+            $status = is_array($errorData) && isset($errorData['status']) ? (int) $errorData['status'] : 403;
+
+            return $this->error($result->get_error_message(), (string) $result->get_error_code(), $status);
+        }
 
         return $this->error('Download handler did not emit a file', 'download_not_emitted', 500);
     }
