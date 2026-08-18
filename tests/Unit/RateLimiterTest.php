@@ -12,7 +12,7 @@ use PHPUnit\Framework\TestCase;
  * (spec `intake-to-core`, T04, Test-author: split, Tier A).
  *
  * This file pins the fleet's only rate limiter as it comes out of
- * `NTDST_Endpoints` (`checkRateLimit()` + `consumeRateBudget()`) and becomes
+ * `NTDST_Actions` (`checkRateLimit()` + `consumeRateBudget()`) and becomes
  * public API for two callers with different bucket shapes. It is IMMUTABLE for
  * the implementer: green it, never weaken it. A dispute is escalated, not
  * edited.
@@ -26,7 +26,7 @@ use PHPUnit\Framework\TestCase;
  *   ): bool                           // true = allowed (one unit consumed)
  *
  *   Static, like NTDST_ClientIp::resolve(). Class naming follows this
- *   package's convention (NTDST_ClientIp, NTDST_Scheduler, NTDST_Endpoints):
+ *   package's convention (NTDST_ClientIp, NTDST_Scheduler, NTDST_Actions):
  *   global class, `NTDST_` prefix, file at support/RateLimiter.php, added to
  *   ntdst-core.php's explicit require list and to tests/bootstrap.php —
  *   wiring the loader is part of greening this RED. This file deliberately
@@ -34,7 +34,7 @@ use PHPUnit\Framework\TestCase;
  *
  * ── WHY THE KEY, THE LIMIT AND THE WINDOW ARE ALL CALLER-OWNED ────────────
  * Two callers with different shapes consume this:
- *   - NTDST_Endpoints — bucket `u{userId}` when logged in else `ip`+md5(IP),
+ *   - NTDST_Actions — bucket `u{userId}` when logged in else `ip`+md5(IP),
  *     prefix `ntdst_rate_`, filters `ntdst/api/rate_limit/{$action}` and
  *     `ntdst/api/rate_window/{$action}` over its RATE_LIMIT/RATE_WINDOW
  *     constants;
@@ -506,7 +506,7 @@ final class RateLimiterTest extends TestCase
 
     public function test_the_limiter_applies_no_filters_of_its_own(): void
     {
-        // NTDST_Endpoints resolves `ntdst/api/rate_limit/{$action}` and
+        // NTDST_Actions resolves `ntdst/api/rate_limit/{$action}` and
         // `ntdst/api/rate_window/{$action}` BEFORE calling, and the intake
         // resolves `todai/intake/*`. If the limiter re-applied the callers'
         // filters the numbers would be filtered twice; if it introduced a

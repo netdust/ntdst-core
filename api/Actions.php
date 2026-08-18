@@ -40,7 +40,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-final class NTDST_Endpoints
+final class NTDST_Actions
 {
     private const REST_NAMESPACE = 'ntdst/v1';
 
@@ -625,106 +625,78 @@ final class NTDST_Endpoints
     {
         return NTDST_Response::apiErrorResponse($message, $code, $status);
     }
-}
-
-/**
- * Global helper - get endpoints instance
- */
-if (!function_exists('ntdst_endpoints')) {
-    function ntdst_endpoints(): NTDST_Endpoints
+    /**
+     * Register a COMMAND — the ajax idiom, dispatched through /ntdst/v1/action.
+     *
+     * Pick the right service:
+     *   command (this)  → ntdst_actions()->register()
+     *   resource route  → ntdst_rest()
+     *   file bytes      → add_filter('ntdst/api_download/{action}', …)
+     *   page            → ntdst_pages()->path()
+     *
+     * The `ntdst/api_data/{action}` filter name is UNCHANGED from v2 on purpose:
+     * adopters' handlers hang off it, and renaming it would silently unmount
+     * every one of them while the code still looked correct.
+     *
+     * @param array{cap_type?: string, public?: bool, capability?: string, priority?: int} $opts
+     */
+    public function register(string $action, callable $handler, array $opts = []): void
     {
-        static $manager = null;
-        return $manager ??= new NTDST_Endpoints();
+            $action   = sanitize_key($action);
+            $priority = (int) ($opts['priority'] ?? 10);
+
+            // Public wins (threat T1): a public action is unified onto the site's one
+            // `ntdst/api/public_actions` filter and is NEVER floored — anonymous
+            // reachability is not conditional on a capability.
+            if (($opts['public'] ?? false) === true) {
+                add_filter('ntdst/api/public_actions', static function (array $actions) use ($action): array {
+                    $actions[] = $action;
+                    return $actions;
+                });
+
+                add_filter('ntdst/api_data/' . $action, $handler, $priority, 2);
+                return;
+            }
+
+            // A declared cap floor bites at DISPATCH, ahead of the real handler, so it
+            // protects even a handler that forgot to check — ALONGSIDE, not replacing,
+            // the handler's own check. `cap_type` is TYPE-DERIVED (threat T2); a literal
+            // `capability` is the form S7 reconciled onto this one path from the Theme
+            // wrapper S9 has since retired.
+            $capType    = isset($opts['cap_type']) && is_string($opts['cap_type']) ? $opts['cap_type'] : '';
+            $literalCap = isset($opts['capability']) && is_string($opts['capability']) ? $opts['capability'] : '';
+
+            if ($capType !== '' || $literalCap !== '') {
+                $floored = static function ($data, $params) use ($handler, $capType, $literalCap) {
+                    $cap = $capType !== '' ? ntdst_api_floor_cap($capType) : $literalCap;
+
+                    // FAIL-CLOSED (threat T3): an unresolvable/empty cap denies everyone, admin included.
+                    if ($cap === '' || !current_user_can($cap)) {
+                        return new \WP_Error('forbidden', 'Insufficient permissions', ['status' => 403]);
+                    }
+
+                    return $handler($data, $params);
+                };
+
+                add_filter('ntdst/api_data/' . $action, $floored, $priority, 2);
+                return;
+            }
+
+            // Neither opt: login-required. The router's binary floor already refuses an
+            // anonymous caller for any action not on public_actions; the handler keeps
+            // whatever per-row/per-type check it has.
+            add_filter('ntdst/api_data/' . $action, $handler, $priority, 2);
     }
 }
 
-// Back-compat: keep the old unprefixed class name working for callers
-// outside this codebase. New code should use NTDST_Endpoints.
-if (!class_exists('Endpoints', false)) {
-    class_alias(NTDST_Endpoints::class, 'Endpoints');
-}
-
 /**
- * Register an `ntdst/api_data/{action}` handler, optionally with a declared
- * per-action capability floor and/or public (anonymous) reachability. The
- * registration path for data actions in `daan-core` — services call it
- * directly. (S9 retired the `Theme::apiAction()` wrapper that used to delegate
- * here: an api_data action outlives a theme switch, so registering one was
- * never Theme's job.)
- *
- * NOT the only mechanical path, and the claim is scoped rather than absolute
- * for that reason (Cluster B review finding F6): `ntdst/api_data/{action}` is
- * an ordinary WordPress filter, so a plugin can attach a handler with a raw
- * `add_filter()` and one does — `ntdst-baseline`'s `CacheHeadersService`
- * registers `ntdst/api_data/baseline_purge` that way, gating it itself. Doing
- * so forfeits everything below (the declared floor, the public allowlist entry)
- * and puts the whole burden of the gate on the handler; prefer this helper.
- *
- *  - `$opts['cap_type']` — a capability FLOOR enforced at DISPATCH, ahead of the
- *    real handler, so it protects even a handler that forgot to check (defense in
- *    depth, ALONGSIDE the handler's own gate). The cap is TYPE-DERIVED from
- *    `get_post_type_object($type)->cap->edit_others_posts` and FAIL-CLOSED (an
- *    unresolvable/empty/absent cap denies EVERYONE, admin included) — never the
- *    literal `edit_others_posts`. Mirrors `AccessGrantService::manageCapability()`.
- *  - `$opts['public'] === true` — adds `$action` to the `ntdst/api/public_actions`
- *    filter (the site's one place for anonymous exposure) and NEVER floors it:
- *    public reachability wins over any declared `cap_type`.
- *  - `$opts['capability']` — a LITERAL cap floor. It exists because S7 reconciled
- *    the retired `Theme::apiAction()` wrapper's literal-cap option onto this one
- *    path rather than dropping it; it keeps that wrapper's fail-open-on-empty
- *    semantics, which is why `cap_type` (fail-CLOSED) is the form to prefer.
- *  - neither — login-required: the router's binary floor refuses anonymous
- *    callers, and the handler keeps its own per-row/per-type check.
- *
- * @param array{cap_type?: string, public?: bool, capability?: string, priority?: int} $opts
+ * Global helper — the command service (singleton).
  */
-if (!function_exists('ntdst_api_action')) {
-    function ntdst_api_action(string $action, callable $handler, array $opts = []): void
+if (!function_exists('ntdst_actions')) {
+    function ntdst_actions(): NTDST_Actions
     {
-        $action   = sanitize_key($action);
-        $priority = (int) ($opts['priority'] ?? 10);
-
-        // Public wins (threat T1): a public action is unified onto the site's one
-        // `ntdst/api/public_actions` filter and is NEVER floored — anonymous
-        // reachability is not conditional on a capability.
-        if (($opts['public'] ?? false) === true) {
-            add_filter('ntdst/api/public_actions', static function (array $actions) use ($action): array {
-                $actions[] = $action;
-                return $actions;
-            });
-
-            add_filter('ntdst/api_data/' . $action, $handler, $priority, 2);
-            return;
-        }
-
-        // A declared cap floor bites at DISPATCH, ahead of the real handler, so it
-        // protects even a handler that forgot to check — ALONGSIDE, not replacing,
-        // the handler's own check. `cap_type` is TYPE-DERIVED (threat T2); a literal
-        // `capability` is the form S7 reconciled onto this one path from the Theme
-        // wrapper S9 has since retired.
-        $capType    = isset($opts['cap_type']) && is_string($opts['cap_type']) ? $opts['cap_type'] : '';
-        $literalCap = isset($opts['capability']) && is_string($opts['capability']) ? $opts['capability'] : '';
-
-        if ($capType !== '' || $literalCap !== '') {
-            $floored = static function ($data, $params) use ($handler, $capType, $literalCap) {
-                $cap = $capType !== '' ? ntdst_api_floor_cap($capType) : $literalCap;
-
-                // FAIL-CLOSED (threat T3): an unresolvable/empty cap denies everyone, admin included.
-                if ($cap === '' || !current_user_can($cap)) {
-                    return new \WP_Error('forbidden', 'Insufficient permissions', ['status' => 403]);
-                }
-
-                return $handler($data, $params);
-            };
-
-            add_filter('ntdst/api_data/' . $action, $floored, $priority, 2);
-            return;
-        }
-
-        // Neither opt: login-required. The router's binary floor already refuses an
-        // anonymous caller for any action not on public_actions; the handler keeps
-        // whatever per-row/per-type check it has.
-        add_filter('ntdst/api_data/' . $action, $handler, $priority, 2);
+        static $actions = null;
+        return $actions ??= new NTDST_Actions();
     }
 }
 

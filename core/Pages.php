@@ -3,31 +3,47 @@
 declare(strict_types=1);
 
 /**
- * NTDST Router - Minimal URL routing
- * Maps URL patterns to callables with WordPress template integration
+ * NTDST Pages — front-end URL routing and WordPress template integration.
+ *
+ * This routes PAGES: a URL pattern resolves to a callable that renders a
+ * template for a human. It is NOT the HTTP API surface.
+ *
+ * Its verb methods are deliberately absent. `get()`/`post()` used to live here
+ * and meant "a page pattern matched on this request method" — which collides
+ * with ntdst_rest(), where get() means an HTTP GET resource route. Since
+ * v3.0.0 an HTTP verb in this package means a REST route and nothing else, and
+ * a page route declares its method as an argument to path().
+ *
+ * Pick the right service:
+ *   page / template   → ntdst_pages()
+ *   command (ajax)    → ntdst_actions()->register()
+ *   resource route    → ntdst_rest()
  *
  * Usage:
  *
- * // Simple route
- * ntdst_route('/projects/:slug', function($params) {
+ * // Simple route (GET by default)
+ * ntdst_pages()->path('/projects/:slug', function($params) {
  *     $project = get_post($params['slug']);
  *     return ntdst_response()->with('project', $project)->template('project/single');
  * });
  *
+ * // A page that only answers POST
+ * ntdst_pages()->path('/projects/submit', $handler, 'POST');
+ *
  * // With specific template type
- * ntdst_router()->single('project', function($post) {
+ * ntdst_pages()->single('project', function($post) {
  *     return ntdst_response()->with('project', $post)->template('project/detail');
  * });
  *
  * // With conditions
- * ntdst_router()->when(fn() => is_singular('project'), function($post) {
+ * ntdst_pages()->when(fn() => is_singular('project'), function($post) {
  *     // Custom handling
  * });
  */
 
 defined('ABSPATH') || exit;
 
-class NTDST_Router
+class NTDST_Pages
 {
     protected array $routes = [];
     protected array $template_hooks = [];
@@ -72,7 +88,11 @@ class NTDST_Router
     }
 
     /**
-     * Register a URL pattern route.
+     * Register a page route.
+     *
+     * The request method is an ARGUMENT, not the method name — HTTP verbs are
+     * ntdst_rest()'s vocabulary, and a page route matched on POST is still a
+     * page, not a resource.
      *
      * The callback receives (array $params, string $template) — $params holds
      * the named URL placeholders. Query-string parameters are NOT passed;
@@ -97,7 +117,7 @@ class NTDST_Router
      * @param callable $callback Handler function
      * @param string $method HTTP method (GET, POST, etc.)
      */
-    public function register(string $pattern, callable $callback, string $method = 'GET'): self
+    public function path(string $pattern, callable $callback, string $method = 'GET'): self
     {
         $regex = $this->compilePattern($pattern);
 
@@ -109,22 +129,6 @@ class NTDST_Router
         ];
 
         return $this;
-    }
-
-    /**
-     * Register GET route
-     */
-    public function get(string $pattern, callable $callback): self
-    {
-        return $this->register($pattern, $callback, 'GET');
-    }
-
-    /**
-     * Register POST route
-     */
-    public function post(string $pattern, callable $callback): self
-    {
-        return $this->register($pattern, $callback, 'POST');
     }
 
     /**
@@ -463,25 +467,27 @@ class NTDST_Router
 }
 
 /**
- * Global helper - get router instance (singleton)
+ * Global helper — the page router (singleton).
+ *
+ * v3.0.0 removed ntdst_router() and ntdst_route() outright. No aliases, no
+ * forwarders: an adopter still calling them fails at the call site instead of
+ * silently riding a shim (FR-6).
  */
-if (!function_exists('ntdst_router')) {
-    function ntdst_router(): NTDST_Router
+if (!function_exists('ntdst_pages')) {
+    function ntdst_pages(): NTDST_Pages
     {
-        static $router = null;
-        return $router ??= new NTDST_Router();
+        static $pages = null;
+        return $pages ??= new NTDST_Pages();
     }
 }
 
-/**
- * Quick route registration helper
- */
-if (!function_exists('ntdst_route')) {
-    function ntdst_route(string $pattern, callable $callback, string $method = 'GET'): NTDST_Router
-    {
-        return ntdst_router()->register($pattern, $callback, $method);
-    }
+// Initialise early to register the redirect-prevention hook.
+//
+// Guarded: this file is also loaded outside WordPress (the package's own unit
+// suite requires it directly). Defining a stub add_action() in the test instead
+// breaks Patchwork, which must be the one to define it so Brain Monkey can
+// reroute the call — SchedulerTest patches add_action and fails with
+// DefinedTooEarly if anything defines it first.
+if (function_exists('add_action')) {
+    add_action('init', 'ntdst_pages', 1);
 }
-
-// Initialize router early to register redirect prevention hook
-add_action('init', 'ntdst_router', 1);

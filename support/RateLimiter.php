@@ -4,14 +4,14 @@ declare(strict_types=1);
 
 /**
  * The one canonical rate limiter for the fleet (spec `intake-to-core`, FR-2 /
- * FR-3), extracted from `NTDST_Endpoints::checkRateLimit()` +
+ * FR-3), extracted from `NTDST_Actions::checkRateLimit()` +
  * `consumeRateBudget()` so the todai intake and every future consumer count
  * against the same primitive instead of re-deriving it.
  *
  * ── EVERYTHING THAT NAMES A CALLER STAYS WITH THE CALLER (FR-3) ───────────
  * The limiter receives the FINISHED transient key and the FINISHED numbers.
  * It resolves no user, no client IP, and applies no filters of its own:
- *  - NTDST_Endpoints keys `u{userId}` when logged in, else `ip` + md5(client
+ *  - NTDST_Actions keys `u{userId}` when logged in, else `ip` + md5(client
  *    IP), under the `ntdst_rate_` prefix, with the limit and the window taken
  *    from `ntdst/api/rate_limit/{$action}` and `ntdst/api/rate_window/{$action}`
  *    over its own class constants;
@@ -52,7 +52,7 @@ final class NTDST_RateLimiter
 {
     /**
      * Window used when a caller asks for one that cannot be honoured (<= 0).
-     * Matches NTDST_Endpoints' own RATE_WINDOW so a clamped bucket behaves
+     * Matches NTDST_Actions' own RATE_WINDOW so a clamped bucket behaves
      * like the fleet default rather than inventing a third number.
      */
     private const FALLBACK_WINDOW = 60;
@@ -68,7 +68,7 @@ final class NTDST_RateLimiter
      * Read the bucket and consume one unit when the caller is under the limit.
      *
      * The TTL is re-applied on every consumed unit (sliding window) — the
-     * long-standing NTDST_Endpoints behaviour, deliberately carried over
+     * long-standing NTDST_Actions behaviour, deliberately carried over
      * unchanged, since FR-3 forbids any behaviour change for the eleven
      * existing call sites.
      *

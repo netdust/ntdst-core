@@ -44,7 +44,7 @@ final class NTDST_RelationField implements NTDST_Service_Meta
         // generations of security review were spent gating it.
         // Login-required (no per-action cap_type): its cap is per-REQUESTED-type,
         // resolved inside mayPickFrom(), so a single per-action floor would be wrong.
-        ntdst_api_action('relation_search', [$this, 'handleRelationSearch']);
+        ntdst_actions()->register('relation_search', [$this, 'handleRelationSearch']);
 
         // Register reverse relationship metaboxes
         add_action('add_meta_boxes', [$this, 'registerReverseRelationshipMetaboxes'], 20);

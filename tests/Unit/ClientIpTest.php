@@ -22,7 +22,7 @@ use PHPUnit\Framework\TestCase;
  *   - ntdst-baseline/support/ClientIp.php has CIDR-aware trust matching
  *     (correct) but returns the LEFTMOST valid X-Forwarded-For entry —
  *     spoofable: whatever the client itself prepended is handed back.
- *   - NTDST_Endpoints::getClientIp() walks the chain right-to-left,
+ *   - NTDST_Actions::getClientIp() walks the chain right-to-left,
  *     skipping trusted hops (correct), but matches trusted proxies with
  *     in_array() only — wrong behind Ploi/Cloudflare, which front from a
  *     RANGE, so the whole allow-list silently fails open to REMOTE_ADDR
@@ -41,11 +41,11 @@ use PHPUnit\Framework\TestCase;
  *   NTDST_ClientIp::detect(array $server): string
  *       The WordPress-aware entry point. Applies `ntdst/trusted_proxies`
  *       and THEN the historical `netdust_trusted_proxies` (FR-1b), then
- *       delegates to resolve(). This is what NTDST_Endpoints and
+ *       delegates to resolve(). This is what NTDST_Actions and
  *       NTDST_Logger consume.
  *
  *   Class naming follows this package's convention (NTDST_Scheduler,
- *   NTDST_Logger, NTDST_Endpoints): global classes, `NTDST_` prefix. Files
+ *   NTDST_Logger, NTDST_Actions): global classes, `NTDST_` prefix. Files
  *   land at support/ClientIp.php + support/Cidr.php and are added to
  *   ntdst-core.php's explicit require list and to tests/bootstrap.php —
  *   wiring the loader is part of greening this RED. This file deliberately
@@ -469,7 +469,7 @@ final class ClientIpTest extends TestCase
 
     public function test_detect_trusts_loopback_by_default_with_no_filters_registered(): void
     {
-        // FR-3: NTDST_Endpoints' behaviour is unchanged — its default
+        // FR-3: NTDST_Actions' behaviour is unchanged — its default
         // trusted list was loopback v4 + v6.
         $this->assertSame('203.0.113.9', NTDST_ClientIp::detect([
             'REMOTE_ADDR' => '127.0.0.1',

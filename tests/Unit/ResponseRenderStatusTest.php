@@ -6,13 +6,6 @@ use Brain\Monkey\Functions;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use PHPUnit\Framework\TestCase;
 
-// api/Response.php runs NTDST_Template_Loader::init() (add_filter) at load
-// time; define the WP no-ops it needs before requiring it, so the class loads
-// under phpunit without a full WordPress. (The Scheduler test avoids this by
-// being loaded via bootstrap; Response is not in the bootstrap require list.)
-if (!function_exists('add_filter')) {
-    function add_filter(...$args) { return true; }
-}
 require_once __DIR__ . '/../../api/Response.php';
 
 /**

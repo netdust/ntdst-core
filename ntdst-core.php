@@ -25,7 +25,7 @@ define('NTDST_URL', plugins_url('', __FILE__));
 
 // Load core foundation
 require_once NTDST_PATH . '/core/Container.php';
-require_once NTDST_PATH . '/core/Router.php';
+require_once NTDST_PATH . '/core/Pages.php';
 require_once NTDST_PATH . '/core/Theme.php';
 require_once NTDST_PATH . '/core/ServiceInterface.php';
 require_once NTDST_PATH . '/core/SectorRegistry.php';
@@ -45,8 +45,9 @@ require_once NTDST_PATH . '/admin/MetaboxGenerator.php';
 require_once NTDST_PATH . '/admin/RelationField.php';
 
 // Load and initialize endpoints system
-require_once NTDST_PATH . '/api/Endpoints.php';
-ntdst_endpoints(); // Initialize endpoints to register REST routes
+require_once NTDST_PATH . '/api/Rest.php';
+require_once NTDST_PATH . '/api/Actions.php';
+ntdst_actions(); // Initialise the command service to register its REST routes
 
 // Load services
 require_once NTDST_PATH . '/services/Logger.php';

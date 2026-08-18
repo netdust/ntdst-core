@@ -33,7 +33,7 @@ defined('ABSPATH') || exit;
  *  - register()  -> `ntdst_data()->register(...)` — a CPT outlives the theme.
  *  - taxonomy()  -> the `taxonomies` config key, or
  *                   `NTDST_Data_Manager::registerTaxonomy(...)`.
- *  - apiAction() -> the global `ntdst_api_action(...)` helper, which is also
+ *  - apiAction() -> `ntdst_actions()->register(...)`, which is also
  *                   where the api_data capability floor lives.
  *  - module()    -> retired outright, not relocated. See the mixin rules below.
  *
@@ -53,12 +53,12 @@ defined('ABSPATH') || exit;
  *    built-in method, extend the class instead.
  *
  * The accepted cost — four forwarders. templatePath(), single(), page() and
- * archive() forward onto NTDST_Template_Loader and NTDST_Router. They pass the
+ * archive() forward onto NTDST_Template_Loader and NTDST_Pages. They pass the
  * rule (their subject is the theme; Router and the loader are only the mechanism)
  * so they stay — but they are a SECOND public surface that has to track its
  * owner's signature, and that tax has already been paid twice: S7 had to repair
  * apiAction() after it drifted to literal-cap-only, and S8 had to update
- * taxonomy() in the same change. Whenever NTDST_Router or NTDST_Template_Loader
+ * taxonomy() in the same change. Whenever NTDST_Pages or NTDST_Template_Loader
  * changes shape, check these four — they can go stale without anything here
  * failing to load.
  *
@@ -103,8 +103,8 @@ class NTDST_Theme
         if (function_exists('ntdst_data')) {
             $this->mixin('data', ntdst_data());
         }
-        if (function_exists('ntdst_router')) {
-            $this->mixin('router', ntdst_router());
+        if (function_exists('ntdst_pages')) {
+            $this->mixin('pages', ntdst_pages());
         }
         if (function_exists('ntdst_response')) {
             $this->mixin('response', ntdst_response());
@@ -379,7 +379,7 @@ class NTDST_Theme
      * Register single template handler
      *
      * The post type is `?string` — NOT `string|callable`. This signature tracks
-     * its owner NTDST_Router::single() exactly; a wider one here would advertise
+     * its owner NTDST_Pages::single() exactly; a wider one here would advertise
      * a callable-first form the owner refuses under strict_types, raising a
      * TypeError from a class the caller never named (Cluster B review, F1).
      *
@@ -394,7 +394,7 @@ class NTDST_Theme
      */
     public function single(?string $post_type = null, ?callable $callback = null): self
     {
-        $this->router()->single($post_type, $callback);
+        $this->pages()->single($post_type, $callback);
         return $this;
     }
 
@@ -412,7 +412,7 @@ class NTDST_Theme
      */
     public function page(string|callable $slug, ?callable $callback = null): self
     {
-        $this->router()->page($slug, $callback);
+        $this->pages()->page($slug, $callback);
         return $this;
     }
 
@@ -421,7 +421,7 @@ class NTDST_Theme
      *
      * The post type is `?string` — NOT `string|callable`, for the same reason
      * `single()` above is not: this signature tracks its owner
-     * NTDST_Router::archive() exactly (Cluster B review, F1).
+     * NTDST_Pages::archive() exactly (Cluster B review, F1).
      *
      * @param string|null   $post_type Post type, or null for every archive view
      * @param callable|null $callback  Handler function
@@ -435,7 +435,7 @@ class NTDST_Theme
      */
     public function archive(?string $post_type = null, ?callable $callback = null): self
     {
-        $this->router()->archive($post_type, $callback);
+        $this->pages()->archive($post_type, $callback);
         return $this;
     }
 

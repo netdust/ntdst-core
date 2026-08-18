@@ -6,11 +6,8 @@ use Brain\Monkey\Functions;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use PHPUnit\Framework\TestCase;
 
-if (!function_exists('add_filter')) {
-    function add_filter(...$args) { return true; }
-}
 require_once __DIR__ . '/../../api/Response.php';
-require_once __DIR__ . '/../../api/Endpoints.php';
+require_once __DIR__ . '/../../api/Actions.php';
 
 // The WP_REST_Request/WP_REST_Response/WP_Error doubles are declared once, in
 // DownloadDispatchTest.php, which the Unit suite loads first alphabetically
@@ -79,7 +76,7 @@ final class DownloadDenialStatusTest extends TestCase
     {
         $this->stubDenyingHandler(new WP_Error('forbidden', 'Handler says no', ['status' => 403]));
 
-        $endpoints = new NTDST_Endpoints();
+        $endpoints = new NTDST_Actions();
         $res = $endpoints->handle_download($this->request(['action' => 'test_action', 'nonce' => 'good']));
 
         $this->assertSame(403, $res->get_status(), 'a handler WP_Error with status=403 must ship as 403, not 500');
@@ -93,7 +90,7 @@ final class DownloadDenialStatusTest extends TestCase
     {
         $this->stubDenyingHandler(new WP_Error('quote_not_found', 'No such quote', ['status' => 404]));
 
-        $endpoints = new NTDST_Endpoints();
+        $endpoints = new NTDST_Actions();
         $res = $endpoints->handle_download($this->request(['action' => 'test_action', 'nonce' => 'good']));
 
         $this->assertSame(404, $res->get_status(), 'a handler WP_Error with status=404 must ship as 404, not 500');
@@ -107,7 +104,7 @@ final class DownloadDenialStatusTest extends TestCase
     {
         $this->stubDenyingHandler(new WP_Error('denied', 'No status supplied'));
 
-        $endpoints = new NTDST_Endpoints();
+        $endpoints = new NTDST_Actions();
         $res = $endpoints->handle_download($this->request(['action' => 'test_action', 'nonce' => 'good']));
 
         $this->assertSame(403, $res->get_status(), 'a WP_Error with no declared status must default to 403, not 500');
@@ -126,7 +123,7 @@ final class DownloadDenialStatusTest extends TestCase
         Functions\when('has_filter')->justReturn(true);
         Functions\when('apply_filters')->alias(fn($hook, $v, $p = null) => $v);
 
-        $endpoints = new NTDST_Endpoints();
+        $endpoints = new NTDST_Actions();
         $res = $endpoints->handle_download($this->request(['action' => 'test_action', 'nonce' => 'good']));
 
         $this->assertSame('download_not_emitted', $this->errorCode($res));
