@@ -25,7 +25,7 @@ define('NTDST_URL', plugins_url('', __FILE__));
 
 // Load core foundation
 require_once NTDST_PATH . '/core/Container.php';
-require_once NTDST_PATH . '/core/Router.php';
+require_once NTDST_PATH . '/core/Pages.php';
 require_once NTDST_PATH . '/core/Theme.php';
 require_once NTDST_PATH . '/core/ServiceInterface.php';
 require_once NTDST_PATH . '/core/SectorRegistry.php';
