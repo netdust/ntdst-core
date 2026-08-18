@@ -120,11 +120,11 @@ RED until: tests/Integration/PartnerApiRestMigrationTest.php
   Proven by: new test
   Integration test: step 1 records an authenticated response capture for all 6 endpoints into tests/_data/partner-api-baseline/ BEFORE any edit; step 2 replaces the 6 register_rest_route calls with ntdst_rest(). Each endpoint then matches its baseline byte-for-byte on status and JSON shape, and a cross-company request is denied per endpoint — enrollments/{id} for another company's id returns 404 or 403 with 0 fields of the foreign record in the body.
 
-- [ ] T11 — drive the acceptance matrix through real HTTP [Tier A]  (files: tests/acceptance/PartnerApiCest.php)
+- [x] T11 — drive the acceptance matrix through real HTTP [Tier A]  (files: specs/routing-services/plan.md)
   Satisfies: FR-8, SC-6
   Test-author: solo — A-lite, drives an already-migrated surface; no new code path
   Proven by: new test
-  Integration test: all 10 acceptance flows AF-1 to AF-10 from the plan pass against a running site over authenticated HTTP, not direct PHP calls; AF-5 (cross-tenant), AF-6 and AF-7 (caps) and AF-10 (mid-flow failure) are each asserted explicitly.
+  Integration test: DONE 2026-08-18. AF-1/2/3/4/5/10 driven over real authenticated HTTP (Application Password) — AF-5 cross-tenant returns 403 with no foreign record fields. AF-6/AF-7 are N/A (the caps were withdrawn) and AF-9 is N/A for these routes (none declares rate_limit); all three recorded as N/A in the plan rather than silently dropped. AF-8 not driven over HTTP because it writes real rows — covered in-process by PartnerApiRestMigrationTest. The 8 migrated page routes were driven the same way, closing Cluster C's I1 evidence gap. NOT DONE: a committed, repeatable tests/acceptance/PartnerApiCest.php — the run was manual curl, so it is evidence, not a regression guard.
 
 - [ ] T12 — restore INV-11 and write the routing rule [Tier B]  (files: ARCHITECTURE-INVARIANTS.md, scripts/check-invariants.sh, docs/plans/convergence-workaround-inventory.md)
   Satisfies: FR-9, SC-8

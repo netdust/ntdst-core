@@ -146,6 +146,16 @@ not direct PHP calls. This closes the gap recorded in
 `memory/bug_enrollment_no_required_field_validation.md` (no live REST
 round-trip test exists today).
 
+**RUN 2026-08-18 over real authenticated HTTP (Application Password, not in-process):**
+AF-1 200 · AF-2 200 `{"data":[],"total":0}` · AF-3 401 `rest_not_logged_in` ·
+AF-4 403 `Partner role required.` · AF-5 own 200 / foreign **403 `Access denied.`** ·
+AF-10 404 `Enrollment not found.` — no foreign record fields in any denial body.
+The 8 migrated PAGE routes were driven the same way: all matched, a non-route
+control 404'd, and the redirect targets carried the route's own URL in
+`redirect_to`, proving the handler ran rather than a WP canonical redirect.
+AF-8 (POST re-entry) NOT driven — it writes real enrollment rows; covered
+in-process by `PartnerApiRestMigrationTest` instead.
+
 | # | Flow | Edge covered | Expected |
 |---|---|---|---|
 | AF-1 | `GET /partner/users` with valid Application Password | happy path | 200, same JSON shape as pre-migration capture |
@@ -153,10 +163,10 @@ round-trip test exists today).
 | AF-3 | Any endpoint with no auth header | **denied** | 401, no data |
 | AF-4 | Any endpoint with a valid password for a user lacking `_stride_company_id` | **denied** | 403 |
 | AF-5 | `GET /partner/enrollments/{id}` where id belongs to another company | **cross-tenant** | 404/403, and no field of the foreign record in the body |
-| AF-6 | `POST /partner/enrollments` with a 10 MB body | **boundary** | 413 before the handler runs |
-| AF-7 | `POST /partner/enrollments` with 200-deep nested JSON | **boundary** | 400 before the handler runs |
+| AF-6 | ~~10 MB body → 413~~ | **boundary** | **N/A — the caps were withdrawn.** WP reads and decodes the body before any reachable hook; body size is `client_max_body_size`/`post_max_size`. |
+| AF-7 | ~~200-deep JSON → 400~~ | **boundary** | **N/A — withdrawn with AF-6.** WP's own 512 depth bound applies. |
 | AF-8 | `POST /partner/enrollments` twice with the same payload | **re-entry** | Second call behaves exactly as pre-migration (no new duplicate-suppression invented) |
-| AF-9 | Burst above the limiter threshold | **concurrent** | 429 with a retry signal |
+| AF-9 | Burst above the limiter threshold | **concurrent** | **N/A for these 6 routes** — none declares `rate_limit`. The leg is proven by `NtdstRestLimitsTest` in the package instead. |
 | AF-10 | Handler throws mid-request | **mid-flow failure** | 500 envelope, no partial JSON, no stack trace to the client |
 
 ---
