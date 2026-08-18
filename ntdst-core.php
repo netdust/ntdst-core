@@ -45,6 +45,7 @@ require_once NTDST_PATH . '/admin/MetaboxGenerator.php';
 require_once NTDST_PATH . '/admin/RelationField.php';
 
 // Load and initialize endpoints system
+require_once NTDST_PATH . '/api/Rest.php';
 require_once NTDST_PATH . '/api/Actions.php';
 ntdst_actions(); // Initialise the command service to register its REST routes
 
