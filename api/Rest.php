@@ -154,8 +154,8 @@ final class NTDST_Rest
 
         $args = [
             'methods' => $entry['methods'],
-            'callback' => $entry['handler'],
-            'permission_callback' => $this->memoize($permission),
+            'callback' => $this->capped($entry['handler'], $entry['options']),
+            'permission_callback' => $this->guard($permission, $entry),
         ];
 
         if (array_key_exists('args', $entry['options'])) {
@@ -163,6 +163,104 @@ final class NTDST_Rest
         }
 
         register_rest_route($this->namespace, $entry['route'], $args);
+    }
+
+    /**
+     * Gap 3 — refuse an oversized or over-nested body BEFORE the handler runs.
+     *
+     * WP parses JSON at its default depth of 512 and applies no size cap, so a
+     * write route is reachable with a payload that costs real memory before the
+     * consumer sees it. Both caps are OPT-IN: a route declaring neither behaves
+     * exactly as WordPress would, because this class does not impose a policy
+     * nobody asked for.
+     *
+     * @param array<string, mixed> $options
+     */
+    private function capped($handler, array $options): callable
+    {
+        $maxBytes = $options['max_body_bytes'] ?? null;
+        $maxDepth = $options['max_json_depth'] ?? null;
+
+        if ($maxBytes === null && $maxDepth === null) {
+            return $handler;
+        }
+
+        return static function ($request) use ($handler, $maxBytes, $maxDepth) {
+            $body = is_object($request) && method_exists($request, 'get_body')
+                ? (string) $request->get_body()
+                : '';
+
+            if ($maxBytes !== null && strlen($body) > (int) $maxBytes) {
+                return new WP_Error(
+                    'body_too_large',
+                    'Request body exceeds the limit for this route.',
+                    ['status' => 413],
+                );
+            }
+
+            if ($maxDepth !== null && $body !== '') {
+                // json_decode fails with JSON_ERROR_DEPTH past the cap. Depth is
+                // checked on the RAW body: WP would already have parsed it at 512.
+                json_decode($body, true, max(1, (int) $maxDepth));
+
+                if (json_last_error() === JSON_ERROR_DEPTH) {
+                    return new WP_Error(
+                        'body_too_deep',
+                        'Request body nests deeper than the limit for this route.',
+                        ['status' => 400],
+                    );
+                }
+            }
+
+            return $handler($request);
+        };
+    }
+
+    /**
+     * The permission_callback WP receives: rate limit first, then the caller's
+     * own permission — both memoized together so one served request costs one
+     * of each.
+     *
+     * Rate limiting delegates to support/RateLimiter.php, the same primitive
+     * NTDST_Actions::checkRateLimit() uses. Without it the resource surface
+     * would be the one unthrottled way into a site whose command surface is
+     * throttled. Opt-in per route, like the caps.
+     *
+     * @param array{route: string, methods: string, handler: mixed, options: array<string, mixed>} $entry
+     */
+    private function guard(callable $permission, array $entry): callable
+    {
+        $limit = $entry['options']['rate_limit'] ?? null;
+        $window = (int) ($entry['options']['rate_window'] ?? 60);
+        $key = 'ntdst_rest_' . md5($this->namespace . '|' . $entry['route'] . '|' . $this->bucket());
+
+        return $this->memoize(static function ($request) use ($permission, $limit, $window, $key) {
+            if ($limit !== null && !NTDST_RateLimiter::attempt($key, (int) $limit, $window, is_object($request) ? $request : null)) {
+                return new WP_Error(
+                    'rate_limited',
+                    'Too many requests. Please wait a moment and try again.',
+                    ['status' => 429],
+                );
+            }
+
+            return $permission($request);
+        });
+    }
+
+    /**
+     * This caller's rate bucket: per user when logged in — fair to NAT'd users —
+     * and per client IP otherwise. The IP comes from support/ClientIp.php, the
+     * one canonical resolver; this class never reads $_SERVER itself.
+     */
+    private function bucket(): string
+    {
+        $userId = function_exists('get_current_user_id') ? (int) get_current_user_id() : 0;
+
+        if ($userId > 0) {
+            return 'u' . $userId;
+        }
+
+        return 'ip' . md5(class_exists('NTDST_ClientIp') ? NTDST_ClientIp::detect($_SERVER) : '');
     }
 
     /**
