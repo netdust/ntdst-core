@@ -16,9 +16,9 @@ if (!function_exists('add_filter')) {
     function add_filter(...$args) { return true; }
 }
 require_once __DIR__ . '/../../api/Response.php';
-require_once __DIR__ . '/../../api/Endpoints.php';
+require_once __DIR__ . '/../../api/Actions.php';
 
-// NTDST_Endpoints error()/success() wrap a WP_REST_Response; the harness has no
+// NTDST_Actions error()/success() wrap a WP_REST_Response; the harness has no
 // live WP, so provide the minimal shape the dispatcher touches.
 if (!class_exists('WP_REST_Response')) {
     class WP_REST_Response
@@ -63,13 +63,13 @@ if (!class_exists('WP_REST_Request')) {
 /**
  * Characterization contract for the v2.3 GET download dispatch.
  *
- * The gap this plan closes: NTDST_Endpoints registers only POST /action and
+ * The gap this plan closes: NTDST_Actions registers only POST /action and
  * POST /get_nonce — there is no GET dispatch entry, so a handler that wants to
  * stream a file via Response::download()/inline() has no framework route to
  * reach. Download actions are therefore forced onto raw wp_ajax today.
  *
  * The minimal bootstrap runs Brain Monkey without a live WP REST server, so we
- * characterize the missing route by inspecting NTDST_Endpoints' registration
+ * characterize the missing route by inspecting NTDST_Actions' registration
  * surface directly (its public register_* methods), not via rest_get_server().
  * Task 3 flips this into a real registration assertion.
  */
@@ -84,9 +84,9 @@ final class DownloadDispatchTest extends TestCase
     {
         // v2.3 adds the download registrar + handler + permission callback,
         // wired into register_routes() alongside the nonce + action endpoints.
-        $this->assertTrue(method_exists(NTDST_Endpoints::class, 'register_download_endpoint'));
-        $this->assertTrue(method_exists(NTDST_Endpoints::class, 'handle_download'));
-        $this->assertTrue(method_exists(NTDST_Endpoints::class, 'check_download_permission'));
+        $this->assertTrue(method_exists(NTDST_Actions::class, 'register_download_endpoint'));
+        $this->assertTrue(method_exists(NTDST_Actions::class, 'handle_download'));
+        $this->assertTrue(method_exists(NTDST_Actions::class, 'check_download_permission'));
     }
 
     public function test_response_already_has_a_testable_header_seam(): void
@@ -154,7 +154,7 @@ final class DownloadDispatchTest extends TestCase
             return $unused; // handler "returns" (can't exit in a test)
         });
 
-        $endpoints = new NTDST_Endpoints();
+        $endpoints = new NTDST_Actions();
         $endpoints->handle_download(
             $this->request(['action' => 'test_report', 'nonce' => 'good', 'edition_id' => 42]),
         );
@@ -167,7 +167,7 @@ final class DownloadDispatchTest extends TestCase
     {
         Functions\when('sanitize_text_field')->returnArg();
 
-        $endpoints = new NTDST_Endpoints();
+        $endpoints = new NTDST_Actions();
         $res = $endpoints->handle_download($this->request(['action' => '', 'nonce' => '']));
 
         $this->assertSame('missing_params', $this->errorCode($res));
@@ -183,7 +183,7 @@ final class DownloadDispatchTest extends TestCase
             return $v;
         });
 
-        $endpoints = new NTDST_Endpoints();
+        $endpoints = new NTDST_Actions();
         $res = $endpoints->handle_download($this->request(['action' => 'test_report', 'nonce' => 'forged']));
 
         $this->assertSame('invalid_nonce', $this->errorCode($res));
@@ -196,7 +196,7 @@ final class DownloadDispatchTest extends TestCase
         Functions\when('wp_verify_nonce')->justReturn(1);
         Functions\when('has_filter')->justReturn(false);
 
-        $endpoints = new NTDST_Endpoints();
+        $endpoints = new NTDST_Actions();
         $res = $endpoints->handle_download($this->request(['action' => 'no_such', 'nonce' => 'good']));
 
         $this->assertSame('unknown_action', $this->errorCode($res));
@@ -212,7 +212,7 @@ final class DownloadDispatchTest extends TestCase
         Functions\when('has_filter')->justReturn(true);
         Functions\when('apply_filters')->alias(fn($hook, $v, $p = null) => $v);
 
-        $endpoints = new NTDST_Endpoints();
+        $endpoints = new NTDST_Actions();
         $res = $endpoints->handle_download($this->request(['action' => 'test_report', 'nonce' => 'good']));
 
         $this->assertSame('download_not_emitted', $this->errorCode($res));
@@ -231,7 +231,7 @@ final class DownloadDispatchTest extends TestCase
     // surface. Driven through the real callback with Brain Monkey stubs.
     // =====================================================================
 
-    private function endpointsWithPublicActions(array $public): NTDST_Endpoints
+    private function endpointsWithPublicActions(array $public): NTDST_Actions
     {
         // public_actions is read via the ntdst/api/public_actions filter.
         Functions\when('apply_filters')->alias(function ($hook, $value, ...$rest) use ($public) {
@@ -239,7 +239,7 @@ final class DownloadDispatchTest extends TestCase
             // rate-limit / window filters pass their default through
             return $value;
         });
-        return new NTDST_Endpoints();
+        return new NTDST_Actions();
     }
 
     public function test_download_denies_anonymous_non_public_action(): void

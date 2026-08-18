@@ -10,7 +10,7 @@ if (!function_exists('add_filter')) {
     function add_filter(...$args) { return true; }
 }
 require_once __DIR__ . '/../../api/Response.php';
-require_once __DIR__ . '/../../api/Endpoints.php';
+require_once __DIR__ . '/../../api/Actions.php';
 
 // The WP_REST_Request/WP_REST_Response/WP_Error doubles (incl. the
 // query-param support get_request_params() needs) are declared once, in
@@ -22,7 +22,7 @@ require_once __DIR__ . '/DownloadDispatchTest.php';
  * STRING (`<a href="...download?action=X&nonce=Y">`), never as a JSON body
  * or form-encoded body — a GET navigation sends no request body at all.
  *
- * get_request_params() (api/Endpoints.php) reads ONLY get_json_params() and
+ * get_request_params() (api/Actions.php) reads ONLY get_json_params() and
  * get_body_params(). It never reads get_query_params(). So a real anchor
  * click reaches handle_download() with $params === [] (plus the reserved
  * `_files` key), `action` and `nonce` both resolve to '', and every
@@ -76,7 +76,7 @@ final class DownloadQueryParamsTest extends TestCase
         });
 
         // Act
-        $endpoints = new NTDST_Endpoints();
+        $endpoints = new NTDST_Actions();
         $res = $endpoints->handle_download($request);
 
         // Assert: the registered download filter for a query-string-only GET
@@ -110,8 +110,8 @@ final class DownloadQueryParamsTest extends TestCase
         $request = new WP_REST_Request();
         $request->set_query_params(['action' => 'test_action', 'nonce' => 'good-nonce']);
 
-        $endpoints = new NTDST_Endpoints();
-        $method = new \ReflectionMethod(NTDST_Endpoints::class, 'get_request_params');
+        $endpoints = new NTDST_Actions();
+        $method = new \ReflectionMethod(NTDST_Actions::class, 'get_request_params');
         $method->setAccessible(true);
         $params = $method->invoke($endpoints, $request);
 
@@ -150,7 +150,7 @@ final class DownloadQueryParamsTest extends TestCase
         });
 
         // Act
-        $endpoints = new NTDST_Endpoints();
+        $endpoints = new NTDST_Actions();
         $endpoints->handle_action($request);
 
         // Assert: JSON body params still dispatch exactly as before the fix.
