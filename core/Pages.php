@@ -88,7 +88,11 @@ class NTDST_Pages
     }
 
     /**
-     * Register a URL pattern route.
+     * Register a page route.
+     *
+     * The request method is an ARGUMENT, not the method name — HTTP verbs are
+     * ntdst_rest()'s vocabulary, and a page route matched on POST is still a
+     * page, not a resource.
      *
      * The callback receives (array $params, string $template) — $params holds
      * the named URL placeholders. Query-string parameters are NOT passed;
@@ -113,7 +117,7 @@ class NTDST_Pages
      * @param callable $callback Handler function
      * @param string $method HTTP method (GET, POST, etc.)
      */
-    public function register(string $pattern, callable $callback, string $method = 'GET'): self
+    public function path(string $pattern, callable $callback, string $method = 'GET'): self
     {
         $regex = $this->compilePattern($pattern);
 
@@ -125,18 +129,6 @@ class NTDST_Pages
         ];
 
         return $this;
-    }
-
-    /**
-     * Register a page route.
-     *
-     * The request method is an ARGUMENT, not the method name — HTTP verbs are
-     * ntdst_rest()'s vocabulary, and a page route matched on POST is still a
-     * page, not a resource.
-     */
-    public function path(string $pattern, callable $callback, string $method = 'GET'): self
-    {
-        return $this->register($pattern, $callback, $method);
     }
 
     /**

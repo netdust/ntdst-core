@@ -16,6 +16,23 @@ if [ -n "$BAD" ]; then
     exit 1
 fi
 
+# v3.0.0 removed the v2 routing facades. A deleted symbol with a surviving
+# caller is a RUNTIME fatal that no other gate step can see: `composer lint` is
+# php -l (syntax only, never resolves a name) and the unit suite does not load
+# every shipped file. Cluster A shipped two such fatals with a 155/155 green
+# suite — admin/RelationField.php called ntdst_api_action(), and core/Theme.php
+# guarded on ntdst_router() so a required mixin silently stopped registering.
+# This grep is what makes the next rename fail loudly instead.
+REMOVED=$(grep -rnE "ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints" \
+    --include='*.php' . \
+    | grep -v /vendor/ | grep -v '^\./tests/' | grep -v '^\./specs/' \
+    | grep -vE ':[0-9]+: *(\*|//|#|/\*)' || true)
+if [ -n "$REMOVED" ]; then
+    echo "Shipped code still references a symbol removed in v3.0.0:"
+    echo "$REMOVED"
+    exit 1
+fi
+
 if ! grep -q "PHP_SAPI === 'cli'" tests/bootstrap.php; then
     echo "tests/bootstrap.php is missing its CLI guard (PHP_SAPI === 'cli' || exit;)"
     exit 1

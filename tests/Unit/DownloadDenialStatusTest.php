@@ -6,9 +6,6 @@ use Brain\Monkey\Functions;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use PHPUnit\Framework\TestCase;
 
-if (!function_exists('add_filter')) {
-    function add_filter(...$args) { return true; }
-}
 require_once __DIR__ . '/../../api/Response.php';
 require_once __DIR__ . '/../../api/Actions.php';
 

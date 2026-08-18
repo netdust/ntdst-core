@@ -631,14 +631,14 @@ final class NTDST_Actions
      * Pick the right service:
      *   command (this)  → ntdst_actions()->register()
      *   resource route  → ntdst_rest()
-     *   file bytes      → ntdst_actions()->download()
+     *   file bytes      → add_filter('ntdst/api_download/{action}', …)
      *   page            → ntdst_pages()->path()
      *
      * The `ntdst/api_data/{action}` filter name is UNCHANGED from v2 on purpose:
      * adopters' handlers hang off it, and renaming it would silently unmount
      * every one of them while the code still looked correct.
      *
-     * @param array<string, mixed> $opts
+     * @param array{cap_type?: string, public?: bool, capability?: string, priority?: int} $opts
      */
     public function register(string $action, callable $handler, array $opts = []): void
     {
@@ -690,51 +690,16 @@ final class NTDST_Actions
 }
 
 /**
- * Global helper - get endpoints instance
+ * Global helper — the command service (singleton).
  */
 if (!function_exists('ntdst_actions')) {
     function ntdst_actions(): NTDST_Actions
     {
-        static $manager = null;
-        return $manager ??= new NTDST_Actions();
+        static $actions = null;
+        return $actions ??= new NTDST_Actions();
     }
 }
 
-
-/**
- * Register an `ntdst/api_data/{action}` handler, optionally with a declared
- * per-action capability floor and/or public (anonymous) reachability. The
- * registration path for data actions in `daan-core` — services call it
- * directly. (S9 retired the `Theme::apiAction()` wrapper that used to delegate
- * here: an api_data action outlives a theme switch, so registering one was
- * never Theme's job.)
- *
- * NOT the only mechanical path, and the claim is scoped rather than absolute
- * for that reason (Cluster B review finding F6): `ntdst/api_data/{action}` is
- * an ordinary WordPress filter, so a plugin can attach a handler with a raw
- * `add_filter()` and one does — `ntdst-baseline`'s `CacheHeadersService`
- * registers `ntdst/api_data/baseline_purge` that way, gating it itself. Doing
- * so forfeits everything below (the declared floor, the public allowlist entry)
- * and puts the whole burden of the gate on the handler; prefer this helper.
- *
- *  - `$opts['cap_type']` — a capability FLOOR enforced at DISPATCH, ahead of the
- *    real handler, so it protects even a handler that forgot to check (defense in
- *    depth, ALONGSIDE the handler's own gate). The cap is TYPE-DERIVED from
- *    `get_post_type_object($type)->cap->edit_others_posts` and FAIL-CLOSED (an
- *    unresolvable/empty/absent cap denies EVERYONE, admin included) — never the
- *    literal `edit_others_posts`. Mirrors `AccessGrantService::manageCapability()`.
- *  - `$opts['public'] === true` — adds `$action` to the `ntdst/api/public_actions`
- *    filter (the site's one place for anonymous exposure) and NEVER floors it:
- *    public reachability wins over any declared `cap_type`.
- *  - `$opts['capability']` — a LITERAL cap floor. It exists because S7 reconciled
- *    the retired `Theme::apiAction()` wrapper's literal-cap option onto this one
- *    path rather than dropping it; it keeps that wrapper's fail-open-on-empty
- *    semantics, which is why `cap_type` (fail-CLOSED) is the form to prefer.
- *  - neither — login-required: the router's binary floor refuses anonymous
- *    callers, and the handler keeps its own per-row/per-type check.
- *
- * @param array{cap_type?: string, public?: bool, capability?: string, priority?: int} $opts
- */
 if (!function_exists('ntdst_api_floor_cap')) {
     /**
      * The type's OWN `edit_others_posts`-mapped capability, or `''` when it cannot
