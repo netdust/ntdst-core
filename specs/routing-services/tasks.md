@@ -86,7 +86,7 @@ Stakes: standard — rename call sites; behaviour identical.
 
 Behaviour: Stride runs on v3.0.0 with no reference to a removed facade.
 Observable: `grep -rn "ntdst_api_action\|ntdst_router" --include=*.php web/app/ | grep -v /ntdst-core/ | wc -l` prints 0 and both suites are green.
-RED until: tests/Unit/NtdstFacadeMigrationTest.php
+RED until: tests/Unit/NtdstEndpointsTest.php
 
 - [ ] T08 — tag v3.0.0 and bump Stride via v2.4.1 [Tier B]  (files: composer.json, CHANGELOG.md)
   Satisfies: FR-6, SC-3, SC-4
@@ -94,11 +94,11 @@ RED until: tests/Unit/NtdstFacadeMigrationTest.php
   Proven by: machine gate — composer gate in CORE, plus phpunit --testsuite Unit in STRIDE
   Integration test: after bumping STRIDE to ^2.4 its unit and integration suites are green with counts at or above the recorded baseline (1372 unit tests at 2026-08-18); after tagging CORE v3.0.0 and bumping STRIDE to ^3.0, `wp eval 'echo 1;'` boots with 0 fatals and `composer gate` in CORE exits 0.
 
-- [ ] T09 — migrate Stride's 40 forced call sites [Tier B]  (files: web/app/mu-plugins/stride-core, web/app/themes/stridence, tests/Unit/NtdstFacadeMigrationTest.php)
+- [ ] T09 — migrate Stride's forced call sites [Tier B]  (files: web/app/mu-plugins/stride-core, web/app/themes/stridence, tests/Unit/NtdstEndpointsTest.php)
   Satisfies: FR-7, SC-5
   Test-author: solo
   Proven by: existing test — tests/Unit + tests/Integration Stride suites, and scripts/check-invariants.sh INV-14
-  Integration test: 30 ntdst_api_action() and 10 ntdst_router() call sites are rewritten with 0 behaviour change; Stride's unit and integration suites are green at or above baseline; check-invariants.sh INV-14 stays green because the ntdst/api_data/* filter names did not change — a red INV-14 here proves dispatch was touched, not just naming.
+  Integration test: every ntdst_api_action()/ntdst_router() call site is rewritten with 0 behaviour change (measured after the fact: 15 ntdst_actions()->register + 8 ntdst_pages()->path in web/app/ excluding comments, plus 16 test files — the planned figure of "30 and 10" counted docblock mentions and was wrong); Stride's unit and integration suites are green at or above baseline; check-invariants.sh INV-14 stays green because the ntdst/api_data/* filter names did not change — a red INV-14 here proves dispatch was touched, not just naming.
 
 Integration gate: `cd ~/Sites/stride && ddev exec vendor/bin/phpunit --testsuite Unit && STRIDE_TEST_DB_DISPOSABLE=1 ddev exec vendor/bin/phpunit -c phpunit-integration.xml.dist`
 
