@@ -40,11 +40,11 @@ Behaviour: a consumer declares namespaced resource routes, and a route without a
 Observable: `wp eval 'do_action("rest_api_init"); print_r(array_keys(rest_get_server()->get_routes()));'` lists the declared route and omits the permission-less one.
 RED until: tests/Unit/NtdstRestTest.php
 
-- [ ] T03 — ntdst_rest() registers namespaced routes, permission required [Tier A]  (files: api/Rest.php, tests/Unit/NtdstRestTest.php)
+- [ ] T03 — ntdst_rest() wraps register_rest_route(), permission required [Tier A]  (files: api/Rest.php, tests/Unit/NtdstRestTest.php)
   Satisfies: FR-3, SC-1
   Test-author: split
   Proven by: new test
-  Unit test: a route declared WITH a callable permission appears in rest_get_server()->get_routes(); an otherwise-identical route declared WITHOUT one is ABSENT from that array — assert absence of the key, never a 403 status.
+  Unit test: a route declared WITH a callable permission appears in rest_get_server()->get_routes(); an otherwise-identical route declared WITHOUT one is ABSENT from that array — assert absence of the key, never a 403 status. WP core registers a permission-less route and skips the check (rest-api.php:890), so absence is the whole point. Port ONLY the delta from the parked NTDST_Rest_Registrar: registration must call WP's register_rest_route(), not reimplement matching, and api/Rest.php stays under ~200 lines (D6).
 
 - [ ] T04 — permission memoization, per request and per wrapper [Tier A]  (files: api/Rest.php, tests/Unit/NtdstRestTest.php)
   Satisfies: FR-3, SC-2
@@ -58,13 +58,13 @@ Integration gate: `cd ~/Sites/ntdst-core && composer gate`
 
 ---
 
-### Cluster B2 — the REST service: limits and cross-origin (CORE)
+### Cluster B2 — the REST service: limits (CORE)
 
 Stakes: high — these are the controls that stop abuse of a public surface.
 
-Behaviour: oversized or over-nested bodies are refused before any handler runs, REST shares the one rate limiter, and CORS is deny-by-default.
+Behaviour: oversized or over-nested bodies are refused before any handler runs, and REST shares the package's one rate limiter instead of being the unthrottled way in.
 Observable: `curl -X POST --data-binary @10mb.json <site>/wp-json/x/v1/thing` returns 413 and the handler log stays empty.
-RED until: tests/Unit/NtdstCorsTest.php
+RED until: tests/Unit/NtdstRestLimitsTest.php
 
 - [ ] T05 — body-size and JSON-depth caps [Tier A]  (files: api/Rest.php, tests/Unit/NtdstRestLimitsTest.php)
   Satisfies: FR-3
@@ -77,12 +77,6 @@ RED until: tests/Unit/NtdstCorsTest.php
   Test-author: solo
   Proven by: new test
   Unit test: a burst past the configured threshold returns 429 through the REST leg; api/Rest.php contains 0 second implementations of rate limiting or IP resolution (it delegates to support/RateLimiter.php and support/ClientIp.php).
-
-- [ ] T07 — CORS as a declared option [Tier A]  (files: api/Rest.php, api/CorsPolicy.php, tests/Unit/NtdstCorsTest.php)
-  Satisfies: FR-5
-  Test-author: split
-  Proven by: new test
-  Unit test: a namespace with no cors option emits 0 Access-Control-Allow-Origin headers; a namespace declaring one allowed origin echoes exactly that origin and never `*`; a disallowed origin receives 0 ACAO headers.
 
 Integration gate: `cd ~/Sites/ntdst-core && composer gate`
 

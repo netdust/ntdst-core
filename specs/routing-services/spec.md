@@ -18,9 +18,10 @@ revision, not a build-time judgement call.
 |---|---|---|---|
 | D1 | Add a REST leg to the existing Router, or restructure? | **Restructure into three named services.** | User: "it's A" |
 | D2 | Keep old facades as deprecated aliases through v3? | **No aliases. Clean break at v3.0.0.** | User: "just make a clean repo, no aliasses" |
-| D3 | Include CORS, and in what shape? | **Yes — declared through the same facade as the route**, not a standalone bolt-on. | User: "Both, redesigned through the Router facade" |
+| D3 | Include CORS, and in what shape? | **REVISED 2026-08-18 — CORS is OUT.** WP core already ships `rest_send_cors_headers()`; a policy class rebuilds it, and there are zero consumers. Narrowing origins is a filter on an existing hook if it is ever needed. | User: "ntdst-core can't get bloated by edge use cases" + "not to reinvent WordPress" — supersedes the earlier "both, redesigned" ruling |
 | D4 | Does this phase convert Stride's 33 admin routes? | **No.** Ship the service, prove it on the 6 Partner API routes; the 33 live dashboard routes convert in a later pass. | User approval of the Section 3 boundary |
 | D5 | Why does REST get the deepest treatment? | It is the strategic surface — the reason other systems can integrate at all. | User: "rest routes are more important these days so sites can connect" |
+| D6 | How much of the parked 582-line registrar ships? | **Only the delta over WordPress.** `register_rest_route()` is not rebuilt — it is wrapped, closing four named WP footguns. Target is roughly 150 lines, not 582. | User: "the whole idea is not to reinvent WordPress. provide a common api, add some improvements" |
 
 ---
 
@@ -84,28 +85,37 @@ names.
 this change, `get()` in the package means an HTTP GET resource route, always.
 *Source:* User: "without creating confusion so good naming"
 
-**FR-3 — `ntdst_rest()` registers namespaced resource routes.**
+**FR-3 — `ntdst_rest()` wraps `register_rest_route()` and closes WordPress's
+known gaps — it does not replace WP's routing.**
 Chainable per namespace: `ntdst_rest('ns')->get($route, $handler, $opts)` and
-the same for post/put/patch/delete. Carries the parked registrar's security
-properties:
-- `permission` is REQUIRED with no default — a route queued without a callable
-  permission is **never registered** (not registered-then-denied);
-- per-request, per-wrapper permission memoization (WP core invokes
-  `permission_callback` twice per served request);
-- body-size and JSON-depth caps on write verbs;
-- handler-return normalization through `NTDST_Response`.
+the same for post/put/patch/delete. WP core does the registering; this adds only
+the delta, each item a documented WP behaviour:
+- **WP fails open on a missing `permission_callback`.** Since 5.5 it fires
+  `_doing_it_wrong()` and registers the route anyway; `rest-api.php:890` then
+  skips the check when the callback is absent, leaving the route public. Here
+  `permission` is REQUIRED with no default and a route without a callable one is
+  **never registered**.
+- **WP invokes `permission_callback` twice per served request** (Allow-header
+  computation) → memoized per request, per wrapper.
+- **WP parses JSON at depth 512 with no body-size cap** → optional caps applied
+  before dispatch.
+- **Handler returns are ad-hoc** → normalized through `NTDST_Response`, the
+  package's one emission path.
 *Source:* User D5; parked `NTDST_Rest_Registrar` docblock §"Required-permission / public-route pattern (mitigation 6)"
 
-**FR-4 — One rate limiter, one client-IP resolver.**
-`ntdst_rest()` uses `support/RateLimiter.php` and `support/ClientIp.php`. The
-parked copies are discarded, not ported.
-*Source:* invented — ground-truthed 2026-08-18 (v2.4.0 `c09ef90`/`76f7016` extracted both OUT of `Endpoints`); approved by D2's "clean repo" framing, since a second limiter is precisely the debt this release removes
+**FR-4 — `ntdst_rest()` delegates to the package's existing limiter and IP resolver.**
+CORRECTED 2026-08-18: an earlier draft claimed the parked files carried their own
+copies to be discarded. They carry none — the parked registrar does **no rate
+limiting at all**. So this is a gap to FILL, not a duplicate to remove: without
+delegation to `support/RateLimiter.php` + `support/ClientIp.php`, the new REST
+surface is the one unthrottled way into the site while `/ntdst/v1/action` is
+throttled.
+*Source:* invented — ground-truthed 2026-08-18 by reading both parked files (0 matches for limiter/IP logic); approved by D6
 
-**FR-5 — CORS declared where the route is declared.**
-Cross-origin policy is an option on the namespace or route, not a separate
-`new NTDST_Cors_Policy(...)` + `register($prefix)` call. `CorsPolicy` becomes
-internal machinery with no public constructor contract.
-*Source:* User D3
+*(The fifth requirement — "CORS declared where the route is declared" — was
+WITHDRAWN 2026-08-18 per the revised D3: WP core's `rest_send_cors_headers()`
+already does it and there are zero consumers. Its number is left unused rather
+than renumbering, so the Satisfies: references in tasks.md stay stable.)*
 
 **FR-6 — Clean break at v3.0.0.**
 `ntdst_api_action()`, `ntdst_router()`, `ntdst_route()` and `NTDST_Endpoints` /
@@ -153,7 +163,6 @@ The plan therefore owes a `## Threat model`:
 - [x] **Multi-tenancy** — the 6 Partner API routes are scoped by `_stride_company_id`; a scoping regression leaks one company's enrollment and attendance data to another.
 - [x] **Auth / session** — Application Passwords over Basic auth; WP core's double invocation of `permission_callback` is load-bearing for memoized callables.
 - [x] **Untrusted parsing** — request bodies on write verbs; body-size and JSON-depth caps (FR-3).
-- [x] **Cross-origin policy** — FR-5 decides which origins reach a namespace.
 - [x] **Rate limiting** — FR-4 moves REST onto the shared limiter; a misconfiguration removes a control the dispatcher has today.
 
 ## User-facing surfaces
