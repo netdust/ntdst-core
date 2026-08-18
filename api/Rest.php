@@ -1,49 +1,37 @@
 <?php // api/Rest.php
 
 /**
- * NTDST Rest — resource routes, as a thin wrapper over WordPress.
+ * NTDST Rest — resource routes, wrapping WordPress rather than replacing it.
  *
- * This does NOT reimplement routing. `register_rest_route()` does the work; the
- * class exists only to close gaps WordPress leaves open, and each one is a
- * documented core behaviour rather than a preference:
+ * register_rest_route() does the work. This adds two things WP does not:
+ *  - a route without a callable permission is never registered (WP registers it
+ *    and then skips the check, leaving it public);
+ *  - the permission runs once per request (WP calls it twice, for the Allow
+ *    header), so a side-effectful permission does not fire twice.
  *
- *  1. WP FAILS OPEN on a missing permission_callback. Since 5.5 it fires
- *     _doing_it_wrong() and registers the route anyway; at rest-api.php:890 the
- *     check is then SKIPPED when the callback is absent, so the route is public.
- *     Here a route without a callable `permission` is never handed to
- *     register_rest_route() at all — refused, not registered-then-denied.
- *  2. WP invokes permission_callback TWICE per served request (once on dispatch,
- *     once computing the Allow header). A side-effectful permission callable
- *     would fire twice, so it is memoized per request.
+ * Rate limiting is opt-in per route and delegates to support/RateLimiter.php.
+ * It is only sound when `ntdst/trusted_proxies` matches the deployment and the
+ * proxy overwrites X-Forwarded-For; otherwise a caller can pick their bucket.
  *
  * Pick the right service:
  *   page            → ntdst_pages()->path()
  *   command (ajax)  → ntdst_actions()->register()
  *   file bytes      → add_filter('ntdst/api_download/{action}', …)
- *   resource route  → ntdst_rest()   ← this
- *
- * Usage:
- *
- *   ntdst_rest('stride/v1')
- *       ->get('/editions', $handler, ['permission' => $canView])
- *       ->post('/editions', $handler, ['permission' => $canManage]);
+ *   resource route  → ntdst_rest()
  */
 
 defined('ABSPATH') || exit;
 
 final class NTDST_Rest
 {
-    /**
-     * One wrapper per namespace, so a namespace's routes queue together.
-     *
-     * @var array<string, self>
-     */
+    /** Options this class consumes; everything else passes through to WP. */
+    private const OWN_OPTIONS = ['permission', 'rate_limit', 'rate_window'];
+
+    /** @var array<string, self> */
     private static array $instances = [];
 
-    /** @var list<array{route: string, methods: string, handler: mixed, options: array<string, mixed>}> */
-    private array $queued = [];
-
-    private bool $hooked = false;
+    /** @var array<string, bool> Refusals already reported this process. */
+    private static array $reported = [];
 
     public function __construct(private string $namespace) {}
 
@@ -78,169 +66,116 @@ final class NTDST_Rest
     }
 
     /**
-     * Queue a route and make sure it reaches WordPress on rest_api_init.
-     *
      * @param array<string, mixed> $options
      */
     public function route(string $route, string $methods, $handler, array $options = []): self
     {
-        $this->queued[] = [
-            'route' => $route,
-            'methods' => $methods,
-            'handler' => $handler,
-            'options' => $options,
-        ];
+        $register = fn () => $this->registerOne($route, $methods, $handler, $options);
 
-        // If rest_api_init already fired, register NOW — a service constructed
-        // late (or a route added from inside another rest_api_init callback)
-        // must not silently register nothing. Checked per call, not once:
-        // the wrapper is cached per namespace and outlives any single hook.
-        if (function_exists('did_action') && did_action('rest_api_init')) {
-            $this->flush();
-
-            return $this;
-        }
-
-        if (!$this->hooked) {
-            $this->hooked = true;
-            add_action('rest_api_init', [$this, 'flush']);
-        }
+        // register_rest_route() before rest_api_init is _doing_it_wrong; after
+        // it, the hook will never fire again.
+        did_action('rest_api_init') ? $register() : add_action('rest_api_init', $register);
 
         return $this;
     }
 
-    public function flush(): void
-    {
-        $queued = $this->queued;
-        $this->queued = [];
-
-        foreach ($queued as $entry) {
-            $this->registerOne($entry);
-        }
-    }
-
     /**
-     * @param array{route: string, methods: string, handler: mixed, options: array<string, mixed>} $entry
+     * @param array<string, mixed> $options
      */
-    private function registerOne(array $entry): void
+    private function registerOne(string $route, string $methods, $handler, array $options): void
     {
-        $permission = $entry['options']['permission'] ?? null;
+        $permission = $options['permission'] ?? null;
 
         if (!is_callable($permission)) {
-            // Gap 1. Refuse LOUDLY and never register: WordPress would accept
-            // this route and serve it to everyone. Surfaced via
-            // _doing_it_wrong() so it is caught in development rather than
-            // discovered as a live open route.
-            _doing_it_wrong(
-                self::class . '::route',
-                sprintf(
-                    'Route "%s%s" was not registered — "permission" is a required option and must be callable. Refusing to register a REST route with no permission check.',
-                    $this->namespace,
-                    $entry['route'],
-                ),
-                '3.0.0',
-            );
-
-            if (function_exists('ntdst_log')) {
-                ntdst_log('api')->error('REST route registration refused — missing/non-callable permission', [
-                    'namespace' => $this->namespace,
-                    'route' => $entry['route'],
-                    'methods' => $entry['methods'],
-                ]);
-            }
+            $this->refuse($route, $methods, '"permission" is required and must be callable');
 
             return;
         }
 
-        $args = [
-            'methods' => $entry['methods'],
-            'callback' => $this->capped($entry['handler'], $entry['options']),
-            'permission_callback' => $this->guard($permission, $entry),
-        ];
+        if (!is_callable($handler)) {
+            // WP has its own invalid-handler guard, but a wrapped callback would
+            // slip past it and fatal mid-request instead.
+            $this->refuse($route, $methods, 'the handler must be callable');
 
-        if (array_key_exists('args', $entry['options'])) {
-            $args['args'] = $entry['options']['args'];
+            return;
         }
 
-        register_rest_route($this->namespace, $entry['route'], $args);
+        // A typo'd option is a control the author believes is on and isn't, so
+        // it gets the same loud treatment as a missing permission.
+        $unknown = array_diff(array_keys($options), array_merge(self::OWN_OPTIONS, ['args', 'schema', 'show_in_index', 'allow_batch']));
+        if ($unknown !== []) {
+            $this->refuse($route, $methods, 'unknown option(s): ' . implode(', ', $unknown));
+
+            return;
+        }
+
+        // Pass everything WP understands straight through — narrowing its API
+        // would send consumers back to raw register_rest_route().
+        $args = array_diff_key($options, array_flip(self::OWN_OPTIONS)) + [
+            'methods' => $methods,
+            'callback' => $handler,
+            'permission_callback' => $this->guard($permission, $route, $methods, $options),
+        ];
+
+        register_rest_route($this->namespace, $route, $args);
+    }
+
+    private function refuse(string $route, string $methods, string $why): void
+    {
+        $id = $this->namespace . '|' . $route . '|' . $methods;
+
+        // Once per process: registerOne() runs on every REST request.
+        if (isset(self::$reported[$id])) {
+            return;
+        }
+        self::$reported[$id] = true;
+
+        _doing_it_wrong(
+            self::class . '::route',
+            sprintf('Route was not registered — %s.', $why),
+            '3.0.0',
+        );
+
+        if (function_exists('ntdst_log')) {
+            ntdst_log('api')->error('REST route registration refused', [
+                'namespace' => $this->namespace,
+                'route' => $route,
+                'methods' => $methods,
+                'reason' => $why,
+            ]);
+        }
     }
 
     /**
-     * Gap 3 — refuse an oversized or over-nested body BEFORE the handler runs.
-     *
-     * WP parses JSON at its default depth of 512 and applies no size cap, so a
-     * write route is reachable with a payload that costs real memory before the
-     * consumer sees it. Both caps are OPT-IN: a route declaring neither behaves
-     * exactly as WordPress would, because this class does not impose a policy
-     * nobody asked for.
+     * Rate limit, then the caller's permission — both memoized together.
      *
      * @param array<string, mixed> $options
      */
-    private function capped($handler, array $options): callable
+    private function guard(callable $permission, string $route, string $methods, array $options): callable
     {
-        $maxBytes = $options['max_body_bytes'] ?? null;
-        $maxDepth = $options['max_json_depth'] ?? null;
+        $limit = $options['rate_limit'] ?? null;
+        $window = (int) ($options['rate_window'] ?? 60);
+        $verbs = array_map('strtoupper', array_map('trim', explode(',', $methods)));
 
-        if ($maxBytes === null && $maxDepth === null) {
-            return $handler;
-        }
+        return $this->memoize(function ($request) use ($permission, $limit, $window, $route, $verbs) {
+            // Only the handler that matched the request spends budget. WP calls
+            // every sibling handler's permission for the Allow header, so
+            // without this a GET drains the POST route's limit.
+            $matched = is_object($request) && method_exists($request, 'get_method')
+                && in_array(strtoupper((string) $request->get_method()), $verbs, true);
 
-        return static function ($request) use ($handler, $maxBytes, $maxDepth) {
-            $body = is_object($request) && method_exists($request, 'get_body')
-                ? (string) $request->get_body()
-                : '';
+            if ($limit !== null && $matched) {
+                // Bucket resolved HERE, not at registration: REST auth has not
+                // run at rest_api_init, so the user would always look anonymous.
+                $key = 'ntdst_rest_' . md5($this->namespace . '|' . $route . '|' . implode(',', $verbs) . '|' . $this->bucket());
 
-            if ($maxBytes !== null && strlen($body) > (int) $maxBytes) {
-                return new WP_Error(
-                    'body_too_large',
-                    'Request body exceeds the limit for this route.',
-                    ['status' => 413],
-                );
-            }
-
-            if ($maxDepth !== null && $body !== '') {
-                // json_decode fails with JSON_ERROR_DEPTH past the cap. Depth is
-                // checked on the RAW body: WP would already have parsed it at 512.
-                json_decode($body, true, max(1, (int) $maxDepth));
-
-                if (json_last_error() === JSON_ERROR_DEPTH) {
+                if (!NTDST_RateLimiter::attempt($key, (int) $limit, $window)) {
                     return new WP_Error(
-                        'body_too_deep',
-                        'Request body nests deeper than the limit for this route.',
-                        ['status' => 400],
+                        'rate_limited',
+                        'Too many requests. Please wait a moment and try again.',
+                        ['status' => 429, 'retry_after' => $window],
                     );
                 }
-            }
-
-            return $handler($request);
-        };
-    }
-
-    /**
-     * The permission_callback WP receives: rate limit first, then the caller's
-     * own permission — both memoized together so one served request costs one
-     * of each.
-     *
-     * Rate limiting delegates to support/RateLimiter.php, the same primitive
-     * NTDST_Actions::checkRateLimit() uses. Without it the resource surface
-     * would be the one unthrottled way into a site whose command surface is
-     * throttled. Opt-in per route, like the caps.
-     *
-     * @param array{route: string, methods: string, handler: mixed, options: array<string, mixed>} $entry
-     */
-    private function guard(callable $permission, array $entry): callable
-    {
-        $limit = $entry['options']['rate_limit'] ?? null;
-        $window = (int) ($entry['options']['rate_window'] ?? 60);
-        $key = 'ntdst_rest_' . md5($this->namespace . '|' . $entry['route'] . '|' . $this->bucket());
-
-        return $this->memoize(static function ($request) use ($permission, $limit, $window, $key) {
-            if ($limit !== null && !NTDST_RateLimiter::attempt($key, (int) $limit, $window, is_object($request) ? $request : null)) {
-                return new WP_Error(
-                    'rate_limited',
-                    'Too many requests. Please wait a moment and try again.',
-                    ['status' => 429],
-                );
             }
 
             return $permission($request);
@@ -248,54 +183,39 @@ final class NTDST_Rest
     }
 
     /**
-     * This caller's rate bucket: per user when logged in — fair to NAT'd users —
-     * and per client IP otherwise. The IP comes from support/ClientIp.php, the
-     * one canonical resolver; this class never reads $_SERVER itself.
+     * Per user when logged in, else per client IP. 'unknown' rather than an
+     * empty hash: support/ClientIp.php returns '' for an unusable address, and
+     * pooling every such caller into one bucket lets one starve the rest.
      */
     private function bucket(): string
     {
-        $userId = function_exists('get_current_user_id') ? (int) get_current_user_id() : 0;
+        $userId = (int) get_current_user_id();
 
-        if ($userId > 0) {
-            return 'u' . $userId;
-        }
-
-        return 'ip' . md5(class_exists('NTDST_ClientIp') ? NTDST_ClientIp::detect($_SERVER) : '');
+        return $userId > 0 ? 'u' . $userId : 'ip' . md5(NTDST_ClientIp::detect($_SERVER) ?: 'unknown');
     }
 
     /**
-     * Gap 2 — evaluate the caller's permission ONCE per request.
-     *
-     * Keyed on the WP_REST_Request OBJECT via WeakMap, which makes it
-     * per-request by construction: no hand-rolled cache key that could collide,
-     * and the entry dies with the request rather than leaking a decision into
-     * the next one. A fresh map per call means two routes never share a memo,
-     * so one route's ALLOW can never answer for another.
+     * Evaluate once per request. Keyed on the request OBJECT, so the entry dies
+     * with it; boxed, because isset() on a WeakMap is false for a stored null —
+     * and null is WP's own deny value.
      */
-    private function memoize(callable $permission): callable
+    private function memoize(callable $decide): callable
     {
-        /** @var WeakMap<object, mixed> $cache */
+        /** @var WeakMap<object, array{0: mixed}> $cache */
         $cache = new WeakMap();
 
-        return static function ($request) use ($permission, $cache) {
-            // A non-object request cannot key a WeakMap; evaluate uncached
-            // rather than fail. WP always passes a WP_REST_Request.
+        return static function ($request) use ($decide, $cache) {
             if (!is_object($request)) {
-                return $permission($request);
+                return $decide($request);
             }
 
-            if (isset($cache[$request])) {
-                return $cache[$request];
-            }
+            $cache[$request] ??= [$decide($request)];
 
-            return $cache[$request] = $permission($request);
+            return $cache[$request][0];
         };
     }
 }
 
-/**
- * Global helper — the resource router, one wrapper per namespace.
- */
 if (!function_exists('ntdst_rest')) {
     function ntdst_rest(string $namespace): NTDST_Rest
     {

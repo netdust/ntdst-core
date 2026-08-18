@@ -97,8 +97,11 @@ the delta, each item a documented WP behaviour:
   **never registered**.
 - **WP invokes `permission_callback` twice per served request** (Allow-header
   computation) → memoized per request, per wrapper.
-- **WP parses JSON at depth 512 with no body-size cap** → optional caps applied
-  before dispatch.
+- *(A body-size / JSON-depth cap bullet was WITHDRAWN 2026-08-18. WP reads the
+  whole body and decodes it at depth 512 before any hook this class can reach,
+  so a route-level cap arrives after the cost is paid — and `max_body_bytes` was
+  bypassable outright via multipart, where php://input is empty. Body size is a
+  web-server control; depth is bounded by WP's own 512.)*
 - **Handler returns are ad-hoc** → normalized through `NTDST_Response`, the
   package's one emission path.
 *Source:* User D5; parked `NTDST_Rest_Registrar` docblock §"Required-permission / public-route pattern (mitigation 6)"

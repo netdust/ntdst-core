@@ -58,19 +58,15 @@ Integration gate: `cd ~/Sites/ntdst-core && composer gate`
 
 ---
 
-### Cluster B2 — the REST service: limits (CORE)
+### Cluster B2 — the REST service: rate limiting (CORE)
 
 Stakes: high — these are the controls that stop abuse of a public surface.
 
-Behaviour: oversized or over-nested bodies are refused before any handler runs, and REST shares the package's one rate limiter instead of being the unthrottled way in.
-Observable: `curl -X POST --data-binary @10mb.json <site>/wp-json/x/v1/thing` returns 413 and the handler log stays empty.
+Behaviour: REST shares the package's one rate limiter instead of being the unthrottled way in, and only the handler that matched the request method spends budget.
+Observable: a burst past a route's declared rate_limit returns 429 with a retry_after, while an unrelated method on the same route string is still allowed.
 RED until: tests/Unit/NtdstRestLimitsTest.php
 
-- [ ] T05 — body-size and JSON-depth caps [Tier A]  (files: api/Rest.php, tests/Unit/NtdstRestLimitsTest.php)
-  Satisfies: FR-3
-  Test-author: solo — A-lite, caps are a pure input guard with no tenancy dimension
-  Proven by: new test
-  Unit test: a body over the configured size returns 413 and the handler is invoked 0 times; JSON nested past the depth cap returns 400 and the handler is invoked 0 times. Assert the invocation count, not only the status.
+*(T05 — body-size and JSON-depth caps — WITHDRAWN 2026-08-18. Three independent reviews found the control cannot work from a route option: WP reads and decodes the body before any reachable hook, and the size cap was bypassable via multipart. Removed rather than relabelled.)*
 
 - [ ] T06 — one limiter, one client-IP resolver [Tier B]  (files: api/Rest.php, tests/Unit/NtdstRestLimitsTest.php)
   Satisfies: FR-4
