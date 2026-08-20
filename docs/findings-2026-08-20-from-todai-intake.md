@@ -76,21 +76,32 @@ all. That is the coupling stating its own case.
 system deletes that half outright rather than fixing it. The `:206` theme-slug strip is
 separate and survives — see F5.
 
-**Known consumers to settle before removing** (searched the fleet for `ntdst_sectors(` /
-`NTDST_SectorRegistry`, excluding vendored copies):
+**SETTLED 2026-08-20 — there are ZERO functional consumers.** Stefan: "none of my projects
+need it today, maybe stride, but that's the only one", then "stride is not using". Verified
+across the fleet by searching for `ntdst_sectors(` and `NTDST_SectorRegistry`, excluding
+vendored copies of core itself. Every remaining reference is a test of core's own class, or
+a workaround for its coupling:
 
-- **`bavi`** — the stub above. Removal makes its shim *unnecessary*; delete it with the same
-  release.
-- **`daan`** — `tests/Integration/NtdstCoreLoadTest.php:103,126` pins the class-to-file map
-  and the container binding. A test asserting core's shape; update it.
-- **`stride`** — `tests/Unit/NtdstSectorRegistryTest.php` exercises the registry directly.
-  Stride is the canonical ntdst-core implementation, so **check whether it uses sectors
-  functionally or only tests them** before deciding between deleting the system and
-  relocating it to `ntdst-baseline` as a service. That answer decides the shape.
+| Repo | Reference | Action |
+|---|---|---|
+| `bavi` | `ntdst-coreloader.php:28-46` — a hand-written five-method STUB, so the site can boot without the system | **Delete the stub.** Removing the coupling is what makes it unnecessary |
+| `daan` | `tests/Integration/NtdstCoreLoadTest.php:103,126` — pins the class-to-file map and the container binding | Update the fixture |
+| `stride` | `tests/Unit/NtdstSectorRegistryTest.php` — 11 unit tests of core's own registry | **Delete with the class.** No `ntdst_sectors()` call exists anywhere in stride's own code |
 
-**This is a BC break** — a public class and a global function leave the package. It needs a
-major (v4.0.0) or an explicit deprecation window, which is a call for the spec, not for the
-defect release. Sequence it accordingly: the §2 defects can ship as a patch/minor first.
+**So: DELETE it, do not relocate it to baseline.** The earlier "maybe a baseline service"
+framing was Stefan thinking aloud and he closed it himself. Moving a 527-line system with no
+callers into another package relocates dead code and gives baseline a domain concern it does
+not want either. If sectors are ever needed again, they come back as a consumer-side module
+with a named consumer — which is the rule that should have kept them out of core.
+
+**BC-break framing, softened accordingly.** A public class and a global function still leave
+the package, so it wants a major (v4.0.0) — but no deprecation window is needed for real
+callers, because there are none. Only the three references above need touching, and two of
+them are test fixtures.
+
+**What this buys, beyond deleting 527 lines:** `Bootstrap` loses a readonly constructor
+dependency and an unconditional per-boot call, F5's `:504` half disappears with it, and
+consumers stop having to fabricate a framework class to boot.
 
 ---
 
