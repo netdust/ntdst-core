@@ -254,6 +254,50 @@ final class ActionsRateBucketTest extends TestCase
     }
 
     // =====================================================================
+    // M2 — a caller who cannot dispatch may not spend the site's storage
+    // =====================================================================
+
+    public function testAnAnonymousCallerRefusedByTheAuthGateWritesNoBucket(): void
+    {
+        // `private_thing` is registered, so F1's gate lets it through — but an
+        // anonymous caller can never dispatch it. Charging first meant every
+        // one of those doomed requests wrote 2 wp_options rows on demand, with
+        // only a daily cron to reap them. The auth answer is free; the bucket
+        // is not, so the free question is asked first.
+        $this->mounted = ['ntdst/api_data/private_thing'];
+
+        for ($i = 0; $i < 3; $i++) {
+            $result = $this->actions()->check_action_permission($this->request(['action' => 'private_thing']));
+        }
+
+        $this->assertFalse($result, 'control: anonymous callers cannot reach a non-public action.');
+        $this->assertSame([], $this->transients, 'Three refusals must not write three buckets.');
+    }
+
+    public function testTheNonceDoorAlsoRefusesBeforeCharging(): void
+    {
+        $this->mounted = ['ntdst/api_data/private_thing'];
+
+        $result = $this->actions()->check_nonce_permission($this->request(['action' => 'private_thing']));
+
+        $this->assertFalse($result);
+        $this->assertSame([], $this->transients, 'Same rule on the nonce door.');
+    }
+
+    public function testAPublicActionIsStillChargedForAnonymousCallers(): void
+    {
+        // The other half: throttling anonymous traffic on a PUBLIC action is
+        // the entire point of the limiter. Moving the auth gate up must not
+        // stop charging the callers who can actually reach something.
+        $this->publicActions = ['welcome'];
+        $this->mounted = ['ntdst/api_data/welcome'];
+
+        $this->actions()->check_action_permission($this->request(['action' => 'welcome']));
+
+        $this->assertCount(1, $this->transients, 'A reachable anonymous caller is still counted.');
+    }
+
+    // =====================================================================
     // The other two doors into checkRateLimit()
     // =====================================================================
 

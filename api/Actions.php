@@ -224,17 +224,18 @@ final class NTDST_Actions
             return false;
         }
 
+        // Auth BEFORE the bucket (M2), as on the dispatch doors: an anonymous
+        // caller who cannot mint this nonce may not make the site write a
+        // transient by asking.
+        if (!$isPublic && !is_user_logged_in()) {
+            return false;
+        }
+
         if (!$this->checkRateLimit($action, $request)) {
             return $this->rateLimitedError();
         }
 
-        // Allow public actions without authentication
-        if ($isPublic) {
-            return true;
-        }
-
-        // For non-public actions, require authentication
-        return is_user_logged_in();
+        return true;
     }
 
     /**
@@ -280,22 +281,34 @@ final class NTDST_Actions
             return false;
         }
 
+        // Auth gate, symmetric with check_nonce_permission: anonymous
+        // requests may only dispatch PUBLIC actions. Previously this relied
+        // indirectly on "anon can't mint a nonce for a non-public action" +
+        // per-handler login checks — a handler that forgot its own check,
+        // combined with any nonce leak, became an exposed surface.
+        //
+        // It runs BEFORE the limiter (M2). A caller who can never dispatch
+        // this action must not be able to make the site write storage on
+        // demand: charging first meant every doomed anonymous request left 2
+        // wp_options rows behind, reaped only by a daily cron. Reading the
+        // current user costs nothing and answers the question outright.
+        if (!$isPublic && !is_user_logged_in()) {
+            return false;
+        }
+
         // Rate limiting check (per-action so sensitive actions can be tighter)
         if (!$this->checkRateLimit($action, $request)) {
             return $this->rateLimitedError();
         }
 
         // CSRF: verify request origin (POST /action only — see method doc).
+        //
+        // This one stays BELOW the limiter, deliberately. A caller who fails
+        // it has already passed the auth gate — it is a real session being
+        // driven from another site — and a CSRF flood is exactly the traffic
+        // a throttle should charge. Hoisting it would hand an attacker an
+        // uncharged path through the same code.
         if ($verifyOrigin && !$this->verifyOrigin()) {
-            return false;
-        }
-
-        // Auth gate, symmetric with check_nonce_permission: anonymous
-        // requests may only dispatch PUBLIC actions. Previously this relied
-        // indirectly on "anon can't mint a nonce for a non-public action" +
-        // per-handler login checks — a handler that forgot its own check,
-        // combined with any nonce leak, became an exposed surface.
-        if (!$isPublic && !is_user_logged_in()) {
             return false;
         }
 
