@@ -170,10 +170,23 @@ embedding plus blocked third-party cookies, which CORS does not govern.
 "Consumer X is cross-origin" is not the test. "Consumer X needs THIS mechanism"
 is.
 
-**Open question, deliberately undecided:** a route declaring no `cors` keeps
-WordPress's default. Making core suppress `Allow-Origin` on every route it
-registered would be safer, and is a breaking change. That is a v5 conversation
-with a named owner, not something to slip into a minor.
+**Decided 2026-08-20 — opt-in.** A route declaring no `cors` keeps WordPress's
+default, and core does not suppress `Allow-Origin` package-wide. Three reasons,
+and the third is the principle:
+
+- suppressing it would silently break any consumer relying on WP's reflection,
+  however ill-advised that reliance is;
+- it would make an `ntdst_rest()` route behave unlike every other REST route on
+  the same site, which is a surprise in the direction of "the framework did
+  something I did not ask for";
+- **core makes the common case easier without making the uncommon case
+  impossible** (§5), and its converse holds too: core does not silently change
+  what it was not asked to change.
+
+State the residual rather than implying it away: an `ntdst_rest()` route with
+no `cors` policy is exactly as exposed as any other WordPress REST route. Core
+does not make it worse and does not fix it unless asked. The fix is one option
+key, and `README.md` says so where a consumer will meet it.
 
 ## 7. Deletion is a feature
 
