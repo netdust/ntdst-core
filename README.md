@@ -24,7 +24,7 @@ Stride) instead of a per-project vendored copy that drifts.
 | file bytes | `add_filter('ntdst/api_download/{action}', …)` |
 | a page | `ntdst_pages()->path()` |
 | a download response | `ntdst_download()` — never a hand-rolled CSV block |
-| to count anything per caller | `NTDST_RateLimiter::attempt()` / `::reset()` |
+| to count anything per caller | `NTDST_RateLimiter::attempt()` / `::exceeded()` / `::reset()` |
 | a route readable cross-origin | the `cors` route option — never a hand-rolled `Access-Control-*` header |
 
 ## Branch convention
@@ -106,6 +106,21 @@ Read every line before upgrading. Nothing here is shimmed.
 
 **Not a break, but check it:** the plugin header said `2.4.1` for the whole of
 v3. If anything of yours read the version, it was reading the wrong one.
+
+### 4.2.0
+
+**`NTDST_RateLimiter::exceeded($key, $limit)`** — a read that consumes nothing.
+
+`attempt()` decides and spends in one move, which is right for a request
+budget: every question IS a request. A **failure counter** is the other shape —
+checked far more often than incremented. A login lockout asks on every attempt
+and increments only on a real failure, so asking with `attempt()` would make
+the check cause the lockout it is checking for.
+
+This is what 4.0.0's `reset()` was missing: clearing a bucket is no use if
+reading one still costs a unit. `attempt()` / `exceeded()` / `reset()` is the
+complete set for both shapes — spend, ask, forgive. A limit of `<= 0` is
+switched off and can never be exceeded, agreeing with `attempt()`.
 
 ### 4.1.0
 

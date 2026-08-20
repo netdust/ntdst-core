@@ -159,4 +159,88 @@ final class RateLimiterResetTest extends TestCase
 
         $this->assertSame([], $this->transients);
     }
+
+    // =====================================================================
+    // exceeded() — the read that does not consume
+    // =====================================================================
+
+    public function testExceededReportsTheStateWithoutSpendingAUnit(): void
+    {
+        // A failure counter is CHECKED far more often than it is incremented:
+        // ntdst-baseline's lockout asks twice per login attempt and only
+        // increments on an actual failure. attempt() consumes, so asking with
+        // it would count every question as an answer — the check would cause
+        // the lockout it is checking for.
+        $key = 'ntdst_login_' . md5('ip|stefan');
+
+        NTDST_RateLimiter::attempt($key, 3, 900);
+
+        $this->assertFalse(NTDST_RateLimiter::exceeded($key, 3), 'One failure of three is not a lockout.');
+        $this->assertSame(1, $this->transients[$key], 'Asking must not spend.');
+
+        NTDST_RateLimiter::exceeded($key, 3);
+        NTDST_RateLimiter::exceeded($key, 3);
+
+        $this->assertSame(1, $this->transients[$key], 'Nor must asking three times.');
+    }
+
+    public function testExceededIsTrueAtTheCapNotOnlyPastIt(): void
+    {
+        // The boundary the caller's own `>= max` comparison used to own. Off
+        // by one here and a three-strike lockout becomes a four-strike one.
+        $key = 'ntdst_login_' . md5('ip|stefan');
+
+        NTDST_RateLimiter::attempt($key, 2, 900);
+        $this->assertFalse(NTDST_RateLimiter::exceeded($key, 2));
+
+        NTDST_RateLimiter::attempt($key, 2, 900);
+        $this->assertTrue(NTDST_RateLimiter::exceeded($key, 2), 'Two of two IS the lockout.');
+    }
+
+    public function testExceededIsFalseForABucketThatWasNeverWritten(): void
+    {
+        $this->assertFalse(NTDST_RateLimiter::exceeded('ntdst_login_' . md5('ip|nobody'), 3));
+    }
+
+    public function testExceededAgreesWithAttemptAtEveryStep(): void
+    {
+        // The two must never disagree: `exceeded()` is the question
+        // `attempt()` answers on its way past. If they drift, a caller can be
+        // told it is fine and then refused, or told it is locked and let in.
+        $key = 'ntdst_login_' . md5('ip|agree');
+
+        for ($i = 0; $i < 6; $i++) {
+            $before = NTDST_RateLimiter::exceeded($key, 3);
+            $allowed = NTDST_RateLimiter::attempt($key, 3, 900);
+
+            $this->assertSame($before, !$allowed, "step {$i}: exceeded() must predict attempt()'s refusal");
+        }
+    }
+
+    public function testADisabledLimitCanNeverBeExceeded(): void
+    {
+        // `attempt()` treats a limit of <= 0 as "switched off, always allow".
+        // `exceeded()` must agree, or a caller that disabled its limiter is
+        // told it is permanently locked out — and `(int) $count >= 0` is true
+        // for every bucket that ever existed, so the naive read gets this
+        // exactly backwards.
+        $key = 'ntdst_login_' . md5('ip|disabled');
+
+        NTDST_RateLimiter::attempt($key, 0, 900);
+        $this->assertFalse(NTDST_RateLimiter::exceeded($key, 0), 'A limit that is off cannot be met.');
+
+        NTDST_RateLimiter::attempt($key, 5, 900);
+        $this->assertFalse(NTDST_RateLimiter::exceeded($key, -1), 'Nor can a negative one.');
+    }
+
+    public function testResetClearsWhatExceededReports(): void
+    {
+        $key = 'ntdst_login_' . md5('ip|stefan');
+        NTDST_RateLimiter::attempt($key, 1, 900);
+        $this->assertTrue(NTDST_RateLimiter::exceeded($key, 1), 'control: locked.');
+
+        NTDST_RateLimiter::reset($key);
+
+        $this->assertFalse(NTDST_RateLimiter::exceeded($key, 1), 'The three verbs describe one bucket.');
+    }
 }
