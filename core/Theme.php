@@ -38,7 +38,7 @@ defined('ABSPATH') || exit;
  *  - module()    -> retired outright, not relocated. See the mixin rules below.
  *
  * Those owners stay REACHABLE and that is deliberate — do not "fix" it:
- * wireMixins() proxies `data`/`router`/`response`/`log`/`mail`, so
+ * wireMixins() proxies `data`/`pages`/`response`/`log`/`mail`, so
  * `$theme->data()->register(...)` is byte-for-byte what the deleted register()
  * did, and ThemeSubjectNarrowingTest pins that proxy. The rule governs what
  * earns a NAMED METHOD here (a second surface to keep in sync), not what is
