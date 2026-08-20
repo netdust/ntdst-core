@@ -196,6 +196,52 @@ real consumers: todai wrote a five-line comment explaining it in `services/Ping.
 
 ---
 
+## 2b. Found later, converging on 4.2.0 — one gap in the new `cors` route option
+
+*Raised 2026-08-21 by todai-client T14, the task that deleted ~130 lines of hand-written
+CORS and adopted the route option this doc's earlier round asked for. The adoption worked;
+this is what it could not carry across.*
+
+### F8. The `cors` policy sets `Allow-Headers` but never `Allow-Methods` · small, one line
+
+`NTDST_Rest::corsDecision()` builds `Access-Control-Allow-Origin`, `Allow-Headers`,
+`Max-Age` and `Allow-Credentials`, and it removes WP core's grants on a non-match. It has
+no `methods` key, so WP core's own `Access-Control-Allow-Methods` value survives untouched:
+
+```
+OPTIONS, GET, POST, PUT, PATCH, DELETE
+```
+
+Measured live on todai's `POST /todai/v1/submissions`, which registers **POST only**.
+The consumer's hand-written gate had answered `POST, OPTIONS`; adopting the framework
+option broadened it. Still absent in 4.3.0.
+
+**Severity: low, and stated honestly.** This is a disclosure, not a hole — the header only
+advertises verbs. Every method the route does not register still 404s, and no bypass
+follows from the wider list. The reason to fix it anyway is that a route option is a
+*policy* surface: a consumer who declares one reasonably expects it to own the preflight's
+whole answer, and today it silently owns three quarters of it. Half-ownership of a security
+header is the shape that produces a wrong assumption later.
+
+**Shape:** a `methods` key alongside `headers`, defaulting to the verbs the route actually
+registered — which core already knows, since it built the `register_rest_route()` args.
+The default is the fix; the explicit key is for the rare route that wants to narrow further.
+
+**Consumer note:** todai-client accepted the broadening at T14 rather than re-adding a local
+header write, because a second home for CORS is the exact drift T14 existed to remove. It
+is recorded there as a measured non-equivalence, not as an oversight.
+
+### F9. `corsDecisionFor()` is the only reason the policy is testable — keep it
+
+Not a defect, a note for whoever refactors next. The decision half (`origins`, `headers`,
+credentials, the removals) is separable from the emission half (`header()`), and core keeps
+them separate. That is what let the consumer's integration tier assert the policy at all —
+six behaviours, mutation-checked, with emission left to an e2e over a real socket. A
+refactor that folds the decision back into the emitting path would take that away and be
+invisible in core's own suite, because core's tests do not run a browser either.
+
+---
+
 ## 3. Deferred to its own spec — an options/settings service
 
 **Stefan 2026-08-20: "an options/settings service is a good idea."** Recorded here so the
