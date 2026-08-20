@@ -15,6 +15,28 @@ if (!function_exists('add_filter')) {
         return true;
     }
 }
+// ntdst_log() must be a REAL function for the same reason add_filter is, and
+// the failure mode is nastier: shipped code guards its logging with
+// function_exists('ntdst_log'), so while NO test stubs it the guard is false
+// and every log call is skipped. The moment ONE test stubs it through Brain
+// Monkey, Patchwork defines it PROCESS-WIDE, the guard turns true for every
+// later test file, and those files fail with "ntdst_log is not defined nor
+// mocked in this test" — a failure in a file that changed nothing. Defined
+// here, before Patchwork, it is the same null logger for the whole suite.
+if (!function_exists('ntdst_log')) {
+    function ntdst_log(string $channel = 'app'): object
+    {
+        return new class ($channel) {
+            public function __construct(private string $channel) {}
+
+            public function __call(string $level, array $args): void
+            {
+                $GLOBALS['_ntdst_test_log'][] = [$this->channel, $level, $args[0] ?? ''];
+            }
+        };
+    }
+}
+
 require_once __DIR__ . '/../core/Container.php';
 require_once __DIR__ . '/../support/Cidr.php';
 require_once __DIR__ . '/../support/ClientIp.php';

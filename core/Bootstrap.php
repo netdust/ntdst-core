@@ -99,11 +99,6 @@ class NTDST_Bootstrap
     private bool $featuresBooted = false;
 
     /**
-     * Sector registry for sector-aware service loading
-     */
-    private readonly NTDST_SectorRegistry $sectors;
-
-    /**
      * PERFORMANCE: Cache for service slugs to avoid repeated regex operations
      */
     private array $slugCache = [];
@@ -121,7 +116,6 @@ class NTDST_Bootstrap
     public function __construct(array $config)
     {
         $this->config = $config;
-        $this->sectors = ntdst_sectors();
 
         // Always log bootstrap creation
         ntdst_log()->debug('NTDST Bootstrap: Instance created with ' . count($config) . ' config keys');
@@ -145,13 +139,10 @@ class NTDST_Bootstrap
 
         $countBefore = count($this->services);
 
-        // Auto-discover root services if enabled (sector-independent)
+        // Auto-discover root services if enabled
         if ($this->config['services']['auto_discover'] ?? false) {
             $this->discoverServices();
         }
-
-        // Auto-discover sector services from enabled sectors
-        $this->discoverSectorServices();
 
         // If auto-discovery was on but found nothing, flag it — usually a misconfigured path.
         if (($this->config['services']['auto_discover'] ?? false) && count($this->services) === $countBefore) {
@@ -171,7 +162,7 @@ class NTDST_Bootstrap
             }
         }
 
-        // Register conditional services (non-sector conditions)
+        // Register conditional services
         foreach ($this->config['services']['conditional'] ?? [] as $key => $spec) {
             if (isset($spec['condition']) && is_callable($spec['condition']) && $spec['condition']()) {
                 $this->registerService($spec['service']);
@@ -235,11 +226,6 @@ class NTDST_Bootstrap
 
         // Get metadata if available
         $metadata = $this->getServiceMetadata($class);
-
-        // Check sector requirements (new sector-based loading)
-        if (!$this->checkSectorRequirements($metadata)) {
-            return;
-        }
 
         // Check if service is enabled (3-level control)
         if (!$this->isServiceEnabled($class, $metadata)) {
@@ -479,74 +465,6 @@ class NTDST_Bootstrap
             }
         }
         return false;
-    }
-
-    /**
-     * Check if a service class is defined in the core config
-     *
-     * @param string $className Service class name
-     * @return bool
-     */
-    private function isInCoreConfig(string $className): bool
-    {
-        foreach ($this->config['services']['core'] ?? [] as $service) {
-            $normalizedService = ltrim(str_replace('/', '\\', $service), '\\');
-            $normalizedClass = ltrim(str_replace('/', '\\', $className), '\\');
-            if ($normalizedService === $normalizedClass) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Auto-discover services from enabled sector directories
-     *
-     * Services in sector folders (e.g., services/gallery/, services/artist/)
-     * are auto-discovered when that sector is enabled.
-     *
-     * @return void
-     */
-    private function discoverSectorServices(): void
-    {
-        $basePath = $this->config['services']['discovery_paths'][0] ?? get_stylesheet_directory() . '/services';
-        $basePath = dirname($basePath); // Get theme root (e.g., ntdstheme/)
-
-        $sectorPaths = $this->sectors->getDiscoveryPaths($basePath);
-
-        foreach ($sectorPaths as $sector => $path) {
-            if (!is_dir($path)) {
-                continue;
-            }
-
-            $files = glob($path . '/*Service.php');
-
-            foreach ($files as $file) {
-                // Load the file first so class_exists() will work
-                require_once $file;
-
-                $className = $this->getClassNameFromFile($file);
-
-                if ($className && !$this->isInCoreConfig($className) && !$this->isInConditionalConfig($className)) {
-                    $this->registerService($className);
-                }
-            }
-        }
-    }
-
-    /**
-     * Check if service sector requirements are met
-     *
-     * Delegates to SectorRegistry::checkRequirements()
-     * Services without 'sectors' metadata always load (backwards compatible)
-     *
-     * @param array $metadata Service metadata
-     * @return bool
-     */
-    private function checkSectorRequirements(array $metadata): bool
-    {
-        $requirements = $metadata['sectors'] ?? null;
-        return $this->sectors->checkRequirements($requirements);
     }
 
     /**

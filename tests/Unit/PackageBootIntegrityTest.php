@@ -34,6 +34,10 @@ final class PackageBootIntegrityTest extends TestCase
             'ntdst_endpoints' => ['ntdst_endpoints'],
             'NTDST_Router' => ['NTDST_Router'],
             'NTDST_Endpoints' => ['NTDST_Endpoints'],
+            // The sector system left the package: product domain, not
+            // framework, and no functional consumer anywhere on the fleet.
+            'NTDST_SectorRegistry' => ['NTDST_SectorRegistry'],
+            'ntdst_sectors' => ['ntdst_sectors'],
         ];
     }
 
