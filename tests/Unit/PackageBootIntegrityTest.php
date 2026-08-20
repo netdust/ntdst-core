@@ -76,6 +76,28 @@ final class PackageBootIntegrityTest extends TestCase
         );
     }
 
+    public function testThePluginHeaderVersionMatchesWhatTheCodeSaysItIs(): void
+    {
+        // F2 — v3.0.0 shipped with `Version: 2.4.1` in its header while
+        // api/Rest.php's _doing_it_wrong() call announced 3.0.0. WordPress
+        // reports the header, so a consumer asking "what do I actually have"
+        // got the wrong answer — and the v3 rename is a hard break with no
+        // class_alias shims, which is exactly when that answer matters.
+        $root = dirname(__DIR__, 2);
+
+        preg_match('/^ \* Version: (.+)$/m', file_get_contents($root . '/ntdst-core.php'), $header);
+        $this->assertNotEmpty($header, 'ntdst-core.php must carry a Version header — WP reads it.');
+
+        preg_match("/_doing_it_wrong\(.*?'([0-9]+\.[0-9]+\.[0-9]+)',/s", file_get_contents($root . '/api/Rest.php'), $code);
+        $this->assertNotEmpty($code, 'api/Rest.php names the version it belongs to.');
+
+        $this->assertSame(
+            $code[1],
+            trim($header[1]),
+            'The header version and the version the code self-identifies as must be the same release.',
+        );
+    }
+
     public function testEveryFileInTheLoaderListParsesAndDefinesItsSymbols(): void
     {
         // The durable half: walk ntdst-core.php's OWN require list and confirm each
