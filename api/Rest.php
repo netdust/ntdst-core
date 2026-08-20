@@ -25,7 +25,7 @@ defined('ABSPATH') || exit;
 final class NTDST_Rest
 {
     /** Options this class consumes; everything else passes through to WP. */
-    private const OWN_OPTIONS = ['permission', 'rate_limit', 'rate_window'];
+    private const OWN_OPTIONS = ['permission', 'rate_limit', 'rate_window', 'cors'];
 
     /** @var array<string, self> */
     private static array $instances = [];
@@ -49,6 +49,26 @@ final class NTDST_Rest
 
     /** The pre-dispatch filter is mounted once per process, not per route. */
     private static bool $preflightHooked = false;
+
+    /**
+     * Declared CORS policies: `/{namespace}{route}` => policy array.
+     *
+     * @var array<string, array<string, mixed>>
+     */
+    private static array $corsRoutes = [];
+
+    /** The serve filter is mounted once per process, not per route. */
+    private static bool $corsHooked = false;
+
+    /**
+     * Request headers a cross-origin caller may send when a policy names none.
+     *
+     * WordPress sends NO `Access-Control-Allow-Headers` at all, so a
+     * cross-origin `Content-Type: application/json` POST fails its preflight
+     * out of the box. That is why every consumer that needed one hand-rolled
+     * this line. These three are what they all converged on.
+     */
+    private const DEFAULT_CORS_HEADERS = ['Content-Type', 'Authorization', 'X-WP-Nonce'];
 
     public function __construct(private string $namespace) {}
 
@@ -117,6 +137,27 @@ final class NTDST_Rest
             return;
         }
 
+        // A CORS policy naming '*' is a misconfiguration, not a shorthand for
+        // "allow everything". Failing closed silently would leave the author
+        // believing cross-origin works; this refuses the route the same way a
+        // missing permission does. Misconfiguration refuses, loudly.
+        $cors = $options['cors'] ?? null;
+        if ($cors !== null) {
+            $declared = is_array($cors) && array_key_exists('origins', $cors) ? $cors['origins'] : $cors;
+
+            if (!is_array($cors)) {
+                $this->refuse($route, $methods, 'the "cors" option must be an array of origins or a policy array');
+
+                return;
+            }
+
+            if (is_array($declared) && in_array('*', $declared, true)) {
+                $this->refuse($route, $methods, '"cors" must name exact origins — "*" is never a valid allow-list entry');
+
+                return;
+            }
+        }
+
         // A typo'd option is a control the author believes is on and isn't, so
         // it gets the same loud treatment as a missing permission.
         $unknown = array_diff(array_keys($options), array_merge(self::OWN_OPTIONS, ['args', 'schema', 'show_in_index', 'allow_batch']));
@@ -138,6 +179,10 @@ final class NTDST_Rest
 
         // Read from $options, not from guard()'s locals: rate limiting is
         // opt-in, so a route with no rate_limit stays out of the table.
+        if (($options['cors'] ?? null) !== null) {
+            $this->rememberCors($route, $options['cors']);
+        }
+
         if (($options['rate_limit'] ?? null) !== null) {
             $this->rememberForPreflight(
                 $route,
@@ -231,6 +276,168 @@ final class NTDST_Rest
         }
 
         return $result;
+    }
+
+    /**
+     * The CORS policy declared for a route path, or null.
+     *
+     * Matching is case-INSENSITIVE, exactly as WordPress matches routes
+     * (`preg_match('@^…$@i')`). A case-sensitive scope check silently stops
+     * running for `/NS/V1/THING` while WordPress dispatches it happily — the
+     * bug that took a consumer's CORS correction offline and handed core's
+     * reflect-any-origin default back to the wire.
+     *
+     * @return array<string, mixed>|null
+     */
+    public static function corsFor(string $route): ?array
+    {
+        foreach (self::$corsRoutes as $pattern => $policy) {
+            if (preg_match('@^' . $pattern . '$@i', $route)) {
+                return $policy;
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Decide the CORS headers for one origin under one policy. PURE.
+     *
+     * Returns `['set' => list<string>, 'remove' => list<string>]`. Nothing is
+     * emitted here, which is what makes this control testable at the unit tier
+     * at all — an isolated test cannot observe a real `header()` call. Same
+     * seam NTDST_Response::fileHeaders() uses.
+     *
+     * WHAT IT IS CORRECTING. WP's `rest_send_cors_headers()` runs at priority
+     * 10 and echoes ANY origin with `Access-Control-Allow-Credentials: true`,
+     * so any site can read a logged-in visitor's authenticated responses. This
+     * runs after it. On a match it re-states the origin and adds the `Vary`
+     * and `Allow-Headers` core omits or under-sends; on a NON-match it REMOVES
+     * core's grant, because leaving it is the whole vulnerability.
+     *
+     * Matching is byte-exact against the full `scheme://host[:port]`. Never a
+     * substring, never case-folded, never a wildcard: `'*'` in a policy is a
+     * misconfiguration and grants nothing rather than everything. `Origin:
+     * null` — a file:// page or a sandboxed iframe — is never allowed, even if
+     * a policy lists it, because it identifies nobody.
+     *
+     * @param array<string, mixed>|list<string> $policy Origins, or a policy array.
+     * @return array{set: list<string>, remove: list<string>}
+     */
+    public static function corsDecision(?string $origin, array $policy): array
+    {
+        $revoke = [
+            'set' => [],
+            'remove' => ['Access-Control-Allow-Origin', 'Access-Control-Allow-Credentials'],
+        ];
+
+        // A list of origins is the shorthand for ['origins' => [...]].
+        $origins = array_key_exists('origins', $policy) ? $policy['origins'] : $policy;
+
+        if ($origin === null || $origin === '' || $origin === 'null') {
+            return $revoke;
+        }
+
+        // Strict, and string-only. A non-string in the list — `true`, `1`, a
+        // stray `0` from a malformed config — would match EVERY origin under a
+        // loose comparison. The list is byte-exact `scheme://host[:port]`
+        // strings or it is not a list.
+        $allowed = is_callable($origins)
+            ? (bool) $origins($origin)
+            : (is_array($origins) && in_array($origin, array_filter($origins, 'is_string'), true));
+
+        if (!$allowed) {
+            return $revoke;
+        }
+
+        $headers = $policy['headers'] ?? self::DEFAULT_CORS_HEADERS;
+
+        $set = [
+            'Access-Control-Allow-Origin: ' . $origin,
+            'Vary: Origin',
+            'Access-Control-Allow-Headers: ' . implode(', ', (array) $headers),
+        ];
+
+        if (isset($policy['max_age'])) {
+            $set[] = 'Access-Control-Max-Age: ' . (int) $policy['max_age'];
+        }
+
+        // Credentials are OFF unless the site asks. Granting them is only ever
+        // safe beside an exact-origin match, which is the only way to get here.
+        if (($policy['credentials'] ?? false) === true) {
+            $set[] = 'Access-Control-Allow-Credentials: true';
+
+            return ['set' => $set, 'remove' => []];
+        }
+
+        return ['set' => $set, 'remove' => ['Access-Control-Allow-Credentials']];
+    }
+
+    /**
+     * Emit the decision for the request being served. Mounted at priority 20,
+     * after WP's own `rest_send_cors_headers()` at 10 — the only position from
+     * which core's grant can be corrected.
+     *
+     * Routes this package never registered are left completely alone.
+     *
+     * @param bool  $served
+     * @return bool $served, untouched.
+     */
+    public static function applyCors($served, $result = null, $request = null)
+    {
+        if (!is_object($request) || !method_exists($request, 'get_route')) {
+            return $served;
+        }
+
+        $decision = self::corsDecisionFor(
+            (string) $request->get_route(),
+            function_exists('get_http_origin') ? (string) get_http_origin() : '',
+        );
+
+        if ($decision === null) {
+            return $served;
+        }
+
+        foreach ($decision['remove'] as $name) {
+            header_remove($name);
+        }
+
+        foreach ($decision['set'] as $header) {
+            // Vary appends; everything else replaces core's line.
+            header($header, stripos($header, 'Vary:') !== 0);
+        }
+
+        return $served;
+    }
+
+    /**
+     * The decision for a route, or NULL when this package declared no policy
+     * for it — which is most of the REST API, including every other plugin's.
+     *
+     * A filter that touches a request it does not own is a bug with a very
+     * wide blast radius: removing `Access-Control-Allow-Origin` from another
+     * plugin's route breaks that plugin's clients and nothing points here.
+     * Null is the seam that makes "did nothing" an assertable outcome rather
+     * than an unobserved one.
+     *
+     * @return array{set: list<string>, remove: list<string>}|null
+     */
+    public static function corsDecisionFor(string $route, ?string $origin): ?array
+    {
+        $policy = self::corsFor($route);
+
+        return $policy === null ? null : self::corsDecision($origin, $policy);
+    }
+
+    /** Record a route's CORS policy, and mount the serve filter once. */
+    private function rememberCors(string $route, mixed $policy): void
+    {
+        self::$corsRoutes['/' . trim($this->namespace, '/') . $route] = $policy;
+
+        if (!self::$corsHooked) {
+            self::$corsHooked = true;
+            add_filter('rest_pre_serve_request', [self::class, 'applyCors'], 20, 3);
+        }
     }
 
     /**
