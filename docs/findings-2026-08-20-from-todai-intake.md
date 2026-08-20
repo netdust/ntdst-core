@@ -242,6 +242,68 @@ invisible in core's own suite, because core's tests do not run a browser either.
 
 ---
 
+### F10. A callable `cors` policy is never wildcard-checked · small, one branch
+
+`registerOne()` guards against a policy that names `*` — but the check is
+`is_array($declared)` before the scan (`api/Rest.php:146-157`). A Closure is not an
+array, so a callable policy skips the guard entirely.
+
+Correct today for todai, and only by the consumer's own care: `isAllowedOrigin()` compares
+with `===`. But the plan credited the FRAMEWORK with that backstop ("a policy naming `*`
+refuses the route"), and for a callable the framework provides none. Core already rejects
+`''`, `null` and `'null'` before invoking the callable, so the residual is a stored origin
+of `'*'` reaching a permissive comparison.
+
+**Shape:** probe the callable once at registration with `'*'` and refuse the route if it
+answers true — the same refusal the array branch already performs, applied to the branch
+that can be dynamic.
+
+## 2c. Framework gaps — two consumers' worth of hand-rolling
+
+*Not defects. Places where a consumer had to build something core does not offer, found by
+building it.*
+
+### G1. No custom-table / schema-migration primitive
+
+Core is CPT-and-postmeta only through 4.3.0 — no `dbDelta`, no versioning, no migration
+symbol anywhere in `api/ core/ services/ support/ admin/`. A consumer storing non-post data
+(third-party form submissions, with a retention story that rules out a CPT) must hand-roll
+`dbDelta` + a version option + a concurrency lock + a drop helper, because `dbDelta` never
+drops.
+
+todai got that lock wrong in two independent ways — a false atomicity claim and, worse, no
+TTL and no reclaim, so a process dying mid-`ALTER` wedged the schema permanently and every
+public write 500'd. That is the argument FOR the primitive, not against the consumer.
+
+**Design pressure worth naming:** an mu-plugin has no activation hook, so the primitive must
+be safe to call from an ordinary front-end request. That constraint is what forces the
+version gate, and it is what makes the lock necessary in the first place.
+
+**Shape:** `NTDST_Schema::install(string $table, string $sql, int $version, array $drop = [])`
+owning the version option, a TTL'd lock with stale reclaim, and an explicit drop list.
+
+### G2. No route-scoped `rest_pre_dispatch` seam
+
+`NTDST_Rest` already maintains case-insensitive route-pattern tables (`$corsRoutes`,
+`$preflightRoutes`, `corsFor()`, `chargePreflight()`), but a consumer that needs its own
+pre-dispatch work on its own route has to reimplement that matching by hand.
+
+todai's `isOwnRoute()` is that reimplementation, and it has now been wrong TWICE in ways the
+framework's own matcher would have prevented: first case-sensitively, which turned off a
+depth guard for `/todai/v1/SUBMISSIONS`, and then by prefix, which made the guard answer on
+paths core's CORS policy does not cover — so those responses carried WP's
+reflect-any-origin-with-credentials default. Both were found by review, not by the consumer,
+and both are one character of divergence from core's `@^…$@i`.
+
+Two independent defects in one hand-copied predicate is the signal. Any consumer writing
+this helper is one `strtolower()` or one anchor away from the same hole.
+
+**Shape:** a `before_dispatch` route option, or at minimum a public
+`NTDST_Rest::routeMatches(string $pattern, $request): bool`, so consumers borrow core's
+matcher instead of copying it.
+
+---
+
 ## 3. Deferred to its own spec — an options/settings service
 
 **Stefan 2026-08-20: "an options/settings service is a good idea."** Recorded here so the
