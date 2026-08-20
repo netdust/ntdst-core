@@ -363,24 +363,44 @@ class NTDST_Response
     }
 
     /**
-     * Build the headers for a file response.
+     * The header policy for a file response, WITHOUT the body.
+     *
+     * `download()` and `inline()` take the content and echo it, which is right
+     * for a vCard or an invoice and impossible for a large archive. A caller
+     * that streams — daan's press kit sends a ZIP of a few hundred megabytes
+     * chunked from a handle, and can never hold it whole — borrows the policy
+     * here and emits its own bytes. Core does not learn to stream; the caller
+     * does not re-derive the headers.
+     *
+     * That re-derivation is the thing this prevents, and it has happened:
+     * PressKitService arrived independently at Content-Type, Content-Length and
+     * BOTH filename forms, and missed `X-Content-Type-Options: nosniff`.
+     * Correct in three headers, wrong in the fourth. That is what hand-rolling
+     * a policy looks like every time — right until the one line nobody
+     * remembers.
      *
      * Filename is sanitized to strip CRLF (header injection) and double
-     * quotes (Content-Disposition value boundary). Adds both `filename=`
-     * (ASCII fallback) and `filename*=UTF-8''…` per RFC 5987 so non-ASCII
-     * names (Dutch accents etc.) render correctly across browsers.
+     * quotes (Content-Disposition value boundary), and reduced to its
+     * basename so a path can never reach the header. Both `filename=`
+     * (ASCII fallback) and `filename*=UTF-8''…` per RFC 5987 are sent, so
+     * non-ASCII names (Dutch accents etc.) render correctly across browsers.
      *
      * `X-Content-Type-Options: nosniff` is always sent: a body whose bytes
-     * look like HTML/SVG (e.g. a user-uploaded "proof") must never be
-     * sniffed into executing markup in the site origin.
+     * look like HTML/SVG (e.g. a user-uploaded "proof", or an asset inside a
+     * press kit) must never be sniffed into executing markup in the site
+     * origin.
+     *
+     * @param int    $length      Byte length of the body the caller will emit.
+     * @param string $filename    Download filename; sanitized here.
+     * @param string $disposition `attachment` or `inline`.
      *
      * @return list<string>
      */
-    protected function fileHeaders(
-        string $content,
+    public static function downloadHeaders(
+        int $length,
         string $filename,
-        ?string $contentType,
-        string $disposition,
+        ?string $contentType = null,
+        string $disposition = 'attachment',
     ): array {
         $contentType ??= self::getMimeType($filename);
 
@@ -394,9 +414,26 @@ class NTDST_Response
         return [
             'Content-Type: ' . $contentType,
             'Content-Disposition: ' . $disposition . '; filename="' . $ascii . '"; ' . $utf8,
-            'Content-Length: ' . strlen($content),
+            'Content-Length: ' . $length,
             'X-Content-Type-Options: nosniff',
         ];
+    }
+
+    /**
+     * Build the headers for a file response whose body is in hand.
+     *
+     * Kept as the in-memory path's entry point; the policy itself lives in
+     * downloadHeaders(). The content was only ever used to measure itself.
+     *
+     * @return list<string>
+     */
+    protected function fileHeaders(
+        string $content,
+        string $filename,
+        ?string $contentType,
+        string $disposition,
+    ): array {
+        return self::downloadHeaders(strlen($content), $filename, $contentType, $disposition);
     }
 
     /**
