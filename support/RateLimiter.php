@@ -121,6 +121,55 @@ final class NTDST_RateLimiter
     }
 
     /**
+     * Clear a bucket: the caller succeeded, so the count against them is void.
+     *
+     * RESET-ON-SUCCESS is a different primitive from a request budget, and it
+     * is the whole reason a failure counter could not converge here. A budget
+     * decays only with its window — thirty requests a minute, and the
+     * thirty-first waits. A failure counter is a lockout: five bad passwords
+     * lock the account, and the first GOOD one must clear the record
+     * immediately, because the caller has proven they are not the attacker the
+     * counter was written for. Without this verb, `ntdst-baseline`'s login
+     * lockout kept its own `delete_transient()` and stayed a Deliberate
+     * Exception to the one-limiter rule.
+     *
+     * Note what is NOT the difference, because the first version of this
+     * reasoning got it wrong: a denied attempt already consumes nothing and
+     * extends no TTL — in this limiter and in baseline's. A non-extending TTL
+     * was never the gap. This method is.
+     *
+     * The bucket is DELETED, not zeroed: a zero would leave the option row and
+     * its timeout row in place, still expiring on the old schedule.
+     *
+     * The memoized decision goes with it. `attempt()` caches its answer per
+     * (scope, key) so WordPress's double permission-callback invocation cannot
+     * halve a limit — but a reset that left that cache standing would be a
+     * half-reset, answering the next question from the denial it just cleared.
+     * Scopes are walked because a key is not owned by one of them; every other
+     * key's memo, in every scope, is untouched.
+     *
+     * @param string $key The full transient key, built by the caller — the
+     *                    same key it passes to attempt().
+     */
+    public static function reset(string $key): void
+    {
+        delete_transient($key);
+
+        if (self::$decisions === null) {
+            return;
+        }
+
+        foreach (self::$decisions as $scope => $scopeDecisions) {
+            if (!array_key_exists($key, $scopeDecisions)) {
+                continue;
+            }
+
+            unset($scopeDecisions[$key]);
+            self::$decisions[$scope] = $scopeDecisions;
+        }
+    }
+
+    /**
      * The unmemoized decision against the transient store.
      *
      * `get_transient()` returns false for an expired or never-written key —
