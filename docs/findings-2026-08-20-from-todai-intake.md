@@ -304,6 +304,41 @@ matcher instead of copying it.
 
 ---
 
+### F11. A consumer cannot charge a route's rate budget from its own pre-dispatch filter · the gap with a security consequence
+
+Core spends a route's budget inside `guard()`, the permission wrapper. A consumer filter on
+`rest_pre_dispatch` that short-circuits `dispatch()` therefore costs the caller NOTHING —
+`permission_callback` never runs, and `chargePreflight()` covers `OPTIONS` only.
+
+Measured on todai's public write route at the T13 shake-out:
+
+```
+40 x ~1 MB unterminated-JSON bodies  -> 40 x 400, elapsed 2.3s, bucket unchanged
+60 x ~1 MB text/plain bodies         -> 60 x 415,               bucket unchanged
+a legitimate POST straight after     -> 201
+```
+
+**100 rejected requests, ~100 MB of body, zero budget spent.** Each one costs a full WP
+boot and a full body read. This is the same hole core already closed for preflights, left
+open for every other verb.
+
+**The consumer cannot fix it.** `NTDST_Rest::bucket()` is private and the budget key is
+built inline in `guard()`, so a consumer has exactly two options and both are wrong:
+reconstruct core's key by hand — the G2 reinvention that has already been wrong twice in
+this module — or open a second bucket, which is precisely the drift the consumer's own
+INV-7 forbids. todai has therefore NOT fixed it locally, deliberately, and carries it as an
+owner decision instead.
+
+**Shape:** the `before_dispatch` route option from G2 would close this as a side effect,
+since core would own the hook and could charge before invoking the consumer's callback.
+Failing that, a public `NTDST_Rest::charge(WP_REST_Request $request): bool` that resolves
+the same key `guard()` uses.
+
+**Note for whoever fixes it:** preflights and requests use SEPARATE buckets
+(`ntdst_rest_pf_…` vs `ntdst_rest_…`), deliberately, so a preflight cannot spend the budget
+the real request needs a moment later. A pre-dispatch charge must go to the request bucket,
+not a third one.
+
 ## 3. Deferred to its own spec — an options/settings service
 
 **Stefan 2026-08-20: "an options/settings service is a good idea."** Recorded here so the
