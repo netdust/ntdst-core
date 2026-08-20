@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<ruleset name="ntdst-core">
+    <description>
+        The fleet gate's Standard tier, as locked in netdust-wp-manager's
+        wp-gate-harness spec: PSR-12 base, WordPress.Security and WordPress.DB
+        sniff groups, PHPCompatibilityWP pinned to the package's floor. The
+        full WPCS ruleset is deliberately NOT used — it was explicitly
+        rejected fleet-wide, because its formatting opinions bury the two
+        groups that actually catch bugs.
+    </description>
+
+    <file>core</file>
+    <file>api</file>
+    <file>admin</file>
+    <file>services</file>
+    <file>support</file>
+    <file>ntdst-core.php</file>
+
+    <arg name="extensions" value="php"/>
+    <arg name="colors"/>
+    <arg value="sp"/>
+
+    <rule ref="PSR12"/>
+    <rule ref="WordPress.Security"/>
+    <rule ref="WordPress.DB"/>
+    <rule ref="PHPCompatibilityWP"/>
+    <config name="testVersion" value="8.1-"/>
+</ruleset>
