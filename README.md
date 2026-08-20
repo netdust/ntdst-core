@@ -159,3 +159,9 @@ deliberately, rather than silent inaction.
 Only upstream when a feature is asked for. ntdst-core can't be bloated — it's
 a minimal WordPress layer. Provide solid, secure code; features enter only
 with a named consumer.
+
+The long form is `docs/philosophy.md`: prefer WordPress and wrap it rather
+than replace it, keep the conceptual surface small while the reasons stay
+written down, enforce only the facts core owns, and delete abstractions whose
+consumers have gone. It carries the six-question admission test anything new
+has to pass.
