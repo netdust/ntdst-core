@@ -25,6 +25,7 @@ Stride) instead of a per-project vendored copy that drifts.
 | a page | `ntdst_pages()->path()` |
 | a download response | `ntdst_download()` — never a hand-rolled CSV block |
 | to count anything per caller | `NTDST_RateLimiter::attempt()` / `::reset()` |
+| a route readable cross-origin | the `cors` route option — never a hand-rolled `Access-Control-*` header |
 
 ## Branch convention
 
@@ -105,6 +106,41 @@ Read every line before upgrading. Nothing here is shimmed.
 
 **Not a break, but check it:** the plugin header said `2.4.1` for the whole of
 v3. If anything of yours read the version, it was reading the wrong one.
+
+### 4.1.0
+
+**`cors` is a route option.** WordPress's own `rest_send_cors_headers()` echoes
+**any** `Origin` back and sets `Access-Control-Allow-Credentials: true`, so any
+site can read a logged-in visitor's authenticated responses. It also never
+sends `Access-Control-Allow-Headers`, which is why a cross-origin JSON POST
+fails its preflight out of the box.
+
+```php
+ntdst_rest('my/v1')->post('/thing', $handler, [
+    'permission' => $permission,
+    'cors'       => ['https://app.example.com'],   // exact origins
+]);
+
+// or, in full
+'cors' => [
+    'origins'     => ['https://app.example.com'],  // or fn(string $o): bool
+    'headers'     => ['Content-Type', 'X-Tenant'], // default: Content-Type, Authorization, X-WP-Nonce
+    'credentials' => true,                         // default FALSE
+    'max_age'     => 600,
+],
+```
+
+Byte-exact match on the full `scheme://host[:port]`. Never a substring, never
+case-folded. `Origin: null` — a `file://` page or a sandboxed iframe — is never
+allowed, even if a policy lists it. A policy containing `'*'` **refuses the
+route** rather than failing closed quietly, the same way a missing `permission`
+does. On a non-match core's grant is actively removed, which is the entire
+point: leaving it is the vulnerability.
+
+**Opt-in, deliberately.** A route that declares no `cors` keeps whatever
+WordPress does today. Making core suppress WP's default on every route it
+registered would be safer and is a breaking change — recorded as an open
+question in `docs/philosophy.md`, not decided here.
 
 ### 3.0.0
 
