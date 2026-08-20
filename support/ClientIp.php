@@ -10,7 +10,7 @@ declare(strict_types=1);
  *  - CIDR-aware trust matching (ntdst-baseline), because Ploi and Cloudflare
  *    front from a RANGE. An exact-match allow-list silently fails to match
  *    behind them — and then tempts operators to widen the list instead.
- *  - the right-to-left, skip-trusted walk (NTDST_Endpoints), because nginx's
+ *  - the right-to-left, skip-trusted walk (NTDST_Actions), because nginx's
  *    `$proxy_add_x_forwarded_for` APPENDS the observed peer. Everything left
  *    of the infrastructure-appended hops is client-authored fiction, so
  *    leftmost-wins hands the attacker the identity it asked for.
@@ -32,7 +32,7 @@ defined('ABSPATH') || exit;
 
 final class NTDST_ClientIp
 {
-    /** Loopback v4 + v6 — NTDST_Endpoints' and NTDST_Logger's historical default. */
+    /** Loopback v4 + v6 — NTDST_Actions' and NTDST_Logger's historical default. */
     private const DEFAULT_TRUSTED_PROXIES = ['127.0.0.1', '::1'];
 
     /**

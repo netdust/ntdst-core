@@ -1,18 +1,30 @@
 # ntdst-core
 
-NTDST Core Framework — DI container, Bootstrap, Router, Data layer, admin form
+NTDST Core Framework — DI container, Bootstrap, routing, Data layer, admin form
 layer for WordPress. This is the canonical framework repo: `main` is the
 ground truth consumed by every adopter project (daan, josworld, and later
 Stride) instead of a per-project vendored copy that drifts.
 
 ## What it is
 
-- `core/` — Foundation (Container, Bootstrap, Theme, Router)
-- `api/` — Request flow (Endpoints, Data, Response)
+- `core/` — Foundation (Container, Bootstrap, Theme, Pages)
+- `support/` — Primitives with no dependencies (ClientIp, Cidr, RateLimiter)
+- `api/` — Request flow (Actions, Rest, Data, Response)
 - `admin/` — Admin UI (MetaboxGenerator, RelationField)
 - `services/` — Built-in services (Logger, Mailer, Scheduler)
 - `ntdst-core.php` — package-root loader; adopters require it via an explicit
   one-line shim, not a directory scan
+
+## Which service to reach for
+
+| You want | Use |
+|---|---|
+| a command, dispatched same-origin | `ntdst_actions()->register()` |
+| a resource route | `ntdst_rest('ns/v1')->get()` / `->post()` |
+| file bytes | `add_filter('ntdst/api_download/{action}', …)` |
+| a page | `ntdst_pages()->path()` |
+| a download response | `ntdst_download()` — never a hand-rolled CSV block |
+| to count anything per caller | `NTDST_RateLimiter::attempt()` / `::reset()` |
 
 ## Branch convention
 
@@ -22,8 +34,13 @@ Stride) instead of a per-project vendored copy that drifts.
 
 ## Request dispatch filters
 
-Handlers register on same-origin dispatch filters; `NTDST_Endpoints` owns the
+Handlers register on same-origin dispatch filters; `NTDST_Actions` owns the
 auth gate so a handler never hand-rolls nonce/capability checks.
+
+An action nothing has registered is refused before the gate does any work: it
+gets no rate bucket, and `/get_nonce` will not mint a nonce for it. Registered
+means listed in `ntdst/api/public_actions`, or having a handler on the dispatch
+filter below.
 
 - `ntdst/api_data/{action}` — POST `/action`. Handler returns
   `array|WP_Error`; the dispatcher emits the JSON envelope. Gate: rate limit,
@@ -37,6 +54,17 @@ auth gate so a handler never hand-rolls nonce/capability checks.
   nonce in the URL is this surface's CSRF gate. A download action is never
   public unless listed in `ntdst/api/public_actions`; a handler that returns
   instead of emitting yields a 500 rather than a blank body.
+
+## Versions
+
+- **4.0.0** — the sector system is gone: `NTDST_SectorRegistry` and
+  `ntdst_sectors()` are removed, and a `sectors` key in service metadata is no
+  longer read. Product domain, no consumer. A site that stubbed the class to
+  satisfy Bootstrap can delete the stub.
+- **3.0.0** — the routing surface was renamed with no aliases and no shims:
+  `NTDST_Actions` + `ntdst_actions()->register()` for commands, `ntdst_rest()`
+  for resource routes, `ntdst_pages()` for pages. A caller of a retired symbol
+  gets a fatal, deliberately, rather than silent inaction.
 
 ## Minimalism rule
 

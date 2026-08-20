@@ -2,13 +2,13 @@
 
 /**
  * Description: DI Container, Bootstrap, and Service System for WordPress
- * Version: 2.4.1
+ * Version: 4.0.0
  * Author: Stefan Vandermeulen
  *
  * Architecture:
- * - core/     → Foundation (Container, Bootstrap, Theme, Router)
+ * - core/     → Foundation (Container, Bootstrap, Theme, Pages)
  * - support/  → Shared primitives with no dependencies (ClientIp, Cidr, RateLimiter)
- * - api/      → Request Flow (Endpoints, Data, Response)
+ * - api/      → Request flow (Actions, Rest, Data, Response)
  * - admin/    → Admin UI (MetaboxGenerator, RelationField)
  * - services/ → Built-in services (Logger, Mailer, Scheduler)
  *
@@ -28,7 +28,6 @@ require_once NTDST_PATH . '/core/Container.php';
 require_once NTDST_PATH . '/core/Pages.php';
 require_once NTDST_PATH . '/core/Theme.php';
 require_once NTDST_PATH . '/core/ServiceInterface.php';
-require_once NTDST_PATH . '/core/SectorRegistry.php';
 require_once NTDST_PATH . '/core/Bootstrap.php';
 
 // Load shared support primitives (no dependencies; consumed by api/ + services/)
@@ -53,9 +52,6 @@ ntdst_actions(); // Initialise the command service to register its REST routes
 require_once NTDST_PATH . '/services/Logger.php';
 require_once NTDST_PATH . '/services/Mailer.php';
 require_once NTDST_PATH . '/services/Scheduler.php';
-
-// Register singleton instances that can't be auto-wired
-ntdst_set(NTDST_SectorRegistry::class, fn() => ntdst_sectors());
 
 /**
  * Enqueue the shared NTDST admin toolkit CSS.

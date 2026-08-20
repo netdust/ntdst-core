@@ -43,7 +43,7 @@ defined('ABSPATH') || exit;
  *
  * SLUG DERIVATION — read this before writing an override. `{slug}` above is NOT
  * the class name lowercased. When a service declares no `metadata()['name']`,
- * `getServiceSlugCached()` strips EVERY occurrence of `Service` — not just a
+ * `getServiceSlug()` strips EVERY occurrence of `Service` — not just a
  * trailing one — and converts the rest from camelCase to snake_case, keeping a
  * run of consecutive capitals together as ONE token:
  *
@@ -61,10 +61,18 @@ defined('ABSPATH') || exit;
  *
  * To pin a slug that the derivation would not produce, declare it —
  * `metadata()['name']` takes precedence over the derivation entirely (it is
- * whitespace-split and lowercased, never collapsed), but note that in the real
- * registration flow `isServiceEnabled()` derives and caches the slug from the
- * CLASS NAME first, so the metadata name only takes effect if nothing warmed
- * the cache before it.
+ * whitespace-split and lowercased, never collapsed). The name must be DECLARED
+ * by the class: the `name` key in a metadata array is defaulted to a
+ * human-readable label, so it is always populated and cannot say whether the
+ * service meant anything by it.
+ *
+ * FIXED 2026-08-20 (F7). Until this release that precedence was not real. The
+ * slug resolver took an optional metadata argument, and `isServiceEnabled()`
+ * ran first WITHOUT it — deriving from the class name and caching that — so a
+ * declared name reached the `_enabled` filter, the `_config` filter and the
+ * `ntdst_service_{slug}` option only if nothing had warmed the cache before
+ * it, which in the real registration flow was never. The slug is now a pure
+ * function of the class, so the answer no longer depends on call order.
  *
  * RETIRED DERIVATION (S9/T14, 2026-08). Before this fix a `_` was inserted
  * before EVERY internal capital, so consecutive capitals each got their own
@@ -91,11 +99,6 @@ class NTDST_Bootstrap
     private bool $featuresBooted = false;
 
     /**
-     * Sector registry for sector-aware service loading
-     */
-    private readonly NTDST_SectorRegistry $sectors;
-
-    /**
      * PERFORMANCE: Cache for service slugs to avoid repeated regex operations
      */
     private array $slugCache = [];
@@ -113,7 +116,6 @@ class NTDST_Bootstrap
     public function __construct(array $config)
     {
         $this->config = $config;
-        $this->sectors = ntdst_sectors();
 
         // Always log bootstrap creation
         ntdst_log()->debug('NTDST Bootstrap: Instance created with ' . count($config) . ' config keys');
@@ -137,13 +139,10 @@ class NTDST_Bootstrap
 
         $countBefore = count($this->services);
 
-        // Auto-discover root services if enabled (sector-independent)
+        // Auto-discover root services if enabled
         if ($this->config['services']['auto_discover'] ?? false) {
             $this->discoverServices();
         }
-
-        // Auto-discover sector services from enabled sectors
-        $this->discoverSectorServices();
 
         // If auto-discovery was on but found nothing, flag it — usually a misconfigured path.
         if (($this->config['services']['auto_discover'] ?? false) && count($this->services) === $countBefore) {
@@ -163,7 +162,7 @@ class NTDST_Bootstrap
             }
         }
 
-        // Register conditional services (non-sector conditions)
+        // Register conditional services
         foreach ($this->config['services']['conditional'] ?? [] as $key => $spec) {
             if (isset($spec['condition']) && is_callable($spec['condition']) && $spec['condition']()) {
                 $this->registerService($spec['service']);
@@ -228,11 +227,6 @@ class NTDST_Bootstrap
         // Get metadata if available
         $metadata = $this->getServiceMetadata($class);
 
-        // Check sector requirements (new sector-based loading)
-        if (!$this->checkSectorRequirements($metadata)) {
-            return;
-        }
-
         // Check if service is enabled (3-level control)
         if (!$this->isServiceEnabled($class, $metadata)) {
             return;
@@ -248,7 +242,7 @@ class NTDST_Bootstrap
         // Overrides nest UNDER the existing `services` key (beside `core`,
         // `admin`, `conditional`, `auto_discover`, `discovery_paths`) rather
         // than occupying it, which is already taken.
-        $slug = $this->getServiceSlugCached($class, $metadata);
+        $slug = $this->getServiceSlug($class);
         if (isset($this->config['services']['overrides'][$slug])) {
             $this->serviceConfigCache[$slug] = $this->config['services']['overrides'][$slug];
         }
@@ -474,74 +468,6 @@ class NTDST_Bootstrap
     }
 
     /**
-     * Check if a service class is defined in the core config
-     *
-     * @param string $className Service class name
-     * @return bool
-     */
-    private function isInCoreConfig(string $className): bool
-    {
-        foreach ($this->config['services']['core'] ?? [] as $service) {
-            $normalizedService = ltrim(str_replace('/', '\\', $service), '\\');
-            $normalizedClass = ltrim(str_replace('/', '\\', $className), '\\');
-            if ($normalizedService === $normalizedClass) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Auto-discover services from enabled sector directories
-     *
-     * Services in sector folders (e.g., services/gallery/, services/artist/)
-     * are auto-discovered when that sector is enabled.
-     *
-     * @return void
-     */
-    private function discoverSectorServices(): void
-    {
-        $basePath = $this->config['services']['discovery_paths'][0] ?? get_stylesheet_directory() . '/services';
-        $basePath = dirname($basePath); // Get theme root (e.g., ntdstheme/)
-
-        $sectorPaths = $this->sectors->getDiscoveryPaths($basePath);
-
-        foreach ($sectorPaths as $sector => $path) {
-            if (!is_dir($path)) {
-                continue;
-            }
-
-            $files = glob($path . '/*Service.php');
-
-            foreach ($files as $file) {
-                // Load the file first so class_exists() will work
-                require_once $file;
-
-                $className = $this->getClassNameFromFile($file);
-
-                if ($className && !$this->isInCoreConfig($className) && !$this->isInConditionalConfig($className)) {
-                    $this->registerService($className);
-                }
-            }
-        }
-    }
-
-    /**
-     * Check if service sector requirements are met
-     *
-     * Delegates to SectorRegistry::checkRequirements()
-     * Services without 'sectors' metadata always load (backwards compatible)
-     *
-     * @param array $metadata Service metadata
-     * @return bool
-     */
-    private function checkSectorRequirements(array $metadata): bool
-    {
-        $requirements = $metadata['sectors'] ?? null;
-        return $this->sectors->checkRequirements($requirements);
-    }
-
-    /**
      * Extract class name from file
      *
      * @param string $file File path
@@ -646,22 +572,40 @@ class NTDST_Bootstrap
     }
 
     /**
-     * Get service slug from class name (with caching)
-     * PERFORMANCE: Caches slug to avoid repeated regex operations
+     * The slug for a service — a PURE FUNCTION OF THE CLASS, cached.
+     *
+     * It takes no metadata argument, and that is the fix for F7. It used to,
+     * and the answer therefore depended on WHICH question a caller asked
+     * first: `isServiceEnabled()` resolved the slug with no metadata, cached
+     * the class-name derivation, and every later metadata-aware call was
+     * served that cached answer. A service could declare `name` and watch the
+     * `ntdst_service_{slug}_enabled` filter, the `_config` filter and the
+     * `ntdst_service_{slug}` option all keep answering to a name it never
+     * chose. A consumer wrote a five-line comment about the surprise rather
+     * than a `name`. A slug that depends on call order cannot be pinned by
+     * anything, so the argument is gone and the declaration is read here.
+     *
+     * Only a DECLARED name pins the slug — see declaredServiceName(). The
+     * `name` in a metadata ARRAY is not the same thing: getServiceMetadata()
+     * defaults it to a human-readable label derived from the class
+     * (`AdminUIService` -> `Admin U I`), so honouring that would rename every
+     * service on the fleet to the retired `admin_u_i` mangling.
+     *
+     * PERFORMANCE: caches the slug to avoid repeated regex operations.
      *
      * @param string $class Class name
-     * @param array|null $metadata Optional metadata to use name from
      * @return string Slug
      */
-    private function getServiceSlugCached(string $class, ?array $metadata = null): string
+    private function getServiceSlug(string $class): string
     {
         if (isset($this->slugCache[$class])) {
             return $this->slugCache[$class];
         }
 
-        // Use metadata name if available (more reliable)
-        if ($metadata && !empty($metadata['name'])) {
-            $slug = strtolower(preg_replace('/\s+/', '_', trim($metadata['name'])));
+        $declared = $this->declaredServiceName($class);
+
+        if ($declared !== '') {
+            $slug = strtolower(preg_replace('/\s+/', '_', $declared));
         } else {
             $name = basename(str_replace('\\', '/', $class));
             $name = str_replace('Service', '', $name);
@@ -686,14 +630,29 @@ class NTDST_Bootstrap
     }
 
     /**
-     * Get service slug from class name
+     * The name a service DECLARED, or '' when it declared none.
+     *
+     * The distinction getServiceMetadata() cannot make: its `name` default is
+     * always populated, so `!empty($metadata['name'])` is true for every
+     * service in the package and says nothing about intent. This asks the
+     * class itself, and only a non-empty string counts.
      *
      * @param string $class Class name
-     * @return string Slug
+     * @return string Declared name, trimmed, or ''
      */
-    private function getServiceSlug(string $class): string
+    private function declaredServiceName(string $class): string
     {
-        return $this->getServiceSlugCached($class);
+        if (!method_exists($class, 'metadata')) {
+            return '';
+        }
+
+        $declared = $class::metadata();
+
+        if (!is_array($declared) || !isset($declared['name']) || !is_string($declared['name'])) {
+            return '';
+        }
+
+        return trim($declared['name']);
     }
 
     /**
@@ -717,7 +676,7 @@ class NTDST_Bootstrap
      */
     private function registerServiceConfigFilter(string $class): void
     {
-        $slug = $this->getServiceSlugCached($class);
+        $slug = $this->getServiceSlug($class);
 
         // Skip if no config override exists for this service
         if (!isset($this->serviceConfigCache[$slug])) {

@@ -38,7 +38,7 @@ defined('ABSPATH') || exit;
  *  - module()    -> retired outright, not relocated. See the mixin rules below.
  *
  * Those owners stay REACHABLE and that is deliberate — do not "fix" it:
- * wireMixins() proxies `data`/`router`/`response`/`log`/`mail`, so
+ * wireMixins() proxies `data`/`pages`/`response`/`log`/`mail`, so
  * `$theme->data()->register(...)` is byte-for-byte what the deleted register()
  * did, and ThemeSubjectNarrowingTest pins that proxy. The rule governs what
  * earns a NAMED METHOD here (a second surface to keep in sync), not what is
@@ -54,7 +54,7 @@ defined('ABSPATH') || exit;
  *
  * The accepted cost — four forwarders. templatePath(), single(), page() and
  * archive() forward onto NTDST_Template_Loader and NTDST_Pages. They pass the
- * rule (their subject is the theme; Router and the loader are only the mechanism)
+ * rule (their subject is the theme; NTDST_Pages and the loader are only the mechanism)
  * so they stay — but they are a SECOND public surface that has to track its
  * owner's signature, and that tax has already been paid twice: S7 had to repair
  * apiAction() after it drifted to literal-cap-only, and S8 had to update

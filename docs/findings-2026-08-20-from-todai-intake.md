@@ -11,8 +11,27 @@ This is intake material, not a spec. Stefan's ruling 2026-08-20: **defects first
 release; the options/settings service gets its own spec** (§3), because it changes how every
 consumer reads config.
 
-Nothing here was fixed in ntdst-core. `todai-client`'s INV-1 forbids editing package code in
-a consumer tree, so all of it was deferred to this repo deliberately.
+`todai-client`'s INV-1 forbids editing package code in a consumer tree, so all of it was
+deferred to this repo deliberately.
+
+## Status — closed in v4.0.0 (2026-08-20)
+
+| Item | State |
+|---|---|
+| F1 rate-limit bucket keyed on attacker-chosen input | **fixed** — registration is established before the key is built |
+| F2 wrong version in the plugin header | **fixed** — and guarded by a test |
+| F3 `NTDST_RateLimiter` has no reset | **fixed** — `reset(string $key): void` |
+| F4 the limiter never charges an `OPTIONS` request | **OPEN**, deliberately — a design call a consumer task depends on. The recommendation from this release: charge once in a pre-dispatch path, into a bucket of the preflight's own. Do NOT widen `$matched`: every sibling handler would charge for one preflight, and the preflight would spend the budget the real request then needs |
+| F5 Bootstrap is theme-coupled for mu-plugin consumers | **half fixed** — the `:504` `get_stylesheet_directory()` fallback left with the sector system. The `:206` namespace-path strip is untouched and still open |
+| F6 `RateLimiter`'s docblock documents a deleted consumer | **fixed** |
+| F7 service metadata `name` cannot pin a slug | **fixed** — and a service that declares a name whose slug differs from its class-derived one changes filter/option key on this upgrade |
+| §1b the sector system does not belong in core | **removed** — hence the major |
+| §3 an options/settings service | **deferred**, as ruled — it needs a design stage |
+
+The netdust-wp skills were re-anchored on 4.x alongside this release: they taught the v2
+package wholesale, including a `NTDST_Cors_Policy` route option that `NTDST_Rest` refuses,
+so any route copied from them never registered at all. See `netdust-plugins`,
+`chore/ntdst-skills-v4`.
 
 ---
 
