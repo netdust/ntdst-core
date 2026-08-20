@@ -39,6 +39,61 @@ Do not fix by hashing harder. An unregistered action should not get a bucket at 
 
 ---
 
+## 1b. Structural — the sector system does not belong in core · Stefan's ruling 2026-08-20
+
+> "SectorRegistry.php is actually not for ntdst-core, maybe it could be a baseline service
+> but remove it."
+
+`core/SectorRegistry.php` is 527 lines defining **sectors** — "independent platforms
+(gallery, artist, musician, theater)" with per-sector enable options, tier options and
+discovery paths. That is product domain, not framework. Core's own minimalism rule
+("features enter only with a named consumer") argues against it staying.
+
+**Coupling to remove** — it is not a leaf, `Bootstrap` hard-depends on it:
+
+| Where | What |
+|---|---|
+| `ntdst-core.php:31` | `require_once core/SectorRegistry.php` |
+| `ntdst-core.php:58` | `ntdst_set(NTDST_SectorRegistry::class, …)` container binding |
+| `core/Bootstrap.php:96` | `private readonly NTDST_SectorRegistry $sectors` |
+| `core/Bootstrap.php:116` | assigned in the constructor via `ntdst_sectors()` |
+| `core/Bootstrap.php:146` | `discoverSectorServices()` called **unconditionally** on every boot |
+| `core/Bootstrap.php:502` | the method itself |
+| `core/Bootstrap.php:532` | delegates to `SectorRegistry::checkRequirements()` |
+
+**The evidence that settles it.** A consumer already works around this coupling by
+fabricating the class. `~/Sites/bavi/app/content/mu-plugins/ntdst-coreloader.php:28-46`
+declares a fake `NTDST_SectorRegistry` with five stub methods, under the comment:
+
+> "Stub sector registry — Bootstrap requires `ntdst_sectors()` but the full sector system is
+> not implemented yet."
+
+A site that does not use sectors must hand-write a five-method framework class to boot at
+all. That is the coupling stating its own case.
+
+**This SUBSUMES half of F5.** `discoverSectorServices()` is where the
+`get_stylesheet_directory()` fallback lives (`Bootstrap.php:504`), so removing the sector
+system deletes that half outright rather than fixing it. The `:206` theme-slug strip is
+separate and survives — see F5.
+
+**Known consumers to settle before removing** (searched the fleet for `ntdst_sectors(` /
+`NTDST_SectorRegistry`, excluding vendored copies):
+
+- **`bavi`** — the stub above. Removal makes its shim *unnecessary*; delete it with the same
+  release.
+- **`daan`** — `tests/Integration/NtdstCoreLoadTest.php:103,126` pins the class-to-file map
+  and the container binding. A test asserting core's shape; update it.
+- **`stride`** — `tests/Unit/NtdstSectorRegistryTest.php` exercises the registry directly.
+  Stride is the canonical ntdst-core implementation, so **check whether it uses sectors
+  functionally or only tests them** before deciding between deleting the system and
+  relocating it to `ntdst-baseline` as a service. That answer decides the shape.
+
+**This is a BC break** — a public class and a global function leave the package. It needs a
+major (v4.0.0) or an explicit deprecation window, which is a call for the spec, not for the
+defect release. Sequence it accordingly: the §2 defects can ship as a patch/minor first.
+
+---
+
 ## 2. Small defects — one release together
 
 ### F2. v3.0.0 ships the wrong version in its plugin header · one line
@@ -76,10 +131,13 @@ Two candidate shapes: charge in the pre-dispatch path, or make `$matched` cover 
 preflight. **Do not solve it by requiring a content type on OPTIONS** — todai tried the
 adjacent version of that and broke every preflight (§4).
 
-### F5. Bootstrap is theme-coupled for mu-plugin consumers · two call sites
+### F5. Bootstrap is theme-coupled for mu-plugin consumers · one call site after §1b
 `core/Bootstrap.php:206` strips `basename(get_stylesheet_directory())` from a namespace
 path, and `:504` falls back to `get_stylesheet_directory() . '/services'` for sector
 discovery — which runs **unconditionally, even when `auto_discover` is false**.
+
+**The `:504` half disappears with the sector system (§1b)** — it lives inside
+`discoverSectorServices()`. Only the `:206` namespace-path strip needs fixing on its own.
 
 A consumer that deliberately is not a theme must set `discovery_paths` purely to stop its
 mu-plugin scanning whatever theme happens to be active. See
@@ -105,12 +163,11 @@ real consumers: todai wrote a five-line comment explaining it in `services/Ping.
 **Stefan 2026-08-20: "an options/settings service is a good idea."** Recorded here so the
 motivation is not reconstructed from scratch; it needs a design stage, not a defect fix.
 
-**Named consumers already exist** (core's minimalism rule requires them) — seven call sites
-across three repos:
+**Named consumers already exist** (core's minimalism rule requires them) — call sites across three repos — five in core and baseline after the §1b correction, plus todai's:
 
 | Repo | Sites |
 |---|---|
-| ntdst-core | `core/Bootstrap.php:643` (`ntdst_service_{$slug}`), `core/SectorRegistry.php:298,323` (enable/tier options), `services/Mailer.php:579` (`ntdst_wrap_all_emails`) |
+| ntdst-core | `core/Bootstrap.php:643` (`ntdst_service_{$slug}`), `services/Mailer.php:579` (`ntdst_wrap_all_emails`). **Corrected 2026-08-20:** `core/SectorRegistry.php:298,323` were counted here and are withdrawn — that file leaves core per §1b, so its option reads go with it (to baseline, if the system is relocated rather than deleted). |
 | ntdst-baseline | 2 |
 | todai-client | `FormKeyRegistry`, entirely — a public-endpoint allow-list stored in one option |
 
