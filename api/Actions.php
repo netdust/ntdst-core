@@ -332,7 +332,26 @@ final class NTDST_Actions
      * Registration is the test this file already owned, in the two forms it
      * already had: the site's `ntdst/api/public_actions` declaration, and a
      * mounted dispatch filter. Both lists are written by the SITE and bounded
-     * by it, so the key space becomes (callers x registered actions).
+     * by it.
+     *
+     * WHAT THIS BOUNDS, EXACTLY — and what it does not (M3). An earlier
+     * version of this docblock claimed the key space becomes "(callers x
+     * registered actions)", offered as a bound. It is not one, and a false
+     * bound in a security docblock is worse than none: it is what the next
+     * reviewer checks against instead of the code. Only the ACTION axis is
+     * bounded here. The caller axis is `u{id}` or `ip` + md5(client IP), and
+     * an attacker on an IPv6 /64 has 2^64 caller values — unbounded by
+     * construction, as it is in every per-IP throttle ever written.
+     *
+     * So the honest statement is three lines:
+     *  - an UNREGISTERED action reaches no bucket at all (this method);
+     *  - a registered NON-PUBLIC action reaches no bucket without credentials,
+     *    because the auth gate now runs first (M2);
+     *  - a registered PUBLIC action does let an anonymous caller create one
+     *    bucket per client IP. That is not a leak, that IS a public throttle:
+     *    the counter has to be per-caller or it cannot count anybody. A site
+     *    that publishes an action accepts per-IP row growth on it, and the
+     *    daily transient cron is what reaps it.
      *
      * The denial is a bare `false` — the same 401 `rest_forbidden` as an auth
      * denial, so refusing an unknown action tells a caller nothing that
