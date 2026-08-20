@@ -1,15 +1,49 @@
 {
     "name": "netdust/ntdst-core",
-    "description": "NTDST Core Framework — DI container, Bootstrap, Router, Data layer, admin form layer for WordPress. Minimal layer: solid, secure code; features enter only with a named consumer.",
+    "description": "NTDST Core Framework \u2014 DI container, Bootstrap, Router, Data layer, admin form layer for WordPress. Minimal layer: solid, secure code; features enter only with a named consumer.",
     "type": "wordpress-muplugin",
     "license": "proprietary",
-    "authors": [{"name": "Stefan Vandermeulen", "email": "stefan@netdust.be"}],
-    "require": {"php": ">=8.1"},
-    "require-dev": {"phpunit/phpunit": "^10.5", "brain/monkey": "^2.6"},
+    "authors": [
+        {
+            "name": "Stefan Vandermeulen",
+            "email": "stefan@netdust.be"
+        }
+    ],
+    "require": {
+        "php": ">=8.1"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.5",
+        "brain/monkey": "^2.6",
+        "squizlabs/php_codesniffer": "^3.9",
+        "wp-coding-standards/wpcs": "^3.1",
+        "phpcompatibility/phpcompatibility-wp": "^2.1",
+        "dealerdirect/phpcodesniffer-composer-installer": "^1.0"
+    },
     "scripts": {
         "test": "phpunit",
-        "lint": "find . -name '*.php' -not -path './vendor/*' -print0 | xargs -0 -n1 php -l",
+        "syntax": "find . -name '*.php' -not -path './vendor/*' -print0 | xargs -0 -n1 php -l",
+        "lint": "phpcs",
+        "lint:fix": "phpcbf",
         "guard": "bash bin/guard.sh",
-        "gate": ["@lint", "@test", "@guard"]
+        "gate": [
+            "@syntax",
+            "@test",
+            "@guard",
+            "@audit:deps"
+        ],
+        "audit:deps": "composer audit"
+    },
+    "config": {
+        "allow-plugins": {
+            "dealerdirect/phpcodesniffer-composer-installer": true
+        }
+    },
+    "scripts-descriptions": {
+        "syntax": "php -l over every shipped file. Catches a parse error, nothing else.",
+        "lint": "The fleet Standard tier: PSR-12 + WordPress.Security + WordPress.DB + PHPCompatibilityWP. NOT yet in `gate` \u2014 see docs/gate.md.",
+        "guard": "ABSPATH guards + removed-symbol grep.",
+        "gate": "What must be green to ship: syntax, unit suite, guards, dependency audit.",
+        "audit:deps": "composer audit against the advisories database."
     }
 }

@@ -33,6 +33,23 @@ final class NTDST_Rest
     /** @var array<string, bool> Refusals already reported this process. */
     private static array $reported = [];
 
+    /**
+     * Rate-limited route patterns, for the preflight charge (F4).
+     *
+     * `/{namespace}{route}` => ['limit' => int, 'window' => int]. Only routes
+     * that DECLARED a rate_limit appear here, so preflight charging inherits
+     * the opt-in: a consumer declares nothing new to get it, and nothing new
+     * to stay out of it. When several verbs of one route declare different
+     * limits, the HIGHEST wins — a preflight precedes any of them, and it must
+     * not throttle a client below what the verb they are about to use allows.
+     *
+     * @var array<string, array{limit: int, window: int}>
+     */
+    private static array $preflightRoutes = [];
+
+    /** The pre-dispatch filter is mounted once per process, not per route. */
+    private static bool $preflightHooked = false;
+
     public function __construct(private string $namespace) {}
 
     public static function forNamespace(string $namespace): self
@@ -118,6 +135,123 @@ final class NTDST_Rest
         ];
 
         register_rest_route($this->namespace, $route, $args);
+
+        // Read from $options, not from guard()'s locals: rate limiting is
+        // opt-in, so a route with no rate_limit stays out of the table.
+        if (($options['rate_limit'] ?? null) !== null) {
+            $this->rememberForPreflight(
+                $route,
+                (int) $options['rate_limit'],
+                (int) ($options['rate_window'] ?? 60),
+            );
+        }
+    }
+
+    /**
+     * Charge a CORS preflight once per request — F4.
+     *
+     * `guard()` spends budget only for the handler whose verb MATCHED, and an
+     * `OPTIONS` preflight never matches `POST`. Measured against a clean
+     * bucket: 40 consecutive preflights left it unset, and 5 preflights
+     * carrying a 1.1 MB JSON body returned 200 each for nothing, while the
+     * same body as a POST was charged correctly. A preflight is not free to
+     * serve — WP's `rest_handle_options_request()` sets a matched route, so
+     * `rest_send_allow_header()` runs the permission callback for every
+     * sibling handler.
+     *
+     * WHY NOT SIMPLY WIDEN `$matched`. Two reasons, and they are the whole
+     * design. WP invokes every sibling handler's permission callback to build
+     * the `Allow` header, so a route registered for GET+POST+DELETE would
+     * charge THREE units for one preflight. And the preflight would spend the
+     * POST budget the real request needs a moment later, making every CORS
+     * write cost two units — the same halving the memo exists to prevent,
+     * just relocated. So the charge is made ONCE, here, in the one place that
+     * runs once per HTTP request, into a bucket of the preflight's own.
+     * `$matched` is untouched.
+     *
+     * THE 429 IS DELIBERATE, and it is not the trap it resembles. A
+     * content-type gate that refuses EVERY preflight with a 415 breaks CORS
+     * outright and is a known way to lose an afternoon. This refuses only a
+     * preflight that is already over its own budget, which is the same answer
+     * its POST would get one request later. A throttled caller is meant to be
+     * stopped.
+     *
+     * The hook sees every REST request on the site, including namespaces this
+     * package never registered. It acts only on OPTIONS, only on a route it
+     * put in the table itself, and it returns `$result` untouched otherwise —
+     * a filter that alters a request it does not own is a bug with a wide
+     * blast radius.
+     *
+     * @param mixed  $result  Whatever an earlier filter produced; null normally.
+     * @param mixed  $server  The REST server (unused).
+     * @param object $request The request being dispatched.
+     * @return mixed `$result` unchanged, or a 429 WP_Error.
+     */
+    public static function chargePreflight($result, $server = null, $request = null)
+    {
+        // Someone already answered this request. Do not charge for a dispatch
+        // that is not going to happen, and do not stomp their result.
+        if ($result !== null) {
+            return $result;
+        }
+
+        if (!is_object($request) || !method_exists($request, 'get_method') || !method_exists($request, 'get_route')) {
+            return $result;
+        }
+
+        if (strtoupper((string) $request->get_method()) !== 'OPTIONS') {
+            return $result;
+        }
+
+        $route = (string) $request->get_route();
+
+        foreach (self::$preflightRoutes as $pattern => $numbers) {
+            // Case-INSENSITIVE, exactly as WP matches routes
+            // (`preg_match('@^…$@i')`). A scope check that is case-sensitive
+            // silently stops running for `/NS/V1/THING` while WordPress
+            // dispatches it happily — that is how a consumer's CORS
+            // correction went offline and handed WP core's
+            // reflect-any-origin-with-credentials default back to the wire.
+            if (!preg_match('@^' . $pattern . '$@i', $route)) {
+                continue;
+            }
+
+            $key = 'ntdst_rest_pf_' . md5($pattern . '|' . self::bucket());
+
+            if (!NTDST_RateLimiter::attempt($key, $numbers['limit'], $numbers['window'], $request)) {
+                return new WP_Error(
+                    'rate_limited',
+                    'Too many requests. Please wait a moment and try again.',
+                    ['status' => 429, 'retry_after' => $numbers['window']],
+                );
+            }
+
+            // One charge per request. The first pattern that matches owns it.
+            return $result;
+        }
+
+        return $result;
+    }
+
+    /**
+     * Put a rate-limited route in the preflight table, and mount the hook the
+     * first time anything lands there.
+     */
+    private function rememberForPreflight(string $route, int $limit, int $window): void
+    {
+        $pattern = '/' . trim($this->namespace, '/') . $route;
+        $existing = self::$preflightRoutes[$pattern]['limit'] ?? 0;
+
+        if ($limit > $existing) {
+            self::$preflightRoutes[$pattern] = ['limit' => $limit, 'window' => $window];
+        }
+
+        if (!self::$preflightHooked) {
+            self::$preflightHooked = true;
+            // Priority 5: ahead of WP's own rest_handle_options_request() at
+            // 10, which answers the preflight and ends the dispatch.
+            add_filter('rest_pre_dispatch', [self::class, 'chargePreflight'], 5, 3);
+        }
     }
 
     private function refuse(string $route, string $methods, string $why): void
@@ -167,7 +301,7 @@ final class NTDST_Rest
             if ($limit !== null && $matched) {
                 // Bucket resolved HERE, not at registration: REST auth has not
                 // run at rest_api_init, so the user would always look anonymous.
-                $key = 'ntdst_rest_' . md5($this->namespace . '|' . $route . '|' . implode(',', $verbs) . '|' . $this->bucket());
+                $key = 'ntdst_rest_' . md5($this->namespace . '|' . $route . '|' . implode(',', $verbs) . '|' . self::bucket());
 
                 if (!NTDST_RateLimiter::attempt($key, (int) $limit, $window)) {
                     return new WP_Error(
@@ -187,7 +321,7 @@ final class NTDST_Rest
      * empty hash: support/ClientIp.php returns '' for an unusable address, and
      * pooling every such caller into one bucket lets one starve the rest.
      */
-    private function bucket(): string
+    private static function bucket(): string
     {
         $userId = (int) get_current_user_id();
 

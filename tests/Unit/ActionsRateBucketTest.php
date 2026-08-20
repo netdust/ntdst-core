@@ -205,6 +205,41 @@ final class ActionsRateBucketTest extends TestCase
         $this->assertSame(429, $results[3]->get_error_data()['status'] ?? null);
     }
 
+    public function testAnActionRegisteredONLYByItsMountedFilterIsAccepted(): void
+    {
+        // Every other /action test here lists the action public AS WELL AS
+        // mounting it, so `$isPublic` short-circuits isRegisteredAction()
+        // before the filter prefix is ever read — which left the /action door's
+        // prefix argument completely unexercised. Two mutants lived there:
+        // check_action_permission() passing DOWNLOAD_FILTER, and
+        // isRegisteredAction() ignoring $dispatchFilters altogether. This
+        // action is registered by NOTHING BUT the mounted data filter.
+        Functions\when('is_user_logged_in')->justReturn(true);
+        Functions\when('get_current_user_id')->justReturn(7);
+        $this->mounted = ['ntdst/api_data/private_thing'];
+
+        $result = $this->actions()->check_action_permission($this->request(['action' => 'private_thing']));
+
+        $this->assertTrue($result, 'A mounted ntdst/api_data/ handler IS registration, public list or not.');
+        $this->assertCount(1, $this->transients);
+    }
+
+    public function testTheActionDoorRefusesAnActionRegisteredOnlyForDownload(): void
+    {
+        // The mirror of the test on the download door. `export_csv` mounts a
+        // download handler and nothing else, so POST /action must refuse it:
+        // the two doors dispatch different filters and must not accept each
+        // other's registrations.
+        Functions\when('is_user_logged_in')->justReturn(true);
+        Functions\when('get_current_user_id')->justReturn(7);
+        $this->mounted = ['ntdst/api_download/export_csv'];
+
+        $result = $this->actions()->check_action_permission($this->request(['action' => 'export_csv']));
+
+        $this->assertFalse($result, 'A download-only action is not dispatchable through /action.');
+        $this->assertSame([], $this->transients, 'And it earns no bucket on this door.');
+    }
+
     public function testAPublicActionIsRegisteredEvenWithNoHandlerMountedYet(): void
     {
         // The `ntdst/api/public_actions` filter is the site's OWN declaration —
@@ -216,6 +251,50 @@ final class ActionsRateBucketTest extends TestCase
 
         $this->assertTrue($result);
         $this->assertCount(1, $this->transients);
+    }
+
+    // =====================================================================
+    // M2 — a caller who cannot dispatch may not spend the site's storage
+    // =====================================================================
+
+    public function testAnAnonymousCallerRefusedByTheAuthGateWritesNoBucket(): void
+    {
+        // `private_thing` is registered, so F1's gate lets it through — but an
+        // anonymous caller can never dispatch it. Charging first meant every
+        // one of those doomed requests wrote 2 wp_options rows on demand, with
+        // only a daily cron to reap them. The auth answer is free; the bucket
+        // is not, so the free question is asked first.
+        $this->mounted = ['ntdst/api_data/private_thing'];
+
+        for ($i = 0; $i < 3; $i++) {
+            $result = $this->actions()->check_action_permission($this->request(['action' => 'private_thing']));
+        }
+
+        $this->assertFalse($result, 'control: anonymous callers cannot reach a non-public action.');
+        $this->assertSame([], $this->transients, 'Three refusals must not write three buckets.');
+    }
+
+    public function testTheNonceDoorAlsoRefusesBeforeCharging(): void
+    {
+        $this->mounted = ['ntdst/api_data/private_thing'];
+
+        $result = $this->actions()->check_nonce_permission($this->request(['action' => 'private_thing']));
+
+        $this->assertFalse($result);
+        $this->assertSame([], $this->transients, 'Same rule on the nonce door.');
+    }
+
+    public function testAPublicActionIsStillChargedForAnonymousCallers(): void
+    {
+        // The other half: throttling anonymous traffic on a PUBLIC action is
+        // the entire point of the limiter. Moving the auth gate up must not
+        // stop charging the callers who can actually reach something.
+        $this->publicActions = ['welcome'];
+        $this->mounted = ['ntdst/api_data/welcome'];
+
+        $this->actions()->check_action_permission($this->request(['action' => 'welcome']));
+
+        $this->assertCount(1, $this->transients, 'A reachable anonymous caller is still counted.');
     }
 
     // =====================================================================

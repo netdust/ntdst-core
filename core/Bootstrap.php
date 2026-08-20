@@ -200,18 +200,38 @@ class NTDST_Bootstrap
             foreach ($this->config['services']['discovery_paths'] ?? [] as $basePath) {
                 $relativePath = str_replace('\\', '/', $class) . '.php';
 
-                // Strip theme namespace prefix if present (e.g., ntdstheme/)
-                // This allows namespaces like ntdstheme\services\gallery\... to map to services/gallery/...
-                $themeSlug = basename(get_stylesheet_directory());
-                if (str_starts_with($relativePath, $themeSlug . '/')) {
-                    $relativePath = substr($relativePath, strlen($themeSlug) + 1);
+                // A namespace may carry a ROOT SEGMENT the directory tree does
+                // not repeat — `ntdstheme\services\gallery\ArtistService`
+                // living at `services/gallery/ArtistService.php`. So try the
+                // path as the namespace spells it, then again with the leading
+                // segment dropped.
+                //
+                // This used to strip `basename(get_stylesheet_directory())`
+                // instead (F5). That worked for a theme whose namespace root
+                // happened to equal its directory name, and was nonsense for a
+                // mu-plugin twice over: the consumer is not a theme, and the
+                // answer changed when somebody switched theme — a code path
+                // that broke on a setting no developer would think to check.
+                // The question was always "does the tree repeat this segment",
+                // which the filesystem can answer and the theme cannot.
+                $candidates = [$relativePath];
+                if (str_contains($relativePath, '/')) {
+                    $candidates[] = substr($relativePath, strpos($relativePath, '/') + 1);
                 }
 
-                $filePath = dirname($basePath) . '/' . $relativePath;
-                $attemptedPaths[] = $filePath;
+                $loaded = false;
+                foreach ($candidates as $candidate) {
+                    $filePath = dirname($basePath) . '/' . $candidate;
+                    $attemptedPaths[] = $filePath;
 
-                if (file_exists($filePath)) {
-                    require_once $filePath;
+                    if (file_exists($filePath)) {
+                        require_once $filePath;
+                        $loaded = true;
+                        break;
+                    }
+                }
+
+                if ($loaded) {
                     break;
                 }
             }
