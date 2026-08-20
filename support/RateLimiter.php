@@ -4,27 +4,35 @@ declare(strict_types=1);
 
 /**
  * The one canonical rate limiter for the fleet (spec `intake-to-core`, FR-2 /
- * FR-3), extracted from `NTDST_Actions::checkRateLimit()` +
- * `consumeRateBudget()` so the todai intake and every future consumer count
- * against the same primitive instead of re-deriving it.
+ * FR-3), extracted from `NTDST_Actions::checkRateLimit()` so every consumer
+ * counts against the same primitive instead of re-deriving it.
  *
  * ── EVERYTHING THAT NAMES A CALLER STAYS WITH THE CALLER (FR-3) ───────────
  * The limiter receives the FINISHED transient key and the FINISHED numbers.
- * It resolves no user, no client IP, and applies no filters of its own:
+ * It resolves no user, no client IP, and applies no filters of its own. The
+ * two consumers in this package show the range:
  *  - NTDST_Actions keys `u{userId}` when logged in, else `ip` + md5(client
  *    IP), under the `ntdst_rate_` prefix, with the limit and the window taken
  *    from `ntdst/api/rate_limit/{$action}` and `ntdst/api/rate_window/{$action}`
- *    over its own class constants;
- *  - the todai intake keys (ip + form_key) under `todai_intake_rate_`, with
- *    its own `todai/intake/*` filters.
- * Two different bucket shapes, two different filter namespaces. A limiter that
- * hashed, prefixed or re-filtered anything here would silently move every
- * consuming site's buckets and filter the callers' numbers twice.
+ *    over its own class constants — and only for an action it has already
+ *    established is REGISTERED (F1: a request parameter may not name a bucket);
+ *  - NTDST_Rest keys (namespace + route + verbs + user-or-IP) under the
+ *    `ntdst_rest_` prefix, with the numbers declared per route as the
+ *    `rate_limit` / `rate_window` route options, and no filters at all.
+ * Two bucket shapes, two ways of arriving at the numbers, one counter. A
+ * limiter that hashed, prefixed or re-filtered anything here would silently
+ * move every consuming site's buckets and filter the callers' numbers twice.
+ *
+ * A consumer outside this package does the same three things: build the key,
+ * resolve the numbers however it resolves numbers, hand both over. Prefer the
+ * NTDST_Rest shape — declare the limit where the route is declared. A consumer
+ * only needs a filter namespace of its own if a SITE must retune the limit
+ * without editing the route.
  *
  * ── WHY THE MEMO EXISTS — a fact this code cannot show ────────────────────
- * (The full statement lives at api/Endpoints.php's checkRateLimit() docblock; it is repeated here
- * because the guarantee moved into this class.) WordPress invokes a route's
- * `permission_callback` TWICE per served HTTP request:
+ * (The statement this repeats lives at NTDST_Actions::checkRateLimit(); it is
+ * repeated here because the guarantee moved into this class.) WordPress
+ * invokes a route's `permission_callback` TWICE per served HTTP request:
  *  1. in `WP_REST_Server::respond_to_request()` (the dispatch-time check), and
  *  2. in `rest_send_allow_header()` on `rest_post_dispatch`, which re-invokes
  *     every matched handler's permission callback to build the `Allow` header
@@ -36,10 +44,10 @@ declare(strict_types=1);
  *
  * ── WHY THE MEMO IS NOT A BYPASS (threat 11, other half) ──────────────────
  * The memo identity is an OBJECT the caller supplies — the WP_REST_Request for
- * Endpoints. Both core invocations receive the same instance, and two
+ * NTDST_Actions. Both core invocations receive the same instance, and two
  * different HTTP requests can never share one, so the memo is per-request BY
- * CONSTRUCTION: it needs no reset, it cannot be steered by a caller, and its
- * entries die with the object (WeakMap). A decision is cached per (scope, key)
+ * CONSTRUCTION: nothing has to expire it, it cannot be steered by a caller,
+ * and its entries die with the object (WeakMap). A decision is cached per (scope, key)
  * — one scope may check several buckets, and the answer for one must never
  * stand in for another. A caller with no per-request object passes nothing and
  * gets the plain, unmemoized limiter; nothing is ever cached process-wide on
@@ -79,8 +87,9 @@ final class NTDST_RateLimiter
      * @param string       $key       The full transient key, built by the caller.
      * @param int          $limit     Attempts allowed per window; <= 0 disables the limit.
      * @param int          $window    Window in seconds — the transient TTL.
-     * @param object|null  $memoScope Per-request identity (Endpoints passes the
-     *                                WP_REST_Request). Null means no memoization.
+     * @param object|null  $memoScope Per-request identity (NTDST_Actions passes
+     *                                the WP_REST_Request). Null means no
+     *                                memoization.
      *
      * @return bool True when the attempt is allowed and one unit was consumed.
      */
