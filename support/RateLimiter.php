@@ -130,6 +130,40 @@ final class NTDST_RateLimiter
     }
 
     /**
+     * Has this bucket already met its limit? READS ONLY — nothing is consumed,
+     * nothing is written, no TTL moves.
+     *
+     * `attempt()` decides and spends in one move, which is right for a request
+     * budget: every question IS a request. A FAILURE COUNTER is the other
+     * shape. It is checked far more often than it is incremented — a login
+     * lockout asks on every attempt and increments only on an actual failure,
+     * so asking with `attempt()` would make the check cause the lockout it is
+     * checking for.
+     *
+     * That is why F3's `reset()` alone did not unblock ntdst-baseline's
+     * convergence: clearing a bucket is no use if reading one still costs a
+     * unit. `attempt()` / `exceeded()` / `reset()` is the complete verb set for
+     * both shapes — spend, ask, forgive.
+     *
+     * The comparison lives HERE, not in the caller. It was duplicated in
+     * baseline as `$attempts >= $max`, and a duplicated boundary is one that
+     * can drift: change `>=` to `>` in one place and a three-strike lockout
+     * quietly becomes four.
+     *
+     * @param string $key   The full transient key, built by the caller.
+     * @param int    $limit Attempts allowed per window; <= 0 means no limit,
+     *                      so nothing can exceed it.
+     */
+    public static function exceeded(string $key, int $limit): bool
+    {
+        if ($limit <= 0) {
+            return false;
+        }
+
+        return (int) get_transient($key) >= $limit;
+    }
+
+    /**
      * Clear a bucket: the caller succeeded, so the count against them is void.
      *
      * RESET-ON-SUCCESS is a different primitive from a request budget, and it
