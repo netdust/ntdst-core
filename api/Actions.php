@@ -51,6 +51,19 @@ final class NTDST_Actions
     private const RATE_WINDOW = 60; // Window in seconds
 
     /**
+     * The two dispatch filter prefixes, spelled ONCE.
+     *
+     * The permission callback and the handler must ask the same question of
+     * the same string: the permission callback decides whether an action is
+     * registered (F1 — before any bucket key is built), and the handler
+     * dispatches to it. Two spellings of these names is how those two answers
+     * drift apart. The names themselves are unchanged from v2 — adopters'
+     * handlers hang off them.
+     */
+    private const DATA_FILTER = 'ntdst/api_data/';
+    private const DOWNLOAD_FILTER = 'ntdst/api_download/';
+
+    /**
      * Actions reachable WITHOUT authentication.
      *
      * EMPTY BY DEFAULT, AND THE FRAMEWORK NEVER ADDS TO IT. Anonymous exposure
@@ -199,15 +212,23 @@ final class NTDST_Actions
         $params = $this->get_request_params($request);
         $action = sanitize_text_field($params['action'] ?? $request->get_param('action') ?? '');
 
+        // Get public actions dynamically (allows late registration)
+        $public_actions = apply_filters('ntdst/api/public_actions', $this->public_actions);
+        $isPublic = in_array($action, $public_actions, true);
+
+        // REGISTRATION BEFORE THE BUCKET (F1). A nonce is minted for BOTH
+        // dispatch surfaces, so either registration form counts here — a
+        // download-only action never mounts an `ntdst/api_data/` filter.
+        if (!$this->isRegisteredAction($action, $isPublic, [self::DATA_FILTER, self::DOWNLOAD_FILTER])) {
+            return false;
+        }
+
         if (!$this->checkRateLimit($action, $request)) {
             return $this->rateLimitedError();
         }
 
-        // Get public actions dynamically (allows late registration)
-        $public_actions = apply_filters('ntdst/api/public_actions', $this->public_actions);
-
         // Allow public actions without authentication
-        if (in_array($action, $public_actions, true)) {
+        if ($isPublic) {
             return true;
         }
 
@@ -227,7 +248,7 @@ final class NTDST_Actions
     {
         // POST /action verifies the request Origin (CSRF) — a fetch() carries
         // an Origin header the browser sets and cannot be forged cross-site.
-        return $this->checkDispatchPermission($request, verifyOrigin: true);
+        return $this->checkDispatchPermission($request, verifyOrigin: true, dispatchFilter: self::DATA_FILTER);
     }
 
     /**
@@ -240,10 +261,23 @@ final class NTDST_Actions
      * @return WP_Error|bool WP_Error(429) when rate-limited; bare false for
      *                       origin/auth denials (401 rest_forbidden).
      */
-    private function checkDispatchPermission(WP_REST_Request $request, bool $verifyOrigin): WP_Error|bool
-    {
+    private function checkDispatchPermission(
+        WP_REST_Request $request,
+        bool $verifyOrigin,
+        string $dispatchFilter,
+    ): WP_Error|bool {
         $params = $this->get_request_params($request);
         $action = sanitize_text_field($params['action'] ?? '');
+
+        $public_actions = apply_filters('ntdst/api/public_actions', $this->public_actions);
+        $isPublic = in_array($action, $public_actions, true);
+
+        // REGISTRATION BEFORE THE BUCKET (F1). Until this line has passed, the
+        // action is nothing but a request parameter, and a request parameter
+        // may not name a bucket — see isRegisteredAction().
+        if (!$this->isRegisteredAction($action, $isPublic, [$dispatchFilter])) {
+            return false;
+        }
 
         // Rate limiting check (per-action so sensitive actions can be tighter)
         if (!$this->checkRateLimit($action, $request)) {
@@ -260,12 +294,56 @@ final class NTDST_Actions
         // indirectly on "anon can't mint a nonce for a non-public action" +
         // per-handler login checks — a handler that forgot its own check,
         // combined with any nonce leak, became an exposed surface.
-        $public_actions = apply_filters('ntdst/api/public_actions', $this->public_actions);
-        if (!in_array($action, $public_actions, true) && !is_user_logged_in()) {
+        if (!$isPublic && !is_user_logged_in()) {
             return false;
         }
 
         return true;
+    }
+
+    /**
+     * Is this action REGISTERED — the question that must be answered before a
+     * bucket key exists (F1).
+     *
+     * `checkRateLimit()` runs from `permission_callback`, which WordPress calls
+     * before the handler and before any nonce check. With the raw `action`
+     * parameter folded straight into the transient key, one varied character
+     * per request bought a FRESH bucket: the site's only API throttle was
+     * defeated by a for-loop, and every request wrote 2 `wp_options` rows that
+     * only a daily cron reaps. The bucket key itself is unchanged — what
+     * changed is that an unregistered action never reaches it. An unregistered
+     * action gets NO BUCKET AT ALL; hashing the parameter harder would only
+     * have made the same unbounded key space harder to read.
+     *
+     * Registration is the test this file already owned, in the two forms it
+     * already had: the site's `ntdst/api/public_actions` declaration, and a
+     * mounted dispatch filter. Both lists are written by the SITE and bounded
+     * by it, so the key space becomes (callers x registered actions).
+     *
+     * The denial is a bare `false` — the same 401 `rest_forbidden` as an auth
+     * denial, so refusing an unknown action tells a caller nothing that
+     * refusing a known one does not.
+     *
+     * @param list<string> $dispatchFilters Filter prefixes to test, in the
+     *                                      order the surface would dispatch.
+     */
+    private function isRegisteredAction(string $action, bool $isPublic, array $dispatchFilters): bool
+    {
+        if ($action === '') {
+            return false;
+        }
+
+        if ($isPublic) {
+            return true;
+        }
+
+        foreach ($dispatchFilters as $prefix) {
+            if (has_filter($prefix . $action)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**
@@ -281,7 +359,7 @@ final class NTDST_Actions
      */
     public function check_download_permission(WP_REST_Request $request): WP_Error|bool
     {
-        return $this->checkDispatchPermission($request, verifyOrigin: false);
+        return $this->checkDispatchPermission($request, verifyOrigin: false, dispatchFilter: self::DOWNLOAD_FILTER);
     }
 
     /**
@@ -537,11 +615,11 @@ final class NTDST_Actions
 
         // Distinguish "no handler registered" from "handler returned nothing"
         // so a legitimate empty result (e.g. zero search hits) isn't a 404.
-        if (!has_filter("ntdst/api_data/{$action}")) {
+        if (!has_filter(self::DATA_FILTER . $action)) {
             return $this->error('Unknown action request', 'unknown_action');
         }
 
-        $data = apply_filters("ntdst/api_data/{$action}", [], $params);
+        $data = apply_filters(self::DATA_FILTER . $action, [], $params);
 
         if (is_wp_error($data)) {
             // Honour a status the handler declared in the WP_Error's data
@@ -583,7 +661,7 @@ final class NTDST_Actions
             return $this->error('Invalid or expired nonce', 'invalid_nonce');
         }
 
-        if (!has_filter("ntdst/api_download/{$action}")) {
+        if (!has_filter(self::DOWNLOAD_FILTER . $action)) {
             return $this->error('Unknown download request', 'unknown_action', 404);
         }
 
@@ -595,7 +673,7 @@ final class NTDST_Actions
         // Phase-2 B3 review, finding C1). Default to 403 (not handle_action's
         // 400) when the handler didn't declare a status: this surface's own
         // denial default, since a download is always a permission question.
-        $result = apply_filters("ntdst/api_download/{$action}", null, $params);
+        $result = apply_filters(self::DOWNLOAD_FILTER . $action, null, $params);
 
         if (is_wp_error($result)) {
             $errorData = $result->get_error_data();
@@ -654,7 +732,7 @@ final class NTDST_Actions
                     return $actions;
                 });
 
-                add_filter('ntdst/api_data/' . $action, $handler, $priority, 2);
+                add_filter(self::DATA_FILTER . $action, $handler, $priority, 2);
                 return;
             }
 
@@ -678,14 +756,14 @@ final class NTDST_Actions
                     return $handler($data, $params);
                 };
 
-                add_filter('ntdst/api_data/' . $action, $floored, $priority, 2);
+                add_filter(self::DATA_FILTER . $action, $floored, $priority, 2);
                 return;
             }
 
             // Neither opt: login-required. The router's binary floor already refuses an
             // anonymous caller for any action not on public_actions; the handler keeps
             // whatever per-row/per-type check it has.
-            add_filter('ntdst/api_data/' . $action, $handler, $priority, 2);
+            add_filter(self::DATA_FILTER . $action, $handler, $priority, 2);
     }
 }
 

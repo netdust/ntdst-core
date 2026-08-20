@@ -233,6 +233,17 @@ final class DownloadDispatchTest extends TestCase
             // rate-limit / window filters pass their default through
             return $value;
         });
+
+        // `stride_quote_pdf` is a REGISTERED download action — its handler is
+        // mounted on ntdst/api_download/{action}, which is what a real one
+        // looks like. Since F1 the permission gate establishes registration
+        // before it builds a rate bucket, so a fixture that never mounts the
+        // handler is describing an action that does not exist, and is refused
+        // before it reaches the limit / origin / auth question under test.
+        Functions\when('has_filter')->alias(
+            static fn($hook) => $hook === 'ntdst/api_download/stride_quote_pdf',
+        );
+
         return new NTDST_Actions();
     }
 
