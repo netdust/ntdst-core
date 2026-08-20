@@ -140,14 +140,40 @@ Before anything enters core, all six:
    this be useful". It is "would WordPress development be materially worse
    across several consumers without it".
 
-Criterion 2 has a live answer today: **CORS**. WordPress's
-`rest_send_cors_headers()` reflects any `Origin` *and* sets
+Criterion 2 has a live answer, and it is the worked example: **CORS**.
+WordPress's `rest_send_cors_headers()` reflects any `Origin` *and* sets
 `Access-Control-Allow-Credentials: true`, so any origin can read authenticated
-responses. Independent consumers have paid for that twice. It is repeated, WP
-is actively wrong, the responsibility is single, the safe default is obvious
-(deny), and it is testable. Core ships nothing — see
-`docs/gate.md` and the CORS gap in the netdust-wp skills. By this test it
-should land.
+responses.
+
+How it scored — with the evidence, not the impression:
+
+1. **Repeated** — two independent consumers, three incidents. todai twice (a
+   case-sensitive route scope that took its own correction offline; a
+   content-type gate that 415'd every preflight) and vad-website, hand-rolling
+   it in a production mu-plugin. That implementation is careful — exact
+   allow-list, core's filter removed — and still carries four defects, no
+   `Vary: Origin` among them. One competent developer, four defects, is the
+   argument for a primitive.
+2. **WordPress inadequate** — actively wrong, not merely absent.
+3. **One responsibility** — which origins may read this route.
+4. **Safe default** — deny; credentials off unless asked.
+5. **Denial path testable** — this was the BLOCKER, and it was solved by design
+   rather than waived. The decision became a pure function returning the
+   headers to set and remove, with emission as a thin wrapper: the seam
+   `NTDST_Response::fileHeaders()` already used. Every branch is then
+   assertable at the unit tier.
+6. **More coherent** — it removes the reason to hand-roll.
+
+Note what it is NOT for. Stride's LTI module is cross-origin and does not use
+it: LTI is reached by rewrite rules rather than REST, and its problem is iframe
+embedding plus blocked third-party cookies, which CORS does not govern.
+"Consumer X is cross-origin" is not the test. "Consumer X needs THIS mechanism"
+is.
+
+**Open question, deliberately undecided:** a route declaring no `cors` keeps
+WordPress's default. Making core suppress `Allow-Origin` on every route it
+registered would be safer, and is a breaking change. That is a v5 conversation
+with a named owner, not something to slip into a minor.
 
 ## 7. Deletion is a feature
 
