@@ -21,12 +21,20 @@ deferred to this repo deliberately.
 | F1 rate-limit bucket keyed on attacker-chosen input | **fixed** — registration is established before the key is built |
 | F2 wrong version in the plugin header | **fixed** — and guarded by a test |
 | F3 `NTDST_RateLimiter` has no reset | **fixed** — `reset(string $key): void` |
-| F4 the limiter never charges an `OPTIONS` request | **OPEN**, deliberately — a design call a consumer task depends on. The recommendation from this release: charge once in a pre-dispatch path, into a bucket of the preflight's own. Do NOT widen `$matched`: every sibling handler would charge for one preflight, and the preflight would spend the budget the real request then needs |
-| F5 Bootstrap is theme-coupled for mu-plugin consumers | **half fixed** — the `:504` `get_stylesheet_directory()` fallback left with the sector system. The `:206` namespace-path strip is untouched and still open |
+| F4 the limiter never charges an `OPTIONS` request | **fixed** — one charge per request in `rest_pre_dispatch`, into a `ntdst_rest_pf_` bucket of the preflight's own. `$matched` untouched, so a GET+POST+DELETE route still charges once and the preflight never spends the verb budget the real request needs. **Consumers declare nothing** — this settles todai's T09c with no consumer change |
+| F5 Bootstrap is theme-coupled for mu-plugin consumers | **fixed** — the `:504` fallback left with the sector system; the `:206` namespace-path strip now asks the filesystem instead of the active theme. `get_stylesheet_directory()` no longer appears in shipped Bootstrap code |
 | F6 `RateLimiter`'s docblock documents a deleted consumer | **fixed** |
 | F7 service metadata `name` cannot pin a slug | **fixed** — and a service that declares a name whose slug differs from its class-derived one changes filter/option key on this upgrade |
 | §1b the sector system does not belong in core | **removed** — hence the major |
 | §3 an options/settings service | **deferred**, as ruled — it needs a design stage |
+
+Found by an independent security review of the F1 commit, and closed in this
+release: the Origin/CSRF gate had **zero** test coverage (H1); the bucket was
+charged before the auth gate, so anonymous callers wrote transients on demand
+(M2); the F1 docblock stated a key-space bound that was not one (M3); and two
+mutations survived the suite (M4). The gate's own `lint` step claimed a WPCS
+tier it did not have — see `docs/gate.md`, which also records that no linter
+would have caught H1 or M4.
 
 The netdust-wp skills were re-anchored on 4.x alongside this release: they taught the v2
 package wholesale, including a `NTDST_Cors_Policy` route option that `NTDST_Rest` refuses,
