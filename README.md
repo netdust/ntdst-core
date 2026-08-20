@@ -137,10 +137,15 @@ route** rather than failing closed quietly, the same way a missing `permission`
 does. On a non-match core's grant is actively removed, which is the entire
 point: leaving it is the vulnerability.
 
-**Opt-in, deliberately.** A route that declares no `cors` keeps whatever
-WordPress does today. Making core suppress WP's default on every route it
-registered would be safer and is a breaking change — recorded as an open
-question in `docs/philosophy.md`, not decided here.
+**Opt-in, deliberately** (decided 2026-08-20). A route that declares no `cors`
+keeps whatever WordPress does today — core does not suppress WP's default
+package-wide, because that would silently break anyone relying on it and would
+make an `ntdst_rest()` route behave unlike every other REST route on the site.
+
+The residual, stated plainly: **a route with no `cors` policy is exactly as
+exposed as any other WordPress REST route.** WP will echo any `Origin` back to
+it with `Access-Control-Allow-Credentials: true`. Core does not make that
+worse, and does not fix it unless you ask. Asking is one option key.
 
 ### 3.0.0
 
