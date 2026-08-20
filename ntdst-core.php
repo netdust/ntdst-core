@@ -2,7 +2,7 @@
 
 /**
  * Description: DI Container, Bootstrap, and Service System for WordPress
- * Version: 4.2.0
+ * Version: 4.3.0
  * Author: Stefan Vandermeulen
  *
  * Architecture:

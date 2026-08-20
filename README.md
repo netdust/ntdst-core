@@ -24,6 +24,7 @@ Stride) instead of a per-project vendored copy that drifts.
 | file bytes | `add_filter('ntdst/api_download/{action}', …)` |
 | a page | `ntdst_pages()->path()` |
 | a download response | `ntdst_download()` — never a hand-rolled CSV block |
+| a download too big to hold in memory | stream it yourself, with `NTDST_Response::downloadHeaders()` |
 | to count anything per caller | `NTDST_RateLimiter::attempt()` / `::exceeded()` / `::reset()` |
 | a route readable cross-origin | the `cors` route option — never a hand-rolled `Access-Control-*` header |
 
@@ -106,6 +107,25 @@ Read every line before upgrading. Nothing here is shimmed.
 
 **Not a break, but check it:** the plugin header said `2.4.1` for the whole of
 v3. If anything of yours read the version, it was reading the wrong one.
+
+### 4.3.0
+
+**`NTDST_Response::downloadHeaders($length, $filename, $type, $disposition)`** —
+the file-response header policy, without the body.
+
+`ntdst_download()` takes the content and echoes it, which is right for a vCard
+or an invoice and impossible for a large archive. A caller that streams — a
+press kit sending a few hundred megabytes chunked from a handle — now borrows
+the policy and emits its own bytes. **Core does not learn to stream; the caller
+stops re-deriving the headers.**
+
+That re-derivation is not hypothetical. A consumer arrived independently at
+Content-Type, Content-Length and both filename forms, and missed
+`X-Content-Type-Options: nosniff` — correct in three headers, wrong in the
+fourth, on an archive of user-supplied assets.
+
+`fileHeaders()` now delegates to it, so both download paths cannot drift. Not
+breaking: nothing existing changes behaviour.
 
 ### 4.2.0
 
