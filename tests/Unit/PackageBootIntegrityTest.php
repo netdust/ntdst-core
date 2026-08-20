@@ -80,26 +80,73 @@ final class PackageBootIntegrityTest extends TestCase
         );
     }
 
-    public function testThePluginHeaderVersionMatchesWhatTheCodeSaysItIs(): void
+    public function testThePackageNeverClaimsToBeOlderThanWhatItShips(): void
     {
         // F2 — v3.0.0 shipped with `Version: 2.4.1` in its header while
         // api/Rest.php's _doing_it_wrong() call announced 3.0.0. WordPress
         // reports the header, so a consumer asking "what do I actually have"
-        // got the wrong answer — and the v3 rename is a hard break with no
-        // class_alias shims, which is exactly when that answer matters.
+        // got the previous release — and the v3 rename is a hard break with no
+        // class_alias shims, which is exactly when that answer decides whether
+        // a consumer boots or fatals.
+        //
+        // The rule is an ORDERING, not an equality. A version passed to
+        // _doing_it_wrong() is a @since marker — the release that introduced
+        // that notice — and it stays put while the package moves on, so
+        // requiring the two to MATCH would fail the next major for no reason.
+        // (It did: bumping the header to 4.0.0 failed the first version of this
+        // test against a 3.0.0 marker that was perfectly correct.) What must
+        // never happen is the reverse: a header claiming a release older than a
+        // change the package already contains.
         $root = dirname(__DIR__, 2);
 
-        preg_match('/^ \* Version: (.+)$/m', file_get_contents($root . '/ntdst-core.php'), $header);
-        $this->assertNotEmpty($header, 'ntdst-core.php must carry a Version header — WP reads it.');
+        preg_match('/^ \* Version: (.+)$/m', file_get_contents($root . '/ntdst-core.php'), $matched);
+        $this->assertNotEmpty($matched, 'ntdst-core.php must carry a Version header — WP reads it.');
+        $header = trim($matched[1]);
 
-        preg_match("/_doing_it_wrong\(.*?'([0-9]+\.[0-9]+\.[0-9]+)',/s", file_get_contents($root . '/api/Rest.php'), $code);
-        $this->assertNotEmpty($code, 'api/Rest.php names the version it belongs to.');
+        $shipped = [];
+        foreach ($this->shippedFiles() as $path) {
+            preg_match_all("/_doing_it_wrong\(.*?'([0-9]+\.[0-9]+\.[0-9]+)'/s", file_get_contents($path), $m);
+            foreach ($m[1] as $version) {
+                $shipped[$version] = str_replace($root . '/', '', $path);
+            }
+        }
 
-        $this->assertSame(
-            $code[1],
-            trim($header[1]),
-            'The header version and the version the code self-identifies as must be the same release.',
+        $this->assertNotEmpty(
+            $shipped,
+            'No shipped file names the release it belongs to, so nothing here can check the header.',
         );
+
+        foreach ($shipped as $version => $where) {
+            $this->assertTrue(
+                version_compare($header, $version, '>='),
+                "The header says {$header}, but {$where} already ships a change marked {$version}.",
+            );
+        }
+    }
+
+    /**
+     * Every PHP file this package actually ships.
+     *
+     * @return list<string>
+     */
+    private function shippedFiles(): array
+    {
+        $root = dirname(__DIR__, 2);
+        $files = [];
+
+        $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
+        foreach ($it as $file) {
+            $path = $file->getPathname();
+            if (!str_ends_with($path, '.php')) {
+                continue;
+            }
+            if (str_contains($path, '/vendor/') || str_contains($path, '/tests/') || str_contains($path, '/specs/')) {
+                continue;
+            }
+            $files[] = $path;
+        }
+
+        return $files;
     }
 
     public function testEveryFileInTheLoaderListParsesAndDefinesItsSymbols(): void
