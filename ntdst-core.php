@@ -6,9 +6,9 @@
  * Author: Stefan Vandermeulen
  *
  * Architecture:
- * - core/     → Foundation (Container, Bootstrap, Theme, Router)
+ * - core/     → Foundation (Container, Bootstrap, Theme, Pages)
  * - support/  → Shared primitives with no dependencies (ClientIp, Cidr, RateLimiter)
- * - api/      → Request Flow (Endpoints, Data, Response)
+ * - api/      → Request flow (Actions, Rest, Data, Response)
  * - admin/    → Admin UI (MetaboxGenerator, RelationField)
  * - services/ → Built-in services (Logger, Mailer, Scheduler)
  *

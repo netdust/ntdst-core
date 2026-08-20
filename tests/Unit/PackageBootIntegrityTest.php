@@ -52,9 +52,15 @@ final class PackageBootIntegrityTest extends TestCase
         $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
         foreach ($it as $file) {
             $path = $file->getPathname();
-            if (!str_ends_with($path, '.php')) {
+            // README.md is swept too: it is the first thing an adopter reads,
+            // so a retired name in an INSTRUCTION is a wrong instruction, not a
+            // typo. Its `## Versions` section is exempt — naming what was
+            // removed is the entire job of a changelog line, and this test bit
+            // that section the first time it ran.
+            if (!str_ends_with($path, '.php') && $path !== $root . '/README.md') {
                 continue;
             }
+            $section = '';
             // vendor/ is third-party; tests/ and specs/ legitimately NAME the
             // removed symbols in order to assert their absence.
             if (str_contains($path, '/vendor/') || str_contains($path, '/tests/') || str_contains($path, '/specs/')) {
@@ -62,6 +68,13 @@ final class PackageBootIntegrityTest extends TestCase
             }
 
             foreach (file($path) as $n => $line) {
+                if (str_starts_with($line, '## ')) {
+                    $section = trim(substr($line, 3));
+                }
+                if ($section === 'Versions') {
+                    continue;
+                }
+
                 // A comment may discuss a removed name; a call may not.
                 $code = trim($line);
                 if ($code === '' || str_starts_with($code, '*') || str_starts_with($code, '//') || str_starts_with($code, '#') || str_starts_with($code, '/*')) {

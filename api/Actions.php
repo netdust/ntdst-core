@@ -21,9 +21,10 @@ declare(strict_types=1);
  * respectively; the one moved to `NTDST_RelationField`, and the gate was
  * deleted with the surface.
  *
- * Endpoints:
+ * Routes:
  * - POST /wp-json/ntdst/v1/get_nonce
  * - POST /wp-json/ntdst/v1/action
+ * - GET  /wp-json/ntdst/v1/download
  *
  * Conventions:
  *  - Filter prefixes: `ntdst/api/*` for new code. `netdust_trusted_proxies`
@@ -689,7 +690,7 @@ final class NTDST_Actions
     // =========================================================================
     // RESPONSE HELPERS
     //
-    // Endpoints owns the envelope DECISION; Response owns EMISSION. These ask
+    // NTDST_Actions owns the envelope DECISION; Response owns EMISSION. These ask
     // Response for a WP_REST_Response carrying the api envelope + HTTP status,
     // so an error leaves as a real 4xx instead of a 200 with a bare array.
     // =========================================================================

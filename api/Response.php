@@ -101,7 +101,7 @@ class NTDST_Response
     /**
      * Refuse the request as Not Found (HTTP 404), with no body of its own.
      *
-     * A route callback returns this to say "no": the Router honours the 404
+     * A route callback returns this to say "no": NTDST_Pages honours the 404
      * status by leaving WordPress's not-found state intact, so WordPress's own
      * 404 template renders. Reads cleaner at the call site than error('', 404)
      * and sets no error message — this is a refusal that defers to WordPress's
@@ -147,7 +147,7 @@ class NTDST_Response
     }
 
     /**
-     * The HTTP status this response carries. Read by the Router to honour a
+     * The HTTP status this response carries. Read by NTDST_Pages to honour a
      * route callback's decision: a >=400 status refuses (leave WordPress's
      * not-found state intact), a 2xx succeeds (clear it and render).
      */
@@ -191,7 +191,7 @@ class NTDST_Response
     }
 
     // Deliberately a DIFFERENT error wire shape than jsonPayload(): apiError()
-    // → {success:false,data:{message,code}} (Endpoints/ntdstAPI JS clients) vs
+    // → {success:false,data:{message,code}} (NTDST_Actions / ntdstAPI JS clients) vs
     // jsonPayload() → {success:false,error:string} (json() clients). Do not
     // "unify" — each shape has live consumers.
     public static function apiError(string $message, string $code = 'error'): array
@@ -200,7 +200,7 @@ class NTDST_Response
     }
 
     /**
-     * The api envelope AS a REST response — the emission Endpoints lacked.
+     * The api envelope AS a REST response — the emission NTDST_Actions lacked.
      *
      * Deliberately NOT jsonPayload()'s {success,error} shape: these carry the
      * apiSuccess()/apiError() {success,data} shape the ntdstAPI JS client
@@ -248,7 +248,7 @@ class NTDST_Response
      * Commits its OWN HTTP status before emitting, exactly as json() does
      * (http_response_code at the top of json()). This matters because render()
      * exits and never returns: a route callback that renders can never hand a
-     * Response back to the Router's deferred commitOk(), so render() must own
+     * Response back to NTDST_Pages' deferred commitOk(), so render() must own
      * its status here. A normal render clears WordPress's pre-set 404 for an
      * unmatched URL and sends 200; an error render (error set, or template
      * not found) routes through renderError(), which commits its own >=400
@@ -279,7 +279,7 @@ class NTDST_Response
     /**
      * Commit the render status: clear the 404 WordPress pre-set for an
      * unmatched URL and send $this->status (200 for a normal render). Guarded,
-     * so it is a safe no-op when nothing set 404. Mirrors Router::commitOk()'s
+     * so it is a safe no-op when nothing set 404. Mirrors NTDST_Pages::commitOk()'s
      * intent for the render-and-exit path; protected so tests can seam it
      * without reaching the exit in render().
      */
