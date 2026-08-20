@@ -205,6 +205,41 @@ final class ActionsRateBucketTest extends TestCase
         $this->assertSame(429, $results[3]->get_error_data()['status'] ?? null);
     }
 
+    public function testAnActionRegisteredONLYByItsMountedFilterIsAccepted(): void
+    {
+        // Every other /action test here lists the action public AS WELL AS
+        // mounting it, so `$isPublic` short-circuits isRegisteredAction()
+        // before the filter prefix is ever read — which left the /action door's
+        // prefix argument completely unexercised. Two mutants lived there:
+        // check_action_permission() passing DOWNLOAD_FILTER, and
+        // isRegisteredAction() ignoring $dispatchFilters altogether. This
+        // action is registered by NOTHING BUT the mounted data filter.
+        Functions\when('is_user_logged_in')->justReturn(true);
+        Functions\when('get_current_user_id')->justReturn(7);
+        $this->mounted = ['ntdst/api_data/private_thing'];
+
+        $result = $this->actions()->check_action_permission($this->request(['action' => 'private_thing']));
+
+        $this->assertTrue($result, 'A mounted ntdst/api_data/ handler IS registration, public list or not.');
+        $this->assertCount(1, $this->transients);
+    }
+
+    public function testTheActionDoorRefusesAnActionRegisteredOnlyForDownload(): void
+    {
+        // The mirror of the test on the download door. `export_csv` mounts a
+        // download handler and nothing else, so POST /action must refuse it:
+        // the two doors dispatch different filters and must not accept each
+        // other's registrations.
+        Functions\when('is_user_logged_in')->justReturn(true);
+        Functions\when('get_current_user_id')->justReturn(7);
+        $this->mounted = ['ntdst/api_download/export_csv'];
+
+        $result = $this->actions()->check_action_permission($this->request(['action' => 'export_csv']));
+
+        $this->assertFalse($result, 'A download-only action is not dispatchable through /action.');
+        $this->assertSame([], $this->transients, 'And it earns no bucket on this door.');
+    }
+
     public function testAPublicActionIsRegisteredEvenWithNoHandlerMountedYet(): void
     {
         // The `ntdst/api/public_actions` filter is the site's OWN declaration —
