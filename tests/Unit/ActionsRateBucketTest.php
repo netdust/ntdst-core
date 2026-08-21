@@ -224,19 +224,21 @@ final class ActionsRateBucketTest extends TestCase
         $this->assertCount(1, $this->transients);
     }
 
-    public function testTheActionDoorRefusesAnActionRegisteredOnlyForDownload(): void
+    public function testTheActionDoorRefusesAnActionMountedOnAForeignFilter(): void
     {
-        // The mirror of the test on the download door. `export_csv` mounts a
-        // download handler and nothing else, so POST /action must refuse it:
-        // the two doors dispatch different filters and must not accept each
-        // other's registrations.
+        // A handler mounted on some OTHER filter is not an action. This was
+        // written when /download dispatched `ntdst/api_download/{action}` and
+        // the two doors had to refuse each other's registrations; that surface
+        // is gone, but the property survives it — registration means a mounted
+        // `ntdst/api_data/` handler and nothing else, and an action that lacks
+        // one is refused before any bucket key exists (F1).
         Functions\when('is_user_logged_in')->justReturn(true);
         Functions\when('get_current_user_id')->justReturn(7);
-        $this->mounted = ['ntdst/api_download/export_csv'];
+        $this->mounted = ['some/other/filter/export_csv'];
 
         $result = $this->actions()->check_action_permission($this->request(['action' => 'export_csv']));
 
-        $this->assertFalse($result, 'A download-only action is not dispatchable through /action.');
+        $this->assertFalse($result, 'A handler on a foreign filter is not a registered action.');
         $this->assertSame([], $this->transients, 'And it earns no bucket on this door.');
     }
 
@@ -316,46 +318,4 @@ final class ActionsRateBucketTest extends TestCase
         $this->assertFalse($result, 'The router mints nonces for actions it knows, not for any string.');
     }
 
-    public function testTheNonceEndpointServesAnActionRegisteredOnlyForDownload(): void
-    {
-        // A download-only action is registered under ntdst/api_download/{action}
-        // and never under ntdst/api_data/. Its nonce is minted at the same door,
-        // so the nonce endpoint must accept EITHER registration form or every
-        // download link on the fleet breaks.
-        Functions\when('is_user_logged_in')->justReturn(true);
-        Functions\when('get_current_user_id')->justReturn(7);
-        $this->mounted = ['ntdst/api_download/export_csv'];
-
-        $result = $this->actions()->check_nonce_permission($this->request(['action' => 'export_csv']));
-
-        $this->assertTrue($result);
-        $this->assertCount(1, $this->transients, 'A registered action is still counted.');
-    }
-
-    public function testTheDownloadEndpointMintsNoBucketForAnUnregisteredAction(): void
-    {
-        Functions\when('is_user_logged_in')->justReturn(true);
-        Functions\when('get_current_user_id')->justReturn(7);
-
-        $actions = $this->actions();
-
-        for ($i = 0; $i < 20; $i++) {
-            $result = $actions->check_download_permission($this->request(['action' => "ghost_{$i}"]));
-        }
-
-        $this->assertSame([], $this->transients);
-        $this->assertFalse($result);
-    }
-
-    public function testTheDownloadEndpointTestsTheDownloadFilterNotTheDataFilter(): void
-    {
-        Functions\when('is_user_logged_in')->justReturn(true);
-        Functions\when('get_current_user_id')->justReturn(7);
-        $this->mounted = ['ntdst/api_download/export_csv'];
-
-        $result = $this->actions()->check_download_permission($this->request(['action' => 'export_csv']));
-
-        $this->assertTrue($result, 'A download action is registered under ntdst/api_download/, not ntdst/api_data/.');
-        $this->assertCount(1, $this->transients);
-    }
 }

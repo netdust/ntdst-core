@@ -24,7 +24,6 @@ declare(strict_types=1);
  * Routes:
  * - POST /wp-json/ntdst/v1/get_nonce
  * - POST /wp-json/ntdst/v1/action
- * - GET  /wp-json/ntdst/v1/download
  *
  * Conventions:
  *  - Filter prefixes: `ntdst/api/*` for new code. `netdust_trusted_proxies`
@@ -62,7 +61,6 @@ final class NTDST_Actions
      * handlers hang off them.
      */
     private const DATA_FILTER = 'ntdst/api_data/';
-    private const DOWNLOAD_FILTER = 'ntdst/api_download/';
 
     /**
      * Actions reachable WITHOUT authentication.
@@ -127,7 +125,6 @@ final class NTDST_Actions
     {
         $this->register_nonce_endpoint();
         $this->register_action_endpoint();
-        $this->register_download_endpoint();
     }
 
     private function register_nonce_endpoint(): void
@@ -151,34 +148,6 @@ final class NTDST_Actions
             'methods'             => 'POST',
             'callback'            => [$this, 'handle_action'],
             'permission_callback' => [$this, 'check_action_permission'],
-            'args'                => [
-                'action' => [
-                    'required'          => true,
-                    'sanitize_callback' => 'sanitize_text_field',
-                ],
-                'nonce' => [
-                    'required'          => true,
-                    'sanitize_callback' => 'sanitize_text_field',
-                ],
-            ],
-        ]);
-    }
-
-    /**
-     * The v2.3 GET download entry — a sibling of /action for file downloads.
-     *
-     * GET (not POST) because a download is a plain <a href> navigation: the
-     * browser sends no request body and no Origin header. The nonce carried in
-     * the URL is the CSRF gate (an attacker's cross-site context cannot mint a
-     * valid per-action nonce), which is why check_download_permission() does
-     * NOT apply the Origin check /action uses — see that method.
-     */
-    private function register_download_endpoint(): void
-    {
-        register_rest_route(self::REST_NAMESPACE, '/download', [
-            'methods'             => 'GET',
-            'callback'            => [$this, 'handle_download'],
-            'permission_callback' => [$this, 'check_download_permission'],
             'args'                => [
                 'action' => [
                     'required'          => true,
@@ -220,7 +189,7 @@ final class NTDST_Actions
         // REGISTRATION BEFORE THE BUCKET (F1). A nonce is minted for BOTH
         // dispatch surfaces, so either registration form counts here — a
         // download-only action never mounts an `ntdst/api_data/` filter.
-        if (!$this->isRegisteredAction($action, $isPublic, [self::DATA_FILTER, self::DOWNLOAD_FILTER])) {
+        if (!$this->isRegisteredAction($action, $isPublic, [self::DATA_FILTER])) {
             return false;
         }
 
@@ -248,26 +217,29 @@ final class NTDST_Actions
      */
     public function check_action_permission(WP_REST_Request $request): WP_Error|bool
     {
-        // POST /action verifies the request Origin (CSRF) — a fetch() carries
-        // an Origin header the browser sets and cannot be forged cross-site.
-        return $this->checkDispatchPermission($request, verifyOrigin: true, dispatchFilter: self::DATA_FILTER);
+        return $this->checkDispatchPermission($request);
     }
 
     /**
-     * The shared dispatch gate for /action and /download: rate limit, optional
-     * Origin/CSRF check, then the anonymous-only-for-public-actions auth gate.
-     * ONE policy, two entry points — /action opts into the Origin check, the
-     * GET /download opts out (a <a href> navigation sends no Origin; its nonce
-     * is the CSRF gate instead).
+     * The dispatch gate for /action: registration, auth, rate limit, then the
+     * Origin/CSRF check.
+     *
+     * This took a `$verifyOrigin` flag while `/download` existed, because a
+     * top-level `<a href>` GET navigation sends no Origin header and would have
+     * been denied by it — that surface carried a nonce as its CSRF gate
+     * instead. `/download` had no consumers anywhere and was removed, so the
+     * flag had exactly one caller passing exactly one value. It is gone, and
+     * the Origin check is unconditional: the remaining door is a POST from a
+     * fetch(), which always carries an Origin the browser sets and the page
+     * cannot forge. Collapsing a two-state flag to its WEAKER state is how a
+     * CSRF gate goes quiet, so it collapsed to the stronger one.
      *
      * @return WP_Error|bool WP_Error(429) when rate-limited; bare false for
      *                       origin/auth denials (401 rest_forbidden).
      */
-    private function checkDispatchPermission(
-        WP_REST_Request $request,
-        bool $verifyOrigin,
-        string $dispatchFilter,
-    ): WP_Error|bool {
+    private function checkDispatchPermission(WP_REST_Request $request): WP_Error|bool
+    {
+        $dispatchFilter = self::DATA_FILTER;
         $params = $this->get_request_params($request);
         $action = sanitize_text_field($params['action'] ?? '');
 
@@ -301,14 +273,15 @@ final class NTDST_Actions
             return $this->rateLimitedError();
         }
 
-        // CSRF: verify request origin (POST /action only — see method doc).
+        // CSRF: verify request origin. Unconditional — see the method doc for
+        // why the flag that used to make this optional is gone.
         //
         // This one stays BELOW the limiter, deliberately. A caller who fails
         // it has already passed the auth gate — it is a real session being
         // driven from another site — and a CSRF flood is exactly the traffic
         // a throttle should charge. Hoisting it would hand an attacker an
         // uncharged path through the same code.
-        if ($verifyOrigin && !$this->verifyOrigin()) {
+        if (!$this->verifyOrigin()) {
             return false;
         }
 
@@ -377,22 +350,6 @@ final class NTDST_Actions
         }
 
         return false;
-    }
-
-    /**
-     * Permission for the GET /download endpoint: the SAME gate as /action
-     * (rate limit + public-action + auth), minus the Origin/CSRF check.
-     *
-     * A download is a top-level <a href> GET navigation, which browsers send
-     * WITHOUT an Origin header — so verifyOrigin() would deny every legitimate
-     * download (empty Origin + present auth cookie => false). The per-action
-     * nonce carried in the URL, verified in handle_download(), is this
-     * surface's CSRF protection: an attacker's cross-site context cannot mint
-     * a valid nonce for a non-public action.
-     */
-    public function check_download_permission(WP_REST_Request $request): WP_Error|bool
-    {
-        return $this->checkDispatchPermission($request, verifyOrigin: false, dispatchFilter: self::DOWNLOAD_FILTER);
     }
 
     /**
@@ -578,12 +535,16 @@ final class NTDST_Actions
      * then body params, then JSON params — mirroring the merge order
      * WP_REST_Request::get_params() itself uses. Query params are the
      * fallback because a real GET navigation (e.g. `<a href="...?action=X">`)
-     * sends no body at all: /download is reached this way, never via
-     * JSON/form body, so without this layer every real anchor click 400s
-     * with `missing_params` (v2.3.0 regression, found by Stride's Task-10
-     * browser drive — invisible to filter-level tests because they never
-     * exercise the query-string-only shape a browser navigation actually
-     * sends). JSON/body still WIN over query params: /action is POSTed with
+     * sends no body at all. The GET surface that needed this — /download —
+     * was removed with zero consumers, so nothing reaches the router this way
+     * today. The fallback is KEPT anyway, at its existing LOWEST precedence:
+     * it costs nothing, and dropping it would change /action for any caller
+     * that puts a parameter in the query string. Do not read its presence as
+     * evidence that a GET door still exists. (It arrived as a v2.3.0
+     * regression fix, found by Stride's Task-10 browser drive — invisible to
+     * filter-level tests, which never exercise the query-string-only shape a
+     * browser navigation actually sends.)
+     * JSON/body still WIN over query params: /action is POSTed with
      * a JSON or form body today, and that body must remain authoritative
      * over anything also present in the query string.
      *
@@ -666,58 +627,6 @@ final class NTDST_Actions
         return $this->success(is_array($data) ? $data : []);
     }
 
-    /**
-     * Dispatch a GET download to its ntdst/api_download/{action} handler.
-     *
-     * Same gate order as handle_action: reject missing params, verify the
-     * per-action nonce (the CSRF protection for this GET surface), refuse an
-     * unregistered action. The registered handler is expected to emit the file
-     * via Response::download()/inline() and EXIT — so control never returns
-     * here. If it DOES return, the download action is misconfigured: this
-     * fails loud with a 500 rather than shipping a blank 200.
-     *
-     * The dispatcher never reads a filename or path from the request: the
-     * handler supplies both to Response, and fileHeaders() sanitizes the name.
-     * No path-traversal surface.
-     */
-    public function handle_download(WP_REST_Request $request): WP_REST_Response
-    {
-        $params = $this->get_request_params($request);
-        $action = sanitize_text_field($params['action'] ?? '');
-        $nonce  = sanitize_text_field($params['nonce'] ?? '');
-
-        if (empty($action) || empty($nonce)) {
-            return $this->error('Missing action or nonce', 'missing_params');
-        }
-
-        if (!wp_verify_nonce($nonce, $action)) {
-            return $this->error('Invalid or expired nonce', 'invalid_nonce');
-        }
-
-        if (!has_filter(self::DOWNLOAD_FILTER . $action)) {
-            return $this->error('Unknown download request', 'unknown_action', 404);
-        }
-
-        // The handler emits via Response::download()/inline() and exits;
-        // control does not return past this line on success. A handler MAY
-        // instead deny with a WP_Error (same convention as handle_action):
-        // honour its declared status/code/message rather than collapsing
-        // every denial to a 500 — a denial is not a server fault (Stride
-        // Phase-2 B3 review, finding C1). Default to 403 (not handle_action's
-        // 400) when the handler didn't declare a status: this surface's own
-        // denial default, since a download is always a permission question.
-        $result = apply_filters(self::DOWNLOAD_FILTER . $action, null, $params);
-
-        if (is_wp_error($result)) {
-            $errorData = $result->get_error_data();
-            $status = is_array($errorData) && isset($errorData['status']) ? (int) $errorData['status'] : 403;
-
-            return $this->error($result->get_error_message(), (string) $result->get_error_code(), $status);
-        }
-
-        return $this->error('Download handler did not emit a file', 'download_not_emitted', 500);
-    }
-
 
     // =========================================================================
     // RESPONSE HELPERS
@@ -742,7 +651,8 @@ final class NTDST_Actions
      * Pick the right service:
      *   command (this)  → ntdst_actions()->register()
      *   resource route  → ntdst_rest()
-     *   file bytes      → add_filter('ntdst/api_download/{action}', …)
+     *   file bytes      → a route that borrows NTDST_Response::downloadHeaders()
+     *                     and emits its own body
      *   page            → ntdst_pages()->path()
      *
      * The `ntdst/api_data/{action}` filter name is UNCHANGED from v2 on purpose:

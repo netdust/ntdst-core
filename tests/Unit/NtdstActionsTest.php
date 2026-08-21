@@ -4,9 +4,10 @@
 //
 // This is the COMMAND service: one dispatch endpoint (/ntdst/v1/action), a
 // nonce, and a capability floor. It is renamed, not redesigned — the
-// `ntdst/api_data/*` and `ntdst/api_download/*` FILTER NAMES are deliberately
-// unchanged, because adopters' handlers hang off those names and a rename there
-// would silently unmount every one of them.
+// `ntdst/api_data/*` FILTER NAME is deliberately unchanged, because adopters'
+// handlers hang off it and a rename would silently unmount every one of them.
+// (`ntdst/api_download/*` was the sibling dispatch filter; that surface had no
+// consumers on any site and was removed.)
 defined('ABSPATH') || exit; // direct web hit: ABSPATH undefined → exit; the bootstrap defines it under phpunit
 
 use Brain\Monkey;
