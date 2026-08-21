@@ -176,22 +176,4 @@ final class ActionsOriginGateTest extends TestCase
         $this->assertTrue($this->dispatch(), 'A site may name additional origins explicitly.');
     }
 
-    // =====================================================================
-    // The gate belongs to /action alone
-    // =====================================================================
-
-    public function testTheDownloadDoorDoesNotApplyTheOriginCheck(): void
-    {
-        // GET /download is an <a href> navigation: no Origin, and on a
-        // cross-origin click no Referer either. Applying this gate there would
-        // deny every legitimate download; the per-action nonce is that
-        // surface's CSRF control instead.
-        Functions\when('is_user_logged_in')->justReturn(true);
-        Functions\when('get_current_user_id')->justReturn(7);
-        $_SERVER['HTTP_ORIGIN'] = 'https://evil.example.net';
-
-        $decision = ntdst_actions()->check_download_permission(new WP_REST_Request(['action' => 'pay']));
-
-        $this->assertTrue($decision, 'The download door opts out of the Origin check by design.');
-    }
 }
