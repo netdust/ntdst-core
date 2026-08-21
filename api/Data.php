@@ -99,6 +99,143 @@ class NTDST_Data_Model
     }
 
     /**
+     * The fields that may ever leave this model — every declared field except
+     * those marked `private => true`.
+     *
+     * A CEILING, not a shape. Which of these an exposure actually emits is the
+     * exposure's decision; this only says what is never on the table. Public by
+     * default because most fields are, and a rule nobody has to remember for
+     * the common case is a rule that holds.
+     *
+     * @return list<string>
+     */
+    public function publicFields(): array
+    {
+        $public = [];
+
+        foreach ($this->schema as $field => $config) {
+            if (!(is_array($config) && ($config['private'] ?? false) === true)) {
+                $public[] = (string) $field;
+            }
+        }
+
+        return $public;
+    }
+
+    /**
+     * The same ceiling one level down, for the field kinds that nest.
+     *
+     * A flat list cannot express "this repeater is public but its sale_price is
+     * not", and that is exactly where a sensitive value hides. A parent marked
+     * private is absent entirely; it takes its children with it.
+     *
+     * @return array<string, list<string>>
+     */
+    public function publicSubFields(): array
+    {
+        $public = [];
+
+        foreach ($this->schema as $field => $config) {
+            if (!is_array($config) || ($config['private'] ?? false) === true) {
+                continue;
+            }
+
+            if (!is_array($config['sub_fields'] ?? null)) {
+                continue;
+            }
+
+            $kept = [];
+
+            foreach ($config['sub_fields'] as $sub => $subConfig) {
+                if (!(is_array($subConfig) && ($subConfig['private'] ?? false) === true)) {
+                    $kept[] = (string) $sub;
+                }
+            }
+
+            $public[(string) $field] = $kept;
+        }
+
+        return $public;
+    }
+
+    /**
+     * Narrow rows to a declared set of keys, in the declared order.
+     *
+     * APPLIES a shape; never knows one. The keys come from whoever is exposing
+     * the rows, which is the only party that knows who is asking.
+     *
+     * An empty key list yields empty rows. The mechanism this replaces returned
+     * EVERY field when no shape was declared, so forgetting the declaration
+     * published the row — a fail-open on the one path where it costs most.
+     *
+     * @param  array<int, array<string, mixed>> $rows
+     * @param  list<string>                     $keys
+     * @param  array<string, list<string>>      $subKeys Nested narrowing, keyed by field.
+     * @return array<int, array<string, mixed>>
+     */
+    public static function project(array $rows, array $keys, array $subKeys = []): array
+    {
+        $projected = [];
+
+        foreach ($rows as $row) {
+            if (!is_array($row)) {
+                continue;
+            }
+
+            $out = [];
+
+            foreach ($keys as $key) {
+                if (!array_key_exists($key, $row)) {
+                    continue;
+                }
+
+                $out[$key] = $key === 'meta' && is_array($row[$key])
+                    ? self::projectNested($row[$key], $subKeys)
+                    : $row[$key];
+            }
+
+            $projected[] = $out;
+        }
+
+        return $projected;
+    }
+
+    /**
+     * @param  array<string, mixed>        $meta
+     * @param  array<string, list<string>> $subKeys
+     * @return array<string, mixed>
+     */
+    private static function projectNested(array $meta, array $subKeys): array
+    {
+        foreach ($subKeys as $field => $kept) {
+            if (!isset($meta[$field]) || !is_array($meta[$field])) {
+                continue;
+            }
+
+            $meta[$field] = array_values(array_map(
+                static function ($entry) use ($kept) {
+                    if (!is_array($entry)) {
+                        return $entry;
+                    }
+
+                    $narrowed = [];
+
+                    foreach ($kept as $key) {
+                        if (array_key_exists($key, $entry)) {
+                            $narrowed[$key] = $entry[$key];
+                        }
+                    }
+
+                    return $narrowed;
+                },
+                $meta[$field],
+            ));
+        }
+
+        return $meta;
+    }
+
+    /**
      * Setup default sanitizers based on schema types
      */
     protected function setupSanitizers(): void
