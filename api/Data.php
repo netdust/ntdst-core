@@ -57,7 +57,6 @@ class NTDST_Data_Model
     protected array $sanitizers = [];
     protected array $validators = [];
     protected string $meta_prefix = '';
-    protected array $public_shape = [];
 
     /**
      * Reusable, named query fragments declared by this model — each a
@@ -72,13 +71,11 @@ class NTDST_Data_Model
         string $post_type,
         array $schema = [],
         string $meta_prefix = '',
-        array $public_shape = [],
         array $scopes = [],
     ) {
         $this->post_type = $post_type;
         $this->schema = $schema;
         $this->meta_prefix = $meta_prefix;
-        $this->public_shape = $public_shape;
         $this->scopes = $scopes;
 
         $this->setupSanitizers();
@@ -99,15 +96,6 @@ class NTDST_Data_Model
     public function getSchema(): array
     {
         return $this->schema;
-    }
-
-    /**
-     * The structural keys an anonymous read of this model may carry, as
-     * declared by `public_fields`. Empty means the model declared none.
-     */
-    public function getPublicShape(): array
-    {
-        return $this->public_shape;
     }
 
     /**
@@ -1002,9 +990,10 @@ class NTDST_Data_Model
      *
      * A scope is a `fn(NTDST_Data_Model $q, ...$args)` that NARROWS the builder
      * (calls the same `where*`/`orderBy`/`limit` chain and returns) — it never
-     * changes result SHAPE. The `public_fields`/`publicRows()` projection stays
-     * independent; a caller wanting the public constraints AND the public shape
-     * composes `->scope('public')->publicRows()`.
+     * changes result SHAPE. It cannot: shape is not this layer's question at
+     * all any more, and the projection that used to sit beside scopes has moved
+     * to the surface that exposes the rows. A scope decides WHICH ROWS; the
+     * consumer decides WHICH KEYS.
      *
      * Resolution is MODEL-FIRST-THEN-GLOBAL: the model's own scopes are tried
      * before the global registry, so a model can shadow a global of the same
@@ -1465,72 +1454,6 @@ class NTDST_Data_Model
     }
 
     /**
-     * Read rows through the model's DECLARED PUBLIC SHAPE.
-     *
-     * `public_fields` names the structural keys an anonymous read may carry;
-     * this method and `publicRow()` are the only way out, so a key nobody
-     * declared cannot appear. The framework holds no opinion about WHICH keys
-     * those are — the model says.
-     *
-     * The declaration also decides what is FETCHED: naming `meta` or `terms`
-     * sets their flags here, so a row cannot come out narrower because a
-     * caller forgot `withMeta()`.
-     *
-     * A model that declares nothing is not narrowed. There is no declaration
-     * to project through — the same rule `projectRowsMeta()` applies to an
-     * empty schema — so every existing consumer reads exactly as it did.
-     *
-     * @return array<int, array<string, mixed>>
-     */
-    public function publicRows(): array
-    {
-        if ($this->public_shape === []) {
-            return $this->get();
-        }
-
-        $this->query_args['include_meta'] = in_array('meta', $this->public_shape, true);
-        $this->query_args['include_terms'] = in_array('terms', $this->public_shape, true);
-
-        $rows = $this->get();
-
-        foreach ($rows as $index => $row) {
-            $public = [];
-
-            foreach ($this->public_shape as $key) {
-                if (array_key_exists($key, $row)) {
-                    $public[$key] = $row[$key];
-                }
-            }
-
-            $rows[$index] = $public;
-        }
-
-        return $rows;
-    }
-
-    /**
-     * One row in the shape `publicRows()` returns — it IS that read with an id
-     * filter, so a single-item handler and a list handler cannot drift apart.
-     *
-     * `$status` is `find()`'s argument with `find()`'s default, and the miss
-     * is `find()`'s error: a caller who may not see this status learns nothing
-     * about whether the row exists.
-     *
-     * @param  string|array $status Post statuses to accept. Default: publish only.
-     * @return array<string, mixed>|WP_Error
-     */
-    public function publicRow(int $id, $status = 'publish')
-    {
-        $this->query_args['post__in'] = [$id];
-        $this->query_args['post_status'] = $status;
-        $this->query_args['posts_per_page'] = 1;
-
-        $rows = $this->publicRows();
-
-        return $rows[0] ?? new WP_Error('not_found', 'Post not found', ['status' => 404]);
-    }
-
-    /**
      * Get first result as a WP_Post with model meta/fields attached, matching find().
      */
     public function first()
@@ -1896,7 +1819,6 @@ class NTDST_Data_Manager
                 'field_groups',
                 'meta_prefix',
                 'auto_metabox',
-                'public_fields',
                 'scopes',
                 'taxonomies',
             ]))));
@@ -1933,7 +1855,6 @@ class NTDST_Data_Manager
             $name,
             $config['fields'] ?? [],
             $config['meta_prefix'] ?? '',
-            $config['public_fields'] ?? [],
             $config['scopes'] ?? [],
         );
 
