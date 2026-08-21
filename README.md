@@ -108,6 +108,26 @@ Read every line before upgrading. Nothing here is shimmed.
 **Not a break, but check it:** the plugin header said `2.4.1` for the whole of
 v3. If anything of yours read the version, it was reading the wrong one.
 
+### 4.4.1
+
+**Filters are mounted by asking the filter table, not by a static bool.**
+
+`applyCors`, `chargePreflight` and `runBeforeDispatch` each guarded their
+`add_filter()` with a `private static bool $xHooked`. That flag says "this
+process already mounted it", which is not the same claim as "it is mounted".
+Anything that rebuilds `$wp_filter` — most obviously `WP_UnitTestCase`, which
+snapshots and restores it around every test — drops the callback while the flag
+stays true, so it is never re-added and the control silently stops running.
+
+Production never noticed, because a request mounts once and ends. The place it
+bites is a **consumer's integration tier**: the guard is present for test one
+and gone from test two onward, and the suite quietly reports whatever a missing
+guard produces. It was found the first time a consumer moved its own
+pre-dispatch guard onto `before_dispatch` and watched ten tests fail for a
+reason that had nothing to do with the change.
+
+`has_filter()` asks the only authority that can answer. No API change.
+
 ### 4.4.0
 
 **`before_dispatch` — a route option for a consumer's own pre-dispatch guard,

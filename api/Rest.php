@@ -47,9 +47,6 @@ final class NTDST_Rest
      */
     private static array $preflightRoutes = [];
 
-    /** The pre-dispatch filter is mounted once per process, not per route. */
-    private static bool $preflightHooked = false;
-
     /**
      * Consumer pre-dispatch guards — F11.
      *
@@ -62,18 +59,12 @@ final class NTDST_Rest
      */
     private static array $beforeDispatchRoutes = [];
 
-    /** Mounted once per process, not per route. */
-    private static bool $beforeDispatchHooked = false;
-
     /**
      * Declared CORS policies: `/{namespace}{route}` => policy array.
      *
      * @var array<string, array<string, mixed>>
      */
     private static array $corsRoutes = [];
-
-    /** The serve filter is mounted once per process, not per route. */
-    private static bool $corsHooked = false;
 
     /**
      * Request headers a cross-origin caller may send when a policy names none.
@@ -468,10 +459,10 @@ final class NTDST_Rest
     {
         self::$corsRoutes['/' . trim($this->namespace, '/') . $route] = $policy;
 
-        if (!self::$corsHooked) {
-            self::$corsHooked = true;
-            add_filter('rest_pre_serve_request', [self::class, 'applyCors'], 20, 3);
-        }
+        // Priority 20: after WP's own rest_send_cors_headers() at 10, so the
+        // correction runs on top of core's reflect-any-origin default rather
+        // than under it.
+        self::mountOnce('rest_pre_serve_request', [self::class, 'applyCors'], 20, 3);
     }
 
     /**
@@ -487,12 +478,9 @@ final class NTDST_Rest
             self::$preflightRoutes[$pattern] = ['limit' => $limit, 'window' => $window];
         }
 
-        if (!self::$preflightHooked) {
-            self::$preflightHooked = true;
-            // Priority 5: ahead of WP's own rest_handle_options_request() at
+                    // Priority 5: ahead of WP's own rest_handle_options_request() at
             // 10, which answers the preflight and ends the dispatch.
-            add_filter('rest_pre_dispatch', [self::class, 'chargePreflight'], 5, 3);
-        }
+        self::mountOnce('rest_pre_dispatch', [self::class, 'chargePreflight'], 5, 3);
     }
 
     /**
@@ -522,13 +510,10 @@ final class NTDST_Rest
             'window' => $window,
         ];
 
-        if (!self::$beforeDispatchHooked) {
-            self::$beforeDispatchHooked = true;
-            // Priority 6, one after the preflight charge at 5, so an OPTIONS
+                    // Priority 6, one after the preflight charge at 5, so an OPTIONS
             // request is still billed to the preflight bucket before any
             // consumer guard can answer it.
-            add_filter('rest_pre_dispatch', [self::class, 'runBeforeDispatch'], 6, 3);
-        }
+        self::mountOnce('rest_pre_dispatch', [self::class, 'runBeforeDispatch'], 6, 3);
     }
 
     /**
@@ -598,6 +583,38 @@ final class NTDST_Rest
         }
 
         return $result;
+    }
+
+    /**
+     * Mount a filter once — asking the filter table, not a static bool.
+     *
+     * A `private static bool $xHooked` flag says "this process already
+     * mounted it", and that is not the same claim as "it is mounted". Anything
+     * that rebuilds `$wp_filter` — most obviously `WP_UnitTestCase`, which
+     * snapshots and restores it around every test — drops the callback while
+     * the flag stays true, so it is never re-added and the control silently
+     * stops running. Production never noticed (one request, one mount), which
+     * is exactly why it survived: the place it bites is a CONSUMER'S
+     * integration tier, where the guard goes missing from test two onward and
+     * the suite reports whatever a missing guard produces.
+     *
+     * `has_filter()` asks the only authority that can answer.
+     *
+     * @param callable-string|array{0: string, 1: string} $callback
+     */
+    private static function mountOnce(string $hook, $callback, int $priority, int $args): void
+    {
+        // function_exists(): under WordPress this always exists, which is the
+        // case that matters. It is guarded because an isolated unit tier need
+        // not define it, and a hard call there would fatal before the thing
+        // under test ever ran. Falling through re-adds the filter, which is
+        // harmless — WP de-duplicates an identical callback at the same
+        // priority anyway.
+        if (function_exists('has_filter') && has_filter($hook, $callback) !== false) {
+            return;
+        }
+
+        add_filter($hook, $callback, $priority, $args);
     }
 
     private function refuse(string $route, string $methods, string $why): void

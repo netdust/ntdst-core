@@ -26,6 +26,7 @@ if (!function_exists('add_filter')) {
         return true;
     }
 }
+
 // ntdst_log() must be a REAL function for the same reason add_filter is, and
 // the failure mode is nastier: shipped code guards its logging with
 // function_exists('ntdst_log'), so while NO test stubs it the guard is false
