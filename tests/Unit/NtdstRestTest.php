@@ -277,7 +277,6 @@ final class NtdstRestTest extends TestCase
             'null' => [null],
             'the empty string' => [''],
             'boolean true' => [true],
-            'a string naming no function' => ['ntdst_no_such_permission_function'],
             'an array that is not a callable' => [['NoSuchClass', 'noSuchMethod']],
             'an options-shaped array' => [['capability' => 'manage_options']],
             'an integer' => [1],
@@ -302,6 +301,43 @@ final class NtdstRestTest extends TestCase
 
         $this->assertContains('/x/v1/guarded', $keys, 'control: a properly declared route must still register.');
         $this->assertNotContains('/x/v1/open', $keys, 'a non-callable permission is no permission — refuse the route.');
+    }
+
+    /**
+     * A string permission is a CAPABILITY, and an unknown one denies everyone.
+     *
+     * This row used to live in nonCallablePermissionProvider() and assert that
+     * `'ntdst_no_such_permission_function'` refuses the route. It cannot any
+     * more: this class now accepts `'public'`, `'logged_in'` or a capability
+     * slug, and a capability slug is byte-identical to a typo'd function name.
+     * There is nothing to tell them apart with.
+     *
+     * What CAN be asserted is the property that makes the ambiguity safe — an
+     * unrecognised string becomes `current_user_can($string)`, which is false
+     * for everyone. The route registers and then denies, rather than
+     * registering and admitting.
+     */
+    public function testAnUnrecognisedStringPermissionRegistersButDeniesEveryone(): void
+    {
+        ntdst_rest('perm/v1')->post('/typo', fn() => [], [
+            'permission' => 'ntdst_no_such_permission_function',
+        ]);
+
+        $this->assertContains('/perm/v1/typo', $this->routeKeys(), 'A string permission must register.');
+
+        // The harness stubs current_user_can() to true for every other test
+        // here; this one needs WP's real answer for an unknown capability,
+        // which is false for everyone.
+        Functions\when('current_user_can')->alias(static fn($cap) => $cap === 'manage_options');
+
+        $routes = rest_get_server()->get_routes();
+        $callback = $routes['/perm/v1/typo'][0]['permission_callback'] ?? null;
+
+        $this->assertIsCallable($callback, 'A string permission must still produce a callback.');
+        $this->assertFalse(
+            (bool) $callback(null),
+            'An unrecognised capability admitted the caller — a typo must fail CLOSED.',
+        );
     }
 
     /**

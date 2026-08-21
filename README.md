@@ -108,6 +108,64 @@ Read every line before upgrading. Nothing here is shimmed.
 **Not a break, but check it:** the plugin header said `2.4.1` for the whole of
 v3. If anything of yours read the version, it was reading the wrong one.
 
+### 5.0.0 — BREAKING
+
+`NTDST_Rest` is rewritten. The route option surface changed, so `^4.4` does not
+resolve to this.
+
+**CORS is site-wide, and declared apart from any route.**
+
+```php
+ntdst_rest('shop/v1')->cors(['https://app.example.com']);
+```
+
+There is no `'cors' => [...]` route option, no per-route policy table, and no
+`corsFor()`. One allow-list, merged across namespaces.
+
+**The decision is a pure function again.** `corsDecision(?string $origin, array
+$policy): array` and `corsDecisionFor(?string $origin): ?array` return
+`['set' => [...], 'remove' => [...]]`; `sendCors()` is a thin emitter over them.
+`header()` is invisible to a unit test, so a policy observable only over a
+socket is a policy nobody can unit-test — that seam is why this is not a
+behaviour you have to take on trust.
+
+**`before_dispatch` is gone; `charge()` replaces it.** A guard that must run
+before WordPress decodes the body still belongs in your own `rest_pre_dispatch`
+filter — you own the decision to refuse, so you own the hook. What you could
+not do before was bill that refusal: budget is spent inside the permission
+callback, which a short-circuit never reaches, so refusals were free.
+
+```php
+add_filter('rest_pre_dispatch', function ($result, $server, $request) {
+    if ($result !== null || $this->allows($request)) {
+        return $result;
+    }
+
+    ntdst_rest('shop/v1')->charge('/orders', 'POST', $request);
+
+    return new WP_Error('forbidden', '…', ['status' => 403]);
+}, 10, 3);
+```
+
+`charge()` and `bucket()` are public. `charge()` returns `false` once the budget
+is gone, and `true` when the route declared no limit — nothing to spend is not
+a refusal.
+
+**Retired options no longer take your endpoint away.** An option that never
+existed still refuses the route. `cors` and `before_dispatch` are *ignored*,
+with one `_doing_it_wrong` naming the replacement, and the route registers. An
+author who wrote them when they worked keeps their endpoint.
+
+**Migrating from 4.4.x**
+
+| Was | Now |
+|---|---|
+| `'cors' => ['https://a.test']` per route | `ntdst_rest($ns)->cors(['https://a.test'])` once |
+| `'before_dispatch' => fn($r) => …` | your own `rest_pre_dispatch` filter + `->charge()` |
+| `corsFor($route)` | gone — one site policy |
+| `corsDecisionFor($route, $origin)` | `corsDecisionFor($origin)` |
+| `chargePreflight` | gone — `OPTIONS` is unmetered; bill it yourself with `charge()` if you need to |
+
 ### 4.4.2
 
 **A `before_dispatch` refusal now ANSWERS 429 once the budget is gone, not just

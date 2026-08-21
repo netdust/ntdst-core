@@ -8,8 +8,11 @@
  *  - permission shorthands ('public', 'logged_in', a capability name) so the
  *    common cases need no closure;
  *  - namespace-level defaults, so you declare permission once;
- *  - a real CORS allow-list replacing core's reflect-any-origin default;
- *  - the permission callback runs once per request, not twice.
+ *  - a real CORS allow-list replacing core's reflect-any-origin default,
+ *    site-wide and decided by a pure function so it can be unit-tested;
+ *  - the permission callback runs once per request, not twice;
+ *  - a rate limit per route, spendable from outside via charge() so a
+ *    consumer's own pre-dispatch refusals are not free.
  *
  * Everything else is passed straight through to WordPress.
  *
@@ -27,6 +30,12 @@ final class NTDST_Rest
 {
     /** Options this class consumes; everything else goes to WP verbatim. */
     private const OWN = ['permission', 'rate_limit', 'rate_window'];
+
+    /** Options this class used to accept, mapped to what replaced them. */
+    private const RETIRED = [
+        'cors' => 'declare it once with ntdst_rest(...)->cors([...]) — it is site-wide now',
+        'before_dispatch' => 'filter rest_pre_dispatch and bill with ->charge($route, $methods, $request)',
+    ];
 
     /** @var array<string, self> */
     private static array $instances = [];
@@ -213,14 +222,21 @@ final class NTDST_Rest
             return;
         }
 
-        // A typo'd option is a control the author believes is on and isn't.
+        // A typo'd option is a control the author believes is on and isn't, so
+        // it refuses. A RETIRED one is different: it worked when they wrote it,
+        // and refusing takes their endpoint away over a name.
         $known   = [...self::OWN, 'args', 'schema', 'show_in_index', 'allow_batch'];
-        $unknown = array_diff(array_keys($options), $known);
+        $unknown = array_diff(array_keys($options), $known, array_keys(self::RETIRED));
 
         if ($unknown !== []) {
             $this->refuse($route, $methods, 'unknown option(s): ' . implode(', ', $unknown));
 
             return;
+        }
+
+        foreach (array_intersect(array_keys($options), array_keys(self::RETIRED)) as $name) {
+            $this->refuse($route, $methods, sprintf('"%s" is retired — %s.', $name, self::RETIRED[$name]), false);
+            unset($options[$name]);
         }
 
         if (($options['rate_limit'] ?? null) !== null) {
@@ -238,49 +254,87 @@ final class NTDST_Rest
     }
 
     /**
-     * Emit the allow-list decision. Mounted in place of core's own function.
+     * The allow-list decision, as headers to set and to remove. PURE.
      *
-     * Matching is byte-exact against the full scheme://host[:port]: never a
-     * substring, never case-folded. 'Origin: null' — a file:// page or a
-     * sandboxed iframe — identifies nobody and is never allowed.
+     * Separate from the emitter because `header()` is invisible to a unit
+     * test: a policy observable only over a socket is one nobody can
+     * unit-test. Byte-exact against the full `scheme://host[:port]`; never a
+     * substring, never case-folded. `Origin: null` identifies nobody. The
+     * list is string-only — a stray `true` would match every origin under a
+     * loose comparison.
+     *
+     * @param array{origins: list<string>|callable|null, credentials: bool, max_age: int} $policy
+     * @return array{set: list<string>, remove: list<string>}
+     */
+    public static function corsDecision(?string $origin, array $policy): array
+    {
+        $revoke = ['set' => [], 'remove' => ['Access-Control-Allow-Origin', 'Access-Control-Allow-Credentials']];
+        if ($origin === null || $origin === '' || $origin === 'null') {
+            return $revoke;
+        }
+
+        $origins = $policy['origins'] ?? null;
+        $allowed = is_callable($origins)
+            ? (bool) $origins($origin)
+            : (is_array($origins) && in_array($origin, array_filter($origins, 'is_string'), true));
+
+        if (!$allowed) {
+            return $revoke;
+        }
+
+        $set = [
+            'Access-Control-Allow-Origin: ' . $origin,
+            'Access-Control-Allow-Methods: OPTIONS, GET, POST, PUT, PATCH, DELETE',
+        ];
+
+        if (($policy['max_age'] ?? 0) > 0) {
+            $set[] = 'Access-Control-Max-Age: ' . (int) $policy['max_age'];
+        }
+
+        // Credentials are OFF unless the site asks. Granting them is only ever
+        // safe beside an exact-origin match, which is the only way to get here.
+        if (($policy['credentials'] ?? false) === true) {
+            return ['set' => [...$set, 'Access-Control-Allow-Credentials: true'], 'remove' => []];
+        }
+
+        return ['set' => $set, 'remove' => ['Access-Control-Allow-Credentials']];
+    }
+
+    /**
+     * The decision for the site policy, or null when none was declared. One
+     * allow-list, site-wide — nothing to look up, so no route to pass.
+     *
+     * @return array{set: list<string>, remove: list<string>}|null
+     */
+    public static function corsDecisionFor(?string $origin): ?array
+    {
+        return self::$cors['origins'] === null ? null : self::corsDecision($origin, self::$cors);
+    }
+
+    /**
+     * Emit the decision. Mounted in place of core's own function.
      *
      * @param bool $served
-     * @return bool $served, untouched.
+     * @return bool Untouched.
      */
     public static function sendCors($served)
     {
-        $origin = function_exists('get_http_origin') ? (string) get_http_origin() : '';
-
-        // Core sends this whenever it might vary the response by origin, and
-        // caches in front of /wp-json/ need it whether or not we grant.
+        // Not a policy decision: caches need this whether or not we grant.
         header('Vary: Origin', false);
 
-        if ($origin === '' || $origin === 'null') {
+        $origin = function_exists('get_http_origin') ? (string) get_http_origin() : '';
+        $decision = self::corsDecisionFor($origin);
+
+        if ($decision === null) {
             return $served;
         }
 
-        $origins = self::$cors['origins'];
-
-        $allowed = is_callable($origins)
-            ? (bool) $origins($origin)
-            : (is_array($origins) && in_array($origin, $origins, true));
-
-        if (!$allowed) {
-            return $served;
+        foreach ($decision['remove'] as $header) {
+            header_remove($header);
         }
 
-        header('Access-Control-Allow-Origin: ' . $origin);
-        header('Access-Control-Allow-Methods: OPTIONS, GET, POST, PUT, PATCH, DELETE');
-
-        if (self::$cors['max_age'] > 0) {
-            header('Access-Control-Max-Age: ' . self::$cors['max_age']);
-        }
-
-        // Only ever safe beside an exact-origin match, which is the only way to
-        // get here. Access-Control-Allow-Headers is sent by WP_REST_Server
-        // itself — extend it with the rest_allowed_cors_headers filter.
-        if (self::$cors['credentials']) {
-            header('Access-Control-Allow-Credentials: true');
+        foreach ($decision['set'] as $header) {
+            header($header);
         }
 
         return $served;
@@ -385,7 +439,7 @@ final class NTDST_Rest
             return 'u' . $userId;
         }
 
-        $ip = class_exists('NTDST_ClientIp') ? NTDST_ClientIp::detect($_SERVER) : ($_SERVER['REMOTE_ADDR'] ?? '');
+        $ip = class_exists('NTDST_ClientIp') ? NTDST_ClientIp::detect($_SERVER) : '';
 
         return 'ip' . md5($ip ?: 'unknown');
     }
@@ -411,9 +465,10 @@ final class NTDST_Rest
         };
     }
 
-    private function refuse(string $route, string $methods, string $why): void
+    /** @param bool $fatal False for a retired option: say so, but register. */
+    private function refuse(string $route, string $methods, string $why, bool $fatal = true): void
     {
-        $id = $this->namespace . '|' . $route . '|' . $methods;
+        $id = $this->namespace . '|' . $route . '|' . $methods . '|' . (int) $fatal;
 
         // Once per process: registerOne() runs on every REST request.
         if (isset(self::$reported[$id])) {
@@ -422,7 +477,15 @@ final class NTDST_Rest
 
         self::$reported[$id] = true;
 
-        _doing_it_wrong(self::class . '::route', sprintf('Route was not registered — %s.', $why), '3.0.0');
+        _doing_it_wrong(
+            self::class . '::route',
+            $fatal ? sprintf('Route was not registered — %s.', $why) : $why,
+            $fatal ? '3.0.0' : '5.0.0',
+        );
+
+        if (!$fatal) {
+            return;
+        }
 
         if (function_exists('ntdst_log')) {
             ntdst_log('api')->error('REST route registration refused', [

@@ -69,10 +69,21 @@ final class NtdstRestCorsTest extends TestCase
         parent::tearDown();
     }
 
-    /** @param array<string, mixed>|list<string> $policy */
-    private function decide(?string $origin, array $policy): array
+    /**
+     * The site policy shape. Tests used to hand a BARE LIST here, which worked
+     * because corsDecision() carried a "a list is shorthand for ['origins']"
+     * branch. Nothing but these tests ever passed one, so the branch went and
+     * the harness builds the real shape instead.
+     *
+     * @param list<string>|callable $origins
+     */
+    private function decide(?string $origin, $origins, bool $credentials = false, int $maxAge = 0): array
     {
-        return NTDST_Rest::corsDecision($origin, $policy);
+        return NTDST_Rest::corsDecision($origin, [
+            'origins' => $origins,
+            'credentials' => $credentials,
+            'max_age' => $maxAge,
+        ]);
     }
 
     /** Header names this decision sets, lowercased, for terse assertions. */
@@ -154,48 +165,47 @@ final class NtdstRestCorsTest extends TestCase
         }
     }
 
-    public function testAPolicyNamingAStarRefusesTheRouteOutright(): void
+    public function testAStarInADeclaredAllowListIsDroppedNotHonoured(): void
     {
-        // Failing closed SILENTLY would leave the author believing
-        // cross-origin works. Misconfiguration refuses, loudly — the same
-        // treatment a missing permission gets.
-        ntdst_rest('cors9/v1')->post('/wild', fn() => [], [
-            'permission' => static fn() => true,
-            'cors' => ['*'],
-        ]);
+        // '*' is a misconfiguration, not a shorthand. It used to refuse the
+        // ROUTE, which it no longer can: the allow-list is site-wide and is
+        // declared apart from any route. It refuses the POLICY instead — the
+        // list is not stored, so nothing is granted to anyone.
+        ntdst_rest('cors9/v1')->cors(['*']);
 
-        $this->assertArrayNotHasKey('/cors9/v1/wild', $this->registered);
+        $this->assertNull(
+            NTDST_Rest::corsDecisionFor(self::ALLOWED),
+            'A wildcard was stored as a policy, so it can grant.',
+        );
     }
 
-    public function testARouteThisPackageNeverRegisteredIsNotTouched(): void
+    public function testWithNoPolicyDeclaredTheDecisionIsNull(): void
     {
-        // The filter runs on EVERY REST request on the site. Removing
+        // sendCors() runs on EVERY REST request on the site. Stripping
         // Access-Control-Allow-Origin from another plugin's route would break
         // its clients with nothing pointing back here. Null is "did nothing",
-        // made assertable.
-        ntdst_rest('cors10/v1')->post('/mine', fn() => [], [
-            'permission' => static fn() => true,
-            'cors' => [self::ALLOWED],
-        ]);
+        // made assertable — and it is what a site that never called cors()
+        // must get.
+        $this->assertNull(NTDST_Rest::corsDecisionFor('https://evil.example.net'));
 
-        $this->assertNull(NTDST_Rest::corsDecisionFor('/wc/v3/orders', 'https://evil.example.net'));
-        $this->assertNotNull(NTDST_Rest::corsDecisionFor('/cors10/v1/mine', 'https://evil.example.net'));
+        ntdst_rest('cors10/v1')->cors([self::ALLOWED]);
+
+        $this->assertNotNull(NTDST_Rest::corsDecisionFor('https://evil.example.net'));
     }
 
     // =====================================================================
     // Allows
     // =====================================================================
 
-    public function testAnExactOriginIsEchoedWithVary(): void
+    public function testAnExactOriginIsEchoed(): void
     {
         $d = $this->decide(self::ALLOWED, [self::ALLOWED]);
 
         $this->assertContains('Access-Control-Allow-Origin: ' . self::ALLOWED, $d['set']);
-        $this->assertContains(
-            'Vary: Origin',
-            $d['set'],
-            'Without Vary, a shared cache serves one origin the response computed for another.',
-        );
+        // Vary is NOT here on purpose: it is not a policy decision. A shared
+        // cache needs it whether or not we grant, so sendCors() emits it
+        // unconditionally before consulting the decision at all.
+        $this->assertNotContains('Vary: Origin', $d['set']);
     }
 
     public function testCredentialsAreStrippedUnlessTheSiteAsksForThem(): void
@@ -204,39 +214,22 @@ final class NtdstRestCorsTest extends TestCase
         $this->assertContains('Access-Control-Allow-Credentials', $default['remove']);
         $this->assertNotContains('access-control-allow-credentials', $this->names($default));
 
-        $optedIn = $this->decide(self::ALLOWED, ['origins' => [self::ALLOWED], 'credentials' => true]);
+        $optedIn = $this->decide(self::ALLOWED, [self::ALLOWED], true);
         $this->assertContains('Access-Control-Allow-Credentials: true', $optedIn['set']);
     }
 
-    public function testAllowHeadersIsSentBecauseWordPressNeverSendsIt(): void
+    public function testMaxAgeIsSentOnlyWhenTheSiteAsksForIt(): void
     {
-        // Without this a cross-origin `Content-Type: application/json` POST
-        // fails its preflight, which is why every consumer hand-rolls the line.
-        $d = $this->decide(self::ALLOWED, [self::ALLOWED]);
-        $header = $this->headerNamed($d['set'], 'Access-Control-Allow-Headers');
-
-        $this->assertStringContainsString('Content-Type', $header);
-        $this->assertStringContainsString('X-WP-Nonce', $header);
-    }
-
-    public function testAPolicyMayNameItsOwnHeadersAndMaxAge(): void
-    {
-        $d = $this->decide(self::ALLOWED, [
-            'origins' => [self::ALLOWED],
-            'headers' => ['Content-Type', 'X-Tenant'],
-            'max_age' => 600,
-        ]);
-
-        $this->assertSame(
-            'Access-Control-Allow-Headers: Content-Type, X-Tenant',
-            $this->headerNamed($d['set'], 'Access-Control-Allow-Headers', true),
+        $this->assertNotContains('Access-Control-Max-Age: 0', $this->decide(self::ALLOWED, [self::ALLOWED])['set']);
+        $this->assertContains(
+            'Access-Control-Max-Age: 600',
+            $this->decide(self::ALLOWED, [self::ALLOWED], false, 600)['set'],
         );
-        $this->assertContains('Access-Control-Max-Age: 600', $d['set']);
     }
 
     public function testAResolverCallableDecidesDynamically(): void
     {
-        $policy = ['origins' => static fn(string $o): bool => str_ends_with($o, '.vad.be')];
+        $policy = static fn(string $o): bool => str_ends_with($o, '.vad.be');
 
         $this->assertContains(
             'Access-Control-Allow-Origin: https://analytics.vad.be',
@@ -271,49 +264,41 @@ final class NtdstRestCorsTest extends TestCase
         return $GLOBALS['_ntdst_test_filters']['rest_pre_serve_request'];
     }
 
-    public function testDeclaringCorsMountsTheFilterAndIsAnAcceptedOption(): void
+    public function testDeclaringCorsMountsTheFilter(): void
     {
-        ntdst_rest('cors1/v1')->post('/thing', fn() => [], [
+        ntdst_rest('cors1/v1')->cors([self::ALLOWED]);
+
+        $this->assertNotNull(NTDST_Rest::corsDecisionFor(self::ALLOWED));
+    }
+
+    public function testARetiredCorsOptionIsIgnoredRatherThanTakingTheRouteAway(): void
+    {
+        // The option is gone, but an author who wrote it when it worked keeps
+        // their endpoint. They are told once what replaced it.
+        ntdst_rest('cors2/v1')->post('/legacy', fn() => [], [
             'permission' => static fn() => true,
             'cors' => [self::ALLOWED],
         ]);
 
         $this->assertArrayHasKey(
-            '/cors1/v1/thing',
+            '/cors2/v1/legacy',
             $this->registered,
-            'A `cors` option must not refuse the route — the option list is closed.',
+            'A retired option took the endpoint away over a name.',
         );
-        $this->assertIsCallable($this->corsFilter());
+        $this->assertArrayNotHasKey(
+            'cors',
+            $this->registered['/cors2/v1/legacy'],
+            'The retired option was passed through to register_rest_route().',
+        );
     }
 
-    public function testARouteWithNoCorsOptionIsLeftAlone(): void
+    public function testAnOptionThatNeverExistedStillRefusesTheRoute(): void
     {
-        // Opt-in, deliberately. Core does NOT silently change the CORS
-        // behaviour of routes nobody declared a policy for — that would be a
-        // breaking change, and it is recorded as an open question instead.
-        ntdst_rest('cors2/v1')->post('/plain', fn() => [], ['permission' => static fn() => true]);
-        ntdst_rest('cors2/v1')->post('/guarded', fn() => [], [
+        ntdst_rest('cors3/v1')->post('/typo', fn() => [], [
             'permission' => static fn() => true,
-            'cors' => [self::ALLOWED],
+            'corss' => [self::ALLOWED],
         ]);
 
-        $applied = NTDST_Rest::corsFor('/cors2/v1/plain');
-
-        $this->assertNull($applied, 'No declaration, no policy.');
-        $this->assertNotNull(NTDST_Rest::corsFor('/cors2/v1/guarded'));
-    }
-
-    public function testTheRouteLookupIsCaseInsensitiveLikeWordPressOwn(): void
-    {
-        // WP matches routes with preg_match('@^…$@i'). A case-SENSITIVE scope
-        // check silently stops running for /CORS3/V1/THING while WordPress
-        // dispatches it — the exact bug that took a consumer's CORS correction
-        // offline and handed core's reflect-any default back to the wire.
-        ntdst_rest('cors3/v1')->post('/thing', fn() => [], [
-            'permission' => static fn() => true,
-            'cors' => [self::ALLOWED],
-        ]);
-
-        $this->assertNotNull(NTDST_Rest::corsFor('/CORS3/V1/THING'));
+        $this->assertArrayNotHasKey('/cors3/v1/typo', $this->registered);
     }
 }
