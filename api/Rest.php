@@ -341,7 +341,24 @@ final class NTDST_Rest
     }
 
     /**
-     * Rate limit, then the caller's permission — memoized together.
+     * The caller's permission, then the rate limit — memoized together.
+     *
+     * AUTH BEFORE THE BUCKET. This order is the whole point, and it is the same
+     * correction `api/Actions.php` already made (M2): a caller who can never
+     * pass this route's permission must not be able to make the site WRITE
+     * storage by asking. Charging first meant every doomed request left a
+     * `wp_options` row behind, reaped only by a daily cron — and once the
+     * budget ran out the route answered 429 to a caller who should have been
+     * refused, which is both the wrong answer and a small disclosure: it
+     * confirms the route exists and is counting.
+     *
+     * Evaluating the permission costs a capability check and answers the
+     * question outright, so there is nothing to buy by deferring it.
+     *
+     * The residual is deliberate: a refused caller is no longer throttled and
+     * may repeat the refusal freely. That request still pays WordPress's REST
+     * bootstrap, which this limiter never prevented either — what it may no
+     * longer do is make us write.
      *
      * @param array<string, mixed> $options
      */
@@ -352,6 +369,15 @@ final class NTDST_Rest
         $verbs  = array_map('strtoupper', array_map('trim', explode(',', $methods)));
 
         return $this->memoize(function ($request) use ($permission, $limit, $window, $route, $verbs) {
+            $allowed = $permission($request);
+
+            // Refusal — a WP_Error or anything falsy. Returned UNTOUCHED: the
+            // permission's own refusal shape is what WordPress must see, and
+            // re-wrapping it would change the status a route already chose.
+            if (!$allowed || $allowed instanceof WP_Error) {
+                return $allowed;
+            }
+
             // Only the handler that matched spends budget. WP calls every
             // sibling's permission to build the Allow header, so without this a
             // GET drains the POST route's limit.
@@ -372,7 +398,7 @@ final class NTDST_Rest
                 }
             }
 
-            return $permission($request);
+            return $allowed;
         });
     }
 
