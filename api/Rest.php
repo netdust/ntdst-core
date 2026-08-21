@@ -25,7 +25,7 @@ defined('ABSPATH') || exit;
 final class NTDST_Rest
 {
     /** Options this class consumes; everything else passes through to WP. */
-    private const OWN_OPTIONS = ['permission', 'rate_limit', 'rate_window', 'cors'];
+    private const OWN_OPTIONS = ['permission', 'rate_limit', 'rate_window', 'cors', 'before_dispatch'];
 
     /** @var array<string, self> */
     private static array $instances = [];
@@ -49,6 +49,21 @@ final class NTDST_Rest
 
     /** The pre-dispatch filter is mounted once per process, not per route. */
     private static bool $preflightHooked = false;
+
+    /**
+     * Consumer pre-dispatch guards — F11.
+     *
+     * `/{namespace}{route}` => ['callback' => callable, 'seed' => string,
+     * 'limit' => int|null, 'window' => int]. `seed` is the exact key material
+     * `guard()` uses, minus the per-request bucket, so a refusal charges the
+     * SAME bucket the request itself would have — not a second one.
+     *
+     * @var array<string, array{callback: callable, seed: string, limit: int|null, window: int}>
+     */
+    private static array $beforeDispatchRoutes = [];
+
+    /** Mounted once per process, not per route. */
+    private static bool $beforeDispatchHooked = false;
 
     /**
      * Declared CORS policies: `/{namespace}{route}` => policy array.
@@ -158,6 +173,15 @@ final class NTDST_Rest
             }
         }
 
+        // Same reasoning as `permission`: a guard the author believes is
+        // running and isn't is worse than no guard, so a non-callable refuses
+        // the route rather than being ignored.
+        if (array_key_exists('before_dispatch', $options) && !is_callable($options['before_dispatch'])) {
+            $this->refuse($route, $methods, 'the "before_dispatch" option must be callable');
+
+            return;
+        }
+
         // A typo'd option is a control the author believes is on and isn't, so
         // it gets the same loud treatment as a missing permission.
         $unknown = array_diff(array_keys($options), array_merge(self::OWN_OPTIONS, ['args', 'schema', 'show_in_index', 'allow_batch']));
@@ -187,6 +211,16 @@ final class NTDST_Rest
             $this->rememberForPreflight(
                 $route,
                 (int) $options['rate_limit'],
+                (int) ($options['rate_window'] ?? 60),
+            );
+        }
+
+        if (($options['before_dispatch'] ?? null) !== null) {
+            $this->rememberBeforeDispatch(
+                $route,
+                $options['before_dispatch'],
+                $methods,
+                isset($options['rate_limit']) ? (int) $options['rate_limit'] : null,
                 (int) ($options['rate_window'] ?? 60),
             );
         }
@@ -459,6 +493,111 @@ final class NTDST_Rest
             // 10, which answers the preflight and ends the dispatch.
             add_filter('rest_pre_dispatch', [self::class, 'chargePreflight'], 5, 3);
         }
+    }
+
+    /**
+     * Remember a consumer's pre-dispatch guard, and mount the hook once.
+     *
+     * @param callable $callback Receives the request; returns null to allow,
+     *                           or a WP_Error to refuse.
+     */
+    private function rememberBeforeDispatch(
+        string $route,
+        callable $callback,
+        string $methods,
+        ?int $limit,
+        int $window,
+    ): void {
+        $pattern = '/' . trim($this->namespace, '/') . $route;
+        $verbs = array_map('strtoupper', array_map('trim', explode(',', $methods)));
+
+        self::$beforeDispatchRoutes[$pattern] = [
+            'callback' => $callback,
+            // The SAME key material guard() builds, minus the per-request
+            // bucket (which cannot be resolved at registration — REST auth has
+            // not run yet). Storing the seed is what makes a refusal charge the
+            // request's own bucket instead of opening a second one.
+            'seed' => $this->namespace . '|' . $route . '|' . implode(',', $verbs),
+            'limit' => $limit,
+            'window' => $window,
+        ];
+
+        if (!self::$beforeDispatchHooked) {
+            self::$beforeDispatchHooked = true;
+            // Priority 6, one after the preflight charge at 5, so an OPTIONS
+            // request is still billed to the preflight bucket before any
+            // consumer guard can answer it.
+            add_filter('rest_pre_dispatch', [self::class, 'runBeforeDispatch'], 6, 3);
+        }
+    }
+
+    /**
+     * Run a route's `before_dispatch` guard, and charge the request budget when
+     * it refuses — F11.
+     *
+     * WHY THE CHARGE IS ON REFUSAL ONLY. A request the callback ALLOWS goes on
+     * to `guard()`, which bills it in the permission callback; billing here too
+     * would charge every legitimate request twice. A request the callback
+     * REFUSES short-circuits `dispatch()` and never reaches `guard()`, so this
+     * is the only place it can be billed at all. Exactly one unit either way,
+     * into the one bucket both paths share.
+     *
+     * Before this existed, a consumer's own `rest_pre_dispatch` filter made its
+     * refusals FREE: measured on a real consumer's public write route, 100
+     * rejected requests carrying ~100 MB of body moved the bucket by zero and a
+     * legitimate POST straight after still succeeded. The consumer could not fix
+     * it either — `bucket()` is private and the key is built inline in
+     * `guard()`, leaving only two bad options: hand-copy the key formula, or
+     * open a second bucket.
+     *
+     * The hook sees every REST request on the site. It acts only on a route it
+     * put in the table itself and returns `$result` untouched otherwise.
+     *
+     * @param mixed  $result  Whatever an earlier filter produced; null normally.
+     * @param mixed  $server  The REST server (unused).
+     * @param object $request The request being dispatched.
+     * @return mixed `$result` unchanged, or the callback's WP_Error.
+     */
+    public static function runBeforeDispatch($result, $server = null, $request = null)
+    {
+        // Someone already answered. Do not run a guard for a dispatch that is
+        // not going to happen, and do not stomp their result.
+        if ($result !== null) {
+            return $result;
+        }
+
+        if (!is_object($request) || !method_exists($request, 'get_route')) {
+            return $result;
+        }
+
+        $route = (string) $request->get_route();
+
+        foreach (self::$beforeDispatchRoutes as $pattern => $entry) {
+            // Case-INSENSITIVE, exactly as WP matches routes. A consumer
+            // writing this by hand has already got it wrong twice — once
+            // case-sensitively, so `/NS/V1/THING` skipped the guard entirely,
+            // and once by prefix, so the guard answered on paths its own CORS
+            // policy did not cover.
+            if (!preg_match('@^' . $pattern . '$@i', $route)) {
+                continue;
+            }
+
+            $decision = ($entry['callback'])($request);
+
+            if ($decision instanceof WP_Error) {
+                if ($entry['limit'] !== null) {
+                    $key = 'ntdst_rest_' . md5($entry['seed'] . '|' . self::bucket());
+                    NTDST_RateLimiter::attempt($key, $entry['limit'], $entry['window'], $request);
+                }
+
+                return $decision;
+            }
+
+            // The first pattern that matches owns the request.
+            return $result;
+        }
+
+        return $result;
     }
 
     private function refuse(string $route, string $methods, string $why): void

@@ -80,13 +80,18 @@ final class NtdstRestPreflightTest extends TestCase
      */
     private function preDispatch(): callable
     {
+        // By PRIORITY, not by hook name. Two callbacks now mount on
+        // rest_pre_dispatch — the preflight charge at 5 and before_dispatch at
+        // 6 — so reading the hook alone would drive whichever registered first
+        // and still pass, which is precisely the regression this file exists
+        // to see.
         $this->assertArrayHasKey(
-            'rest_pre_dispatch',
-            $GLOBALS['_ntdst_test_filters'] ?? [],
-            'NTDST_Rest must mount a rest_pre_dispatch filter to charge preflights.',
+            5,
+            $GLOBALS['_ntdst_test_filters_at']['rest_pre_dispatch'] ?? [],
+            'NTDST_Rest must mount a rest_pre_dispatch filter at priority 5 to charge preflights.',
         );
 
-        return $GLOBALS['_ntdst_test_filters']['rest_pre_dispatch'];
+        return $GLOBALS['_ntdst_test_filters_at']['rest_pre_dispatch'][5];
     }
 
     private function request(string $method, string $route): NtdstPreflightRequest

@@ -108,6 +108,61 @@ Read every line before upgrading. Nothing here is shimmed.
 **Not a break, but check it:** the plugin header said `2.4.1` for the whole of
 v3. If anything of yours read the version, it was reading the wrong one.
 
+### 4.4.0
+
+**`before_dispatch` — a route option for a consumer's own pre-dispatch guard,
+charged like one.**
+
+Some guards have to run before WordPress decodes the request. A JSON depth
+bound is the clear case: `has_valid_params()` runs WP's own default-depth
+`json_decode()` before any permission callback, so a depth check in the
+permission is a check that arrives after the read it exists to prevent. The
+only place earlier is `rest_pre_dispatch`, and until now a consumer had to
+filter that hook itself.
+
+Two things then went wrong, and neither was the consumer's fault.
+
+**The refusals were free.** This package spends a route's rate budget inside
+`guard()`, the permission wrapper. A filter that short-circuits `dispatch()`
+means `permission_callback` never runs — so every rejected request cost the
+caller nothing. Measured on a real consumer's public, unauthenticated write
+route: **100 rejected requests carrying ~100 MB of body moved the bucket by
+zero**, and a legitimate POST straight afterwards still returned 201. The same
+hole was closed for preflights in 4.1.0 and left open for every other verb.
+
+**And the consumer could not fix it.** `bucket()` is private and the budget key
+is built inline in `guard()`, so charging the right bucket meant hand-copying
+the key formula — or opening a second bucket, which every consumer's own
+architecture rules forbid. The consumer also had to re-implement route
+matching, and that copy was wrong twice in one module: case-sensitively, so
+`/NS/V1/THING` skipped the guard while WordPress dispatched it; then by prefix,
+so the guard answered on paths its CORS policy did not cover and handed WP's
+reflect-any-origin-with-credentials default back to the wire.
+
+```php
+ntdst_rest('todai/v1')->post('/submissions', $handler, [
+    'permission'      => $permission,
+    'rate_limit'      => 20,
+    'before_dispatch' => fn($request) => $this->boundTheBody($request),
+]);
+```
+
+Return `null` to allow, a `WP_Error` to refuse. Core owns the hook, the
+priority (6 — one after its own preflight charge, so an OPTIONS request is
+still billed to the preflight bucket first), the case-insensitive anchored
+route match, and the charge.
+
+**The charge is on refusal only, and that is the design.** An allowed request
+goes on to `guard()`, which bills it there; billing here too would charge every
+legitimate request twice. A refused request never reaches `guard()`, so this is
+the only place it can be billed. Exactly one unit either way, into the one
+bucket both paths share — the request's own, not the preflight's, because a
+pre-dispatch refusal is the request answered early rather than a preflight.
+
+A non-callable `before_dispatch` refuses the route the way a missing
+`permission` does. A guard the author believes is running and isn't is worse
+than no guard.
+
 ### 4.3.0
 
 **`NTDST_Response::downloadHeaders($length, $filename, $type, $disposition)`** —

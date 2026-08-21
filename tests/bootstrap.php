@@ -11,7 +11,18 @@ define('ABSPATH', '/tmp/wordpress/'); // satisfies the defined-guard in class fi
 if (!function_exists('add_filter')) {
     function add_filter($hook, $cb = null, $priority = 10, $args = 1)
     {
-        $GLOBALS['_ntdst_test_filters'][$hook] = $cb;
+        // Keyed by hook AND priority. One-per-hook was enough while this
+        // package mounted a single callback per hook; it stops being enough
+        // the moment two do, and the failure is silent — the second mount
+        // overwrites the first and a test drives the wrong callback while
+        // still passing. Both shapes are kept: `[$hook]` stays FIRST-mounted
+        // so existing helpers keep meaning what they meant.
+        if (!isset($GLOBALS['_ntdst_test_filters'][$hook])) {
+            $GLOBALS['_ntdst_test_filters'][$hook] = $cb;
+        }
+
+        $GLOBALS['_ntdst_test_filters_at'][$hook][(int) $priority] = $cb;
+
         return true;
     }
 }
