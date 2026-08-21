@@ -572,7 +572,20 @@ final class NTDST_Rest
             if ($decision instanceof WP_Error) {
                 if ($entry['limit'] !== null) {
                     $key = 'ntdst_rest_' . md5($entry['seed'] . '|' . self::bucket());
-                    NTDST_RateLimiter::attempt($key, $entry['limit'], $entry['window'], $request);
+
+                    // Charge, and ANSWER 429 once the budget is gone. Charging
+                    // alone metered the flood without stopping it: the caller's
+                    // legitimate requests started failing while their refused
+                    // ones kept being served one WP boot at a time, which is the
+                    // wrong way round. A caller over budget gets the same answer
+                    // here that guard() would give them a moment later.
+                    if (!NTDST_RateLimiter::attempt($key, $entry['limit'], $entry['window'], $request)) {
+                        return new WP_Error(
+                            'rate_limited',
+                            'Too many requests. Please wait a moment and try again.',
+                            ['status' => 429, 'retry_after' => $entry['window']],
+                        );
+                    }
                 }
 
                 return $decision;

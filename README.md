@@ -108,6 +108,21 @@ Read every line before upgrading. Nothing here is shimmed.
 **Not a break, but check it:** the plugin header said `2.4.1` for the whole of
 v3. If anything of yours read the version, it was reading the wrong one.
 
+### 4.4.2
+
+**A `before_dispatch` refusal now ANSWERS 429 once the budget is gone, not just
+charges for it.**
+
+4.4.0 made refusals cost budget. Measured on the consumer immediately after:
+25 refused requests did exhaust the bucket — the caller's next legitimate POST
+correctly returned 429 — but the refusals themselves kept being served, one WP
+boot each, forever. The flood was metered and not stopped, which is the wrong
+way round: the attacker was unaffected and the victim was their own legitimate
+traffic.
+
+A caller past the limit now gets the same 429 here that `guard()` would give
+them a moment later.
+
 ### 4.4.1
 
 **Filters are mounted by asking the filter table, not by a static bool.**

@@ -140,6 +140,33 @@ final class NtdstRestBeforeDispatchTest extends TestCase
         );
     }
 
+    /**
+     * Charging without answering metered the flood but did not stop it: the
+     * caller's LEGITIMATE requests began failing while their refused ones were
+     * still served, one WP boot each. Over budget gets 429 here, the same
+     * answer guard() would give a moment later.
+     */
+    public function testARefusedCallerOverBudgetGets429NotTheGuardsAnswer(): void
+    {
+        ntdst_rest('bd7/v1')->post('/thing', fn() => [], [
+            'permission' => static fn() => true,
+            'rate_limit' => 2,
+            'rate_window' => 60,
+            'before_dispatch' => static fn($request) => new WP_Error('nope', 'no', ['status' => 415]),
+        ]);
+
+        $filter = $this->beforeDispatch();
+        $statusOf = static fn($e) => $e instanceof WP_Error ? ($e->get_error_data()['status'] ?? null) : null;
+
+        $this->assertSame(415, $statusOf($filter(null, null, $this->request('POST', '/bd7/v1/thing'))));
+        $this->assertSame(415, $statusOf($filter(null, null, $this->request('POST', '/bd7/v1/thing'))));
+        $this->assertSame(
+            429,
+            $statusOf($filter(null, null, $this->request('POST', '/bd7/v1/thing'))),
+            'A caller past the limit kept being served refusals, so the flood is metered but not stopped.',
+        );
+    }
+
     public function testAnAllowedRequestIsNotChargedHere(): void
     {
         ntdst_rest('bd2/v1')->post('/thing', fn() => [], [
