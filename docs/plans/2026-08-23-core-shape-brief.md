@@ -273,6 +273,27 @@ no capability; (b) refuse a write verb (`POST/PUT/PATCH/DELETE`) that names no
 capability — keeps today's refusal where it bites. (b) is a smaller invention
 than it looks: it is the current rule, narrowed to writes. Recommendation: (b).
 
+**`publicSurface()` — delete it (proposal, 01:30).** Built yesterday 21:51
+(`afec16b`, +217 lines) without agreement: a static registry in `Rest.php` of
+routes registered through the wrapper, with readers `surface()` /
+`publicSurface()` / `opaqueSurface()`, so a site test can assert its anonymous
+surface (A7). WordPress already has the registry:
+`rest_get_server()->get_routes($ns)` (`class-wp-rest-server.php:957`) returns
+every route with its `permission_callback`, and it sees routes registered *outside*
+the wrapper too, which core's never will. With `->public()` emitting
+`__return_true`, the A7 assertion is three lines against WordPress:
+
+```php
+$anonymous = array_filter(
+    rest_get_server()->get_routes('daan/v1'),
+    fn ($handlers) => $handlers[0]['permission_callback'] === '__return_true'
+);
+```
+
+`opaqueSurface()`'s reason ("a closure could be anything") dissolves: the wrapper
+emits three known callables and nothing else. A7 survives as a README test idiom,
+not as core code. −83 lines in `Rest.php`, one registry instead of two.
+
 Open: does internal also imply `show_in_index => false`? WordPress lists every
 route by default; hiding is a separate word. Keep it separate unless the index
 turns out to be the thing an attacker reads first — decide with the threat model.
