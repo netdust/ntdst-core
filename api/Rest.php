@@ -12,8 +12,11 @@
  *  - permission shorthands ('public', 'logged_in', a capability name) so the
  *    common cases need no closure;
  *  - namespace-level defaults, so you declare permission once;
- *  - a real CORS allow-list replacing core's reflect-any-origin default,
- *    site-wide and decided by a pure function so it can be unit-tested;
+ *  - CORS declared here and KEPT BY WORDPRESS: cors() adds to the
+ *    allowed_http_origins list WordPress already keeps, and the decision asks
+ *    is_allowed_http_origin() over it. What core gets wrong is only the REST
+ *    emitter, which reflects any origin back with credentials; that one is
+ *    replaced, site-wide, by a pure function so it can be unit-tested;
  *  - a consumer's own permission callable runs once per request, not twice;
  *  - a rate limit per route, spendable from outside via charge() so a
  *    consumer's own pre-dispatch refusals are not free.
@@ -63,11 +66,35 @@ final class NTDST_Rest
     private static array $reported = [];
 
     /**
-     * Site-wide CORS allow-list, merged from every namespace that declared one.
+     * The two things WordPress has no answer for, merged from every namespace
+     * that declared one. The ORIGINS are not here: they go to WordPress's own
+     * allowed_http_origins list (INV-5 — core keeps no table WordPress already
+     * keeps). Two allow-lists is one too many, because the one WordPress reads
+     * would drift from the one we check.
      *
-     * @var array{origins: list<string>|callable|null, credentials: bool, max_age: int}
+     * @var array{credentials: bool, max_age: int}
      */
-    private static array $cors = ['origins' => null, 'credentials' => false, 'max_age' => 0];
+    private static array $cors = ['credentials' => false, 'max_age' => 0];
+
+    /**
+     * The declaration waiting for WordPress's own hooks, not an allow-list.
+     *
+     * cors() writes these; the two named callbacks below read them and hand
+     * them to WordPress. Nothing else asks them whether an origin is allowed —
+     * that question has one address, is_allowed_http_origin(). They exist
+     * because the callbacks must be named statics rather than closures over
+     * the declaration (see cors()), and a named static has nowhere to close
+     * over.
+     *
+     * @var list<string>
+     */
+    private static array $corsOrigins = [];
+
+    /** @var list<callable> Resolvers, asked per request about one origin. */
+    private static array $corsResolvers = [];
+
+    /** Whether a policy was declared at all. Until one is, the emitter abstains. */
+    private static bool $corsDeclared = false;
 
     /** @var array<string, mixed> Namespace-level option defaults. */
     private array $defaults = [];
@@ -127,13 +154,30 @@ final class NTDST_Rest
     /**
      * Declare the cross-origin policy.
      *
-     * This REMOVES core's rest_send_cors_headers, which echoes ANY origin back
-     * with Access-Control-Allow-Credentials: true — meaning any site can read a
-     * logged-in visitor's authenticated responses. The replacement is site-wide
-     * and fails closed: an origin not on the list gets no CORS headers at all,
-     * on every REST route including other plugins'. That is the intended trade;
-     * if a plugin on this site needs its own cross-origin policy, it must be
-     * added here too.
+     * The origins go where WordPress already keeps origins: they are ADDED to
+     * `allowed_http_origins`, the list `is_allowed_http_origin()` answers over
+     * (wp-includes/http.php). This class keeps none of its own.
+     *
+     * That list is site-wide in a second sense: admin-ajax's
+     * send_origin_headers() reads it too, so an origin declared here for REST
+     * also reaches the site's ajax surface. That is the price of one
+     * allow-list instead of two — declare only origins that may have both.
+     *
+     * A CALLABLE is a per-request question, so it goes on the other end of the
+     * same function: `allowed_http_origin`, which is handed THE ORIGIN BEING
+     * ASKED ABOUT. Putting a resolver on the list filter instead would mean
+     * appending get_http_origin() to a list that other code enumerates, and
+     * answering about the request's origin even when the caller asked about a
+     * different one. It only ever ADDS: a resolver that says no must not take
+     * WordPress's own origins away with it.
+     *
+     * This also REMOVES core's rest_send_cors_headers, which echoes ANY origin
+     * back with Access-Control-Allow-Credentials: true — meaning any site can
+     * read a logged-in visitor's authenticated responses. The replacement is
+     * site-wide and fails closed: an origin WordPress does not allow gets no
+     * CORS headers at all, on every REST route including other plugins'. That
+     * is the intended trade; if a plugin on this site needs its own
+     * cross-origin policy, it must be declared here too.
      *
      * Never '*' — with credentials the browser rejects it anyway, and without
      * credentials it means "the whole internet may read this", which is a thing
@@ -144,20 +188,51 @@ final class NTDST_Rest
     public function cors(array|callable $origins, bool $credentials = false, int $maxAge = 0): self
     {
         if (is_array($origins)) {
-            $origins = array_values(array_filter($origins, 'is_string'));
+            // '' is not an origin and 'null' identifies nobody — a file:// page
+            // and a sandboxed iframe both send it. A non-string could never
+            // match under WordPress's strict in_array() and has no business on
+            // a site-wide list either way.
+            $declared = array_values(array_filter(
+                $origins,
+                static fn($origin): bool => is_string($origin) && $origin !== '' && $origin !== 'null',
+            ));
 
-            if (in_array('*', $origins, true)) {
+            if (in_array('*', $declared, true)) {
                 $this->refuse('(cors)', '-', '"*" is never a valid allow-list entry');
 
-                return $this;
+                // The WHOLE declaration goes down, not the wildcard alone:
+                // half-honouring a bad list is the worst outcome, because the
+                // author reads "some of it worked" and never fixes it. The
+                // emitter is still mounted below — abstaining would leave
+                // core's reflect-any-origin handler standing, which is the
+                // very '*' this just refused.
+                $declared    = [];
+                $credentials = false;
+                $maxAge      = 0;
             }
 
-            $existing = is_array(self::$cors['origins']) ? self::$cors['origins'] : [];
-            $origins  = array_values(array_unique([...$existing, ...$origins]));
+            // A set: WordPress reads it with in_array(), so a second copy
+            // changes no answer and only hides which module asked for what.
+            foreach ($declared as $origin) {
+                if (!in_array($origin, self::$corsOrigins, true)) {
+                    self::$corsOrigins[] = $origin;
+                }
+            }
+
+            if (self::$corsOrigins !== []) {
+                add_filter('allowed_http_origins', [self::class, 'filterAllowedOrigins'], 10, 1);
+            }
+        } else {
+            if (!in_array($origins, self::$corsResolvers, true)) {
+                self::$corsResolvers[] = $origins;
+            }
+
+            add_filter('allowed_http_origin', [self::class, 'filterAllowedOrigin'], 10, 2);
         }
 
+        self::$corsDeclared = true;
+
         self::$cors = [
-            'origins'     => $origins,
             'credentials' => $credentials || self::$cors['credentials'],
             'max_age'     => max($maxAge, self::$cors['max_age']),
         ];
@@ -168,8 +243,10 @@ final class NTDST_Rest
         // test — drops the callback while the flag stays true, and the policy
         // silently stops running from test two onward. Named static callbacks
         // get a stable id from _wp_filter_build_unique_id(), so WordPress
-        // de-duplicates these itself and a second cors() call is free. A
-        // closure here would NOT dedupe, which is why this is a method.
+        // de-duplicates these itself and a second cors() call is free — which
+        // is why the two filters above are methods too, and why the declaration
+        // they read lives in statics rather than in a closure. A closure would
+        // NOT dedupe: every cors() call would stack another copy.
         add_action('rest_api_init', [self::class, 'mountCors'], 15);
 
         return $this;
@@ -180,6 +257,66 @@ final class NTDST_Rest
     {
         remove_filter('rest_pre_serve_request', 'rest_send_cors_headers');
         add_filter('rest_pre_serve_request', [self::class, 'sendCors'], 10, 1);
+    }
+
+    /**
+     * Add the declared origins to WordPress's own allow-list.
+     *
+     * WordPress's entries stay first and in their order; ours follow, once
+     * each. Nothing else is added — this list also answers for admin-ajax.
+     *
+     * @param mixed $origins
+     * @return list<string>
+     */
+    public static function filterAllowedOrigins($origins): array
+    {
+        $list = is_array($origins) ? array_values($origins) : [];
+
+        foreach (self::$corsOrigins as $origin) {
+            if (!in_array($origin, $list, true)) {
+                $list[] = $origin;
+            }
+        }
+
+        return $list;
+    }
+
+    /**
+     * Let a declared resolver answer for the origin WordPress was asked about.
+     *
+     * ADDITIVE ONLY, in both directions: an origin WordPress already allows is
+     * returned untouched — a resolver grants, it never revokes — and a
+     * resolver that declines leaves the verdict exactly as WordPress made it.
+     * Only `true` grants; the resolver is declared as fn(string): bool, and on
+     * an allow-list an ambiguous yes is a no.
+     *
+     * @param mixed $allowed The origin when WordPress allows it, '' when not.
+     * @param mixed $origin  The origin asked about, or null for the request's own.
+     * @return mixed
+     */
+    public static function filterAllowedOrigin($allowed, $origin = null)
+    {
+        if (is_string($allowed) && $allowed !== '') {
+            return $allowed;
+        }
+
+        $candidate = is_string($origin) && $origin !== ''
+            ? $origin
+            : (function_exists('get_http_origin') ? (string) get_http_origin() : '');
+
+        // Same two refusals corsDecision() makes, for the same reasons: an
+        // absent origin is not a question, and 'null' is not an identity.
+        if ($candidate === '' || $candidate === 'null') {
+            return $allowed;
+        }
+
+        foreach (self::$corsResolvers as $resolver) {
+            if ($resolver($candidate) === true) {
+                return $candidate;
+            }
+        }
+
+        return $allowed;
     }
 
     public function get(string $route, $handler, array $options = []): self
@@ -482,31 +619,37 @@ final class NTDST_Rest
     }
 
     /**
-     * The allow-list decision, as headers to set and to remove. PURE.
+     * The policy decision, as headers to set and to remove.
      *
      * Separate from the emitter because `header()` is invisible to a unit
      * test: a policy observable only over a socket is one nobody can
-     * unit-test. Byte-exact against the full `scheme://host[:port]`; never a
-     * substring, never case-folded. `Origin: null` identifies nobody. The
-     * list is string-only — a stray `true` would match every origin under a
-     * loose comparison.
+     * unit-test. Allowed-ness is neither decided here nor carried in the
+     * policy — it is asked of is_allowed_http_origin(), one source of truth
+     * for the whole site, which compares byte-exact against the full
+     * `scheme://host[:port]`: never a substring, never case-folded. A
+     * leftover 'origins' key in $policy decides nothing, in either direction.
      *
-     * @param array{origins: list<string>|callable|null, credentials: bool, max_age: int} $policy
+     * @param array{credentials: bool, max_age: int} $policy
      * @return array{set: list<string>, remove: list<string>}
      */
     public static function corsDecision(?string $origin, array $policy): array
     {
         $revoke = ['set' => [], 'remove' => ['Access-Control-Allow-Origin', 'Access-Control-Allow-Credentials']];
+
+        // Refused BEFORE WordPress is asked, rather than by it. `Origin: null`
+        // identifies nobody — and it is not a question worth putting to a
+        // filter another plugin can answer 'yes' to. An absent origin is worse:
+        // is_allowed_http_origin(null) falls back to get_http_origin() and
+        // answers about whatever the request carries, which is a different
+        // question than the one in hand.
         if ($origin === null || $origin === '' || $origin === 'null') {
             return $revoke;
         }
 
-        $origins = $policy['origins'] ?? null;
-        $allowed = is_callable($origins)
-            ? (bool) $origins($origin)
-            : (is_array($origins) && in_array($origin, array_filter($origins, 'is_string'), true));
-
-        if (!$allowed) {
+        // Asked ONCE, with the exact origin. Read for truthiness the way core's
+        // own callers read it: the function returns the origin when it allows
+        // and '' when it does not.
+        if (!is_allowed_http_origin($origin)) {
             return $revoke;
         }
 
@@ -532,11 +675,15 @@ final class NTDST_Rest
      * The decision for the site policy, or null when none was declared. One
      * allow-list, site-wide — nothing to look up, so no route to pass.
      *
+     * A declaration that granted nothing — an empty list, a refused wildcard —
+     * still decides. It fails CLOSED, which means overriding core's headers,
+     * not abstaining and leaving them standing.
+     *
      * @return array{set: list<string>, remove: list<string>}|null
      */
     public static function corsDecisionFor(?string $origin): ?array
     {
-        return self::$cors['origins'] === null ? null : self::corsDecision($origin, self::$cors);
+        return self::$corsDeclared ? self::corsDecision($origin, self::$cors) : null;
     }
 
     /**
