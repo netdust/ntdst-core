@@ -182,10 +182,39 @@ ceiling. Both are in the record as rulings; they conflict at the edge.
 | b | keep `show_in_rest => true`, opt in (what is in `main`) | a projector in **baseline** (A8) or the route handler | WordPress's key and meaning. A field nobody named never leaves. Needs a reader or it is a comment. |
 | c | public by default, `private => true` | same | the 16:15 ruling. Matches "WordPress returns a result, you use what you need" (15:46). Fail-open on a field added later. |
 
-Review pane's recommendation, flagged as mine: **b, with the reader in baseline**,
-because it satisfies A2, A3 and A8 at once and is already in `main` with tests. The
-plan must then include the reader, or choose a. A flag with no reader is the
-`public_fields` situation again — a key that looks like a control and does nothing.
+**Ruling (Stefan, 2026-08-22 01:40): b.** "With show_in_rest we prove it. That's
+enough, because if we use data.php to request meta, we need all and filter
+ourselves. We don't have any awkward public self-made surface anymore."
+
+Concretely, verified against WordPress 7.0.4 source:
+
+- **The reader is WordPress.** `Data::register()` calls
+  `register_post_meta($type, $key, ['show_in_rest' => true, 'type' => …])` for
+  every field declared `show_in_rest => true`. WordPress then emits exactly those
+  fields on `/wp/v2/<type>`, with a schema, to anyone — given the CPT has
+  `show_in_rest => true` and `supports` includes `custom-fields`
+  (`class-wp-rest-posts-controller.php:2554`). Today core calls neither, and no
+  model supports `custom-fields`, which is why `/wp/v2/gig` is live and emits no
+  meta. Reads of declared fields then need no custom route; WordPress is the
+  public surface.
+- **A custom route filters itself**, with `restFields()` / `restSubFields()` as
+  the list it may pick from — the second reader, for routes that do more than
+  WordPress's list endpoint (scopes, relations, past/upcoming).
+- **Server-side, nothing leaves.** `->get()` returns the whole row. A1 holds.
+
+Public surface after D1 + D2: `/wp/v2/<type>` with opt-in fields, plus routes
+marked `->public()`. Nothing else.
+
+The Class A part is the schema mapping: scalars are one line; repeaters become
+`type: object` with `properties` (and `array` of them), which is where
+`restSubFields()` lands; `sanitize_callback` / `auth_callback` on the meta
+registration mirror the model's sanitizers and the CPT's capability. Sub-field
+opt-in needs `properties` to list only the named children — verify that
+WordPress honours a partial `properties` list on a nested object before relying
+on it. Whether `Data::register()` also adds `custom-fields` to `supports` when
+any field is declared, or the site must say it, is a one-line decision for the
+spec (recommendation: core adds it — a declaration that silently does nothing
+is the `public_fields` situation again).
 
 **D2 — `Actions.php` goes.** Three rulings already say so: A4, "if actions became
 obsolete, remove it" (17:22), "we agreed that what actions does would be taken
