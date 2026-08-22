@@ -36,6 +36,7 @@ require_once NTDST_PATH . '/support/ClientIp.php';
 require_once NTDST_PATH . '/support/RateLimiter.php';
 
 // Load API layer (request flow)
+require_once NTDST_PATH . '/api/FieldTypes.php'; // the field vocabulary; Data reads it
 require_once NTDST_PATH . '/api/Data.php';
 require_once NTDST_PATH . '/api/Response.php';
 
