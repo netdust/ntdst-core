@@ -238,6 +238,45 @@ tomorrow: drop it, say so in README, and if a belt is wanted it is a site's own
 `permission` + `show_in_index => false` + `rate_limit` are three existing words,
 and `defaults()` already sets them once per namespace.
 
+**Shape ruling (Stefan, 2026-08-22 01:20): routes are internal by default;
+`public()` is the explicit exception.** "defaults() is very general, public() is
+better, means that everything is default internal unless we set them public."
+This is D1's rule seen from the route side — nothing leaves unless named — and
+`publicSurface()` becomes the list of exactly those calls.
+
+```php
+ntdst_rest('daan/v1')
+    ->get('/gigs', $h)->public()                              // anonymous — the exception, named
+    ->post('/grants/issue', $h, ['permission' => 'edit_others_posts'])  // capability, explicit
+    ->post('/purge', $h);                                     // nothing said → internal
+```
+
+What it changes in `Rest` today: the current rule is *a route without a
+permission is REFUSED* (`api/Rest.php:7`; `docs/philosophy.md` §1 names it as one
+of the two things Rest adds). The new rule replaces refusal with a safe default.
+Deliberate reversal — philosophy.md follows (T4).
+
+WordPress's words for each state — nothing invented:
+
+| state | `permission_callback` | note |
+|---|---|---|
+| internal (default) | `is_user_logged_in` | WordPress's own split: `wp_ajax_` vs `wp_ajax_nopriv_` is exactly logged-in vs anonymous |
+| capability | `fn() => current_user_can($cap)` | the existing shorthand |
+| public | `__return_true` | WordPress's own idiom for an open route; `->public()` emits it and records the route in `publicSurface()` |
+
+**The one trap, to decide tomorrow:** logged-in is not trusted. On a site with
+open registration (a subscriber, a customer, a musician account) the internal
+default lets every account reach every unnamed route. WordPress lives with this
+(`wp_ajax_` has the same property). Options: (a) accept it, document "a write
+route names its capability" as a rule, and have the `reviewer` flag writes with
+no capability; (b) refuse a write verb (`POST/PUT/PATCH/DELETE`) that names no
+capability — keeps today's refusal where it bites. (b) is a smaller invention
+than it looks: it is the current rule, narrowed to writes. Recommendation: (b).
+
+Open: does internal also imply `show_in_index => false`? WordPress lists every
+route by default; hiding is a separate word. Keep it separate unless the index
+turns out to be the thing an attacker reads first — decide with the threat model.
+
 Verdict on Actions: not wrong when written (2.x had no `Rest`; it beat
 `admin-ajax` and solved the cached-nonce problem before `rest-nonce` +
 `apiFetch` did). Obsolete by replacement: a second dispatcher with its own
