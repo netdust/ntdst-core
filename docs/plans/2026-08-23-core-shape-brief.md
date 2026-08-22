@@ -180,11 +180,22 @@ majors in one week is worse than one larger one. Recommendation: all of this is
 and ships a README that documents a removed `/download`. Tag when D1 and D2 have
 landed and README covers every break. daan's 4 purge reds can wait a day.
 
-**D5 — Scope fence.** In: `Data.php`, `Rest.php`, removal of `Actions.php`, README,
-the baseline reader if D1 = b. Out, as separate later phases: daan's handler
+**D5 — Scope fence: the three files.** The question is the shape of `Data.php`,
+`Rest.php` and `Actions.php` (Stefan, 16:30 and 16:47: *"this is about data.php,
+actions.php and rest.php. first we solve this"*). In: those three, README, the
+baseline reader if D1 = b. Out, as separate later phases: daan's handler
 migration (use `ce5d72c` as a reference diff only), stride / netdust / rossi, the
 frozen search/import/export specs, rossi's provenance exposure (record §3 — not
 lost, not this work).
+
+**Sites have one role in this plan: a consumer count.** "Does anything use this?"
+is a fact core needs (A6). "How does daan / rossi do it today?" is not a design
+input. Yesterday every core decision after 16:55 was shaped by a site — daan's
+`release` test contract, daan's `public_actions` assertion, daan's grant nonces,
+rossi's enquiry actions — and that is the site bending core, the reverse of *"the
+site adapts, not the other way around"*. The design comes from the three files,
+WordPress's own mechanisms (A3), and the rulings. A site is consulted to count,
+never to copy.
 
 **D6 — How a consumer tests against unreleased core.** Composer `path` repository
 in daan's `composer.json` (dev-only), or `v5.0.0-rc.1`. Decide once; it removes
