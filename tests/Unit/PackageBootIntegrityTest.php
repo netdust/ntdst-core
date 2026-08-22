@@ -85,6 +85,16 @@ final class PackageBootIntegrityTest extends TestCase
             'sanitizeNestedArray' => ['sanitizeNestedArray', '5.0.0'],
             'sanitizeDate' => ['sanitizeDate', '5.0.0'],
             'sanitizeAttachmentId' => ['sanitizeAttachmentId', '5.0.0'],
+            // v5.0.0 field-types — the METABOX's own type switch. It was the
+            // second half of the same defect: a value posted from the edit
+            // screen was cleaned here by one table and again inside the model
+            // by another, and the two disagreed (`bool 'false'` was true on
+            // this path and false on the model's, `int '-500'` lost its sign
+            // here and kept it there). Pinned as the CALL SHAPE rather than the
+            // bare word: `sanitize_field` is a plausible name for a future
+            // helper and for prose about sanitizing a field, but no shipped
+            // line may CALL or DECLARE one.
+            'sanitize_field' => ['sanitize_field(', '5.0.0'],
             // The retired type NAME (D4: it folded into a signed `int`). Shipped
             // code may not declare a field with it; the vocabulary's own
             // retirement table is the one place that still says the word.

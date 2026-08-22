@@ -71,6 +71,30 @@ if (!function_exists('sanitize_key')) {
     }
 }
 
+// wp_unslash() is a REAL function for the whole suite, for the SAME reason
+// ntdst_log() is, and it bites in the same place: support/ClientIp.php guards
+// its call with function_exists('wp_unslash'). While no test stubbed it the
+// guard was false everywhere. The moment ONE test file Monkey-patches it — the
+// metabox save path calls it unguarded, so a test of that path must have it —
+// Patchwork defines it PROCESS-WIDE, the guard turns true for every LATER test
+// file, and six REST tests fail with "wp_unslash is not defined nor mocked in
+// this test": a failure in files that changed nothing.
+//
+// It is also not a question any test asks. This is WordPress's own
+// stripslashes_deep() for the input this suite uses (WordPress also walks
+// object properties; nothing here unslashes an object). Do not Monkey-patch
+// it: defined here, Patchwork cannot redefine it.
+if (!function_exists('wp_unslash')) {
+    function wp_unslash($value)
+    {
+        if (is_array($value)) {
+            return array_map('wp_unslash', $value);
+        }
+
+        return is_string($value) ? stripslashes($value) : $value;
+    }
+}
+
 require_once __DIR__ . '/../core/Container.php';
 require_once __DIR__ . '/../support/Cidr.php';
 require_once __DIR__ . '/../support/ClientIp.php';
