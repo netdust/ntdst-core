@@ -4,13 +4,17 @@
  * NTDST Rest — a thin front for register_rest_route().
  *
  * What it adds over raw WordPress:
- *  - a route with no permission is REFUSED, not silently published;
+ *  - a route that names no permission is INTERNAL, never anonymous by
+ *    omission: it registers as 'is_user_logged_in', which is WordPress's own
+ *    wp_ajax_ posture. A WRITE verb (POST, PUT, PATCH, DELETE) that names none
+ *    is REFUSED outright — on a site with open registration "logged in" is
+ *    "anyone" — and ->public() is the one way a route reaches anonymous;
  *  - permission shorthands ('public', 'logged_in', a capability name) so the
  *    common cases need no closure;
  *  - namespace-level defaults, so you declare permission once;
  *  - a real CORS allow-list replacing core's reflect-any-origin default,
  *    site-wide and decided by a pure function so it can be unit-tested;
- *  - the permission callback runs once per request, not twice;
+ *  - a consumer's own permission callable runs once per request, not twice;
  *  - a rate limit per route, spendable from outside via charge() so a
  *    consumer's own pre-dispatch refusals are not free.
  *
@@ -19,8 +23,9 @@
  *   ntdst_rest('shop/v1')
  *       ->defaults(['permission' => 'logged_in'])
  *       ->cors(['https://app.example.com'])
- *       ->get('/orders', [$c, 'index'], ['permission' => 'public'])
- *       ->post('/orders', [$c, 'store'], ['args' => [...]])
+ *       ->get('/prices', [$c, 'prices'])->public()
+ *       ->get('/orders', [$c, 'index'])
+ *       ->post('/orders', [$c, 'store'], ['permission' => 'edit_shop_orders', 'args' => [...]])
  *       ->delete('/orders/(?P<id>\d+)', [$c, 'destroy'], ['permission' => 'manage_options']);
  */
 
@@ -30,6 +35,20 @@ final class NTDST_Rest
 {
     /** Options this class consumes; everything else goes to WP verbatim. */
     private const OWN = ['permission', 'rate_limit', 'rate_window'];
+
+    /**
+     * The two postures WordPress can already name for itself.
+     *
+     * They are the functions THEMSELVES, not closures over them, because
+     * rest_get_server()->get_routes() is the only place a site can read back
+     * what it published — and a closure there is opaque, so "is anything on
+     * this site anonymous?" stops being a question code can answer.
+     */
+    private const INTERNAL  = 'is_user_logged_in';
+    private const ANONYMOUS = '__return_true';
+
+    /** The verbs that mutate. None of them opens on a shorthand. */
+    private const WRITE = ['POST', 'PUT', 'PATCH', 'DELETE'];
 
     /** Options this class used to accept, mapped to what replaced them. */
     private const RETIRED = [
@@ -54,6 +73,18 @@ final class NTDST_Rest
     private array $defaults = [];
 
     /**
+     * The declaration this wrapper queued most recently and has not registered
+     * yet — the one thing ->public() is allowed to reach back and change.
+     *
+     * One slot, per wrapper. Per wrapper rather than global because two modules
+     * declare in the same request and one namespace's public() must never
+     * publish another's pending route; one slot rather than a stack because
+     * public() marks the declaration it FOLLOWS and nothing else, so there is
+     * never a second candidate to choose between.
+     */
+    private ?object $pending = null;
+
+    /**
      * Declared limits, so charge() can bill a route without the caller
      * restating numbers it already wrote down.
      *
@@ -70,12 +101,18 @@ final class NTDST_Rest
      * registrations, so without this, "is anything on this site reachable
      * anonymously?" stops being a question code can answer.
      *
-     * DECLARED, not resolved — and that distinction is the point. A closure
+     * A closure is never resolved away, and that is the point. A closure
      * permission is opaque: `fn() => true` and a real capability check have the
      * same type. Filing a closure as merely "not public" would let a site's own
      * "nothing is anonymous" test pass over a wide-open route, which is worse
      * than no introspection at all. Closures are recorded as `callable` and
      * surfaced by `opaqueSurface()` so they must be answered for, not skipped.
+     *
+     * The two shorthands ARE normalized, because there the resolution loses
+     * nothing: 'public' and ->public() are one posture and file as `public`,
+     * absent and 'logged_in' are one posture and file as `logged_in`. Leaving
+     * an unnamed route unfiled would hide it, and filing it as `callable` would
+     * bill a knowable route to the list of ones somebody still has to read.
      *
      * @var array<string, array{namespace: string, route: string, methods: list<string>, permission: string}>
      */
@@ -183,9 +220,39 @@ final class NTDST_Rest
         return $this->route($route, 'DELETE', $handler, $options);
     }
 
-    /** Signature shell only — T04's split RED asserts the behaviour. */
+    /**
+     * Publish the declaration this call follows. The ONE way to anonymous.
+     *
+     * It marks a PENDING declaration, so it works only before rest_api_init:
+     * once the registration has run, WordPress holds the route and its callback
+     * cannot be swapped behind it. With nothing left to mark, this refuses out
+     * loud rather than returning quietly — the silent version leaves an author
+     * believing a route is open when it is internal, or the reverse, and only
+     * one of those two mistakes is discovered by using the site.
+     *
+     * A write verb stays unpublishable: registerOne() refuses it, because
+     * "anyone may write" is the threat itself and not an exception to it.
+     *
+     * Returns $this even when it refuses, so a consumer's chain cannot fatal.
+     */
     public function public(): self
     {
+        if ($this->pending === null || did_action('rest_api_init')) {
+            $this->refuse(
+                '(public)',
+                '-',
+                'public() found no pending route to mark — chain it directly onto the verb it belongs to, before rest_api_init',
+            );
+
+            return $this;
+        }
+
+        $this->pending->options['permission'] = 'public';
+
+        // Cleared, so public() reaches exactly one declaration: not the route
+        // declared after it, and not the same one a second time.
+        $this->pending = null;
+
         return $this;
     }
 
@@ -194,37 +261,74 @@ final class NTDST_Rest
      */
     public function route(string $route, string $methods, $handler, array $options = []): self
     {
-        $register = fn () => $this->registerOne($route, $methods, $handler, $options + $this->defaults);
+        // After rest_api_init the hook never fires again, so the declaration has
+        // to register now — and nothing is left pending for public() to mark.
+        if (did_action('rest_api_init')) {
+            $this->pending = null;
+            $this->registerOne($route, $methods, $handler, $options + $this->defaults);
 
-        // Before rest_api_init, register_rest_route() is _doing_it_wrong; after
-        // it, the hook never fires again.
-        did_action('rest_api_init') ? $register() : add_action('rest_api_init', $register);
+            return $this;
+        }
+
+        // Before it, register_rest_route() is _doing_it_wrong, so the
+        // declaration waits — and it waits as a MUTABLE holder rather than a
+        // closed-over array, because that is the whole mechanism behind
+        // public(): it reaches back into the declaration it follows and changes
+        // its permission before the registration runs.
+        //
+        // $this->defaults is still merged at FLUSH time, so a namespace default
+        // declared after a route still reaches it. The holder's own permission
+        // wins, which is what makes ->public() beat defaults(['permission' =>
+        // 'logged_in']) rather than lose to it.
+        $declaration   = (object) ['options' => $options];
+        $this->pending = $declaration;
+
+        add_action('rest_api_init', function () use ($route, $methods, $handler, $declaration): void {
+            $this->registerOne($route, $methods, $handler, $declaration->options + $this->defaults);
+        });
 
         return $this;
     }
 
     /**
-     * Resolve the 'permission' option to a callable, or null if unusable.
+     * Resolve the 'permission' option to what WordPress will be handed, or null
+     * when the option was declared and is unusable.
      *
-     * 'public'    → open, and said out loud rather than implied by omission
-     * 'logged_in' → any authenticated user
-     * anything else that is a string → treated as a capability
+     * absent       → 'is_user_logged_in' — internal is the default posture
+     * 'logged_in'  → 'is_user_logged_in'
+     * 'public'     → '__return_true'
+     * a capability → fn(): bool => current_user_can($cap)
+     * a callable   → as given
+     *
+     * The two shorthands resolve to the core functions as STRINGS (see the
+     * INTERNAL/ANONYMOUS constants). A capability is the one case that must be
+     * a closure, because core has no function that names it — so a capability
+     * route is opaque in get_routes() and the surface registry says so.
      */
-    private function permission(mixed $permission): ?callable
+    private function permission(mixed $permission): mixed
     {
-        if (is_callable($permission)) {
-            return $permission;
+        // Absent is no longer a mistake; it is the internal default. This one
+        // line is the permission default of every route in this package.
+        if ($permission === null) {
+            return self::INTERNAL;
         }
 
-        if (!is_string($permission) || $permission === '') {
-            return null;
+        if (is_string($permission) && $permission !== '') {
+            return match ($permission) {
+                'public'    => self::ANONYMOUS,
+                'logged_in' => self::INTERNAL,
+                // A capability slug and a typo'd function name are
+                // byte-identical, so an unrecognised string becomes a
+                // capability check — false for everyone, rather than true for
+                // anyone.
+                default     => is_callable($permission) ? $permission : static fn (): bool => current_user_can($permission),
+            };
         }
 
-        return match ($permission) {
-            'public'    => '__return_true',
-            'logged_in' => static fn (): bool => is_user_logged_in(),
-            default     => static fn (): bool => current_user_can($permission),
-        };
+        // Declared and unusable: true, 1, an options-shaped array. `true` is
+        // the dangerous one — it reads like "allowed" and would recreate the
+        // fail-open if it were passed through.
+        return is_callable($permission) ? $permission : null;
     }
 
     /**
@@ -232,10 +336,31 @@ final class NTDST_Rest
      */
     private function registerOne(string $route, string $methods, $handler, array $options): void
     {
-        $permission = $this->permission($options['permission'] ?? null);
+        $declared   = $options['permission'] ?? null;
+        $permission = $this->permission($declared);
 
         if ($permission === null) {
-            $this->refuse($route, $methods, '"permission" is required — a callable, a capability, "logged_in" or "public"');
+            $this->refuse($route, $methods, '"permission" must be a callable, a capability, "logged_in" or "public"');
+
+            return;
+        }
+
+        // A shorthand is a POSTURE, not a gate — both name a core function that
+        // holds nobody to anything in particular.
+        $shorthand = $permission === self::INTERNAL || $permission === self::ANONYMOUS;
+
+        // On a site with open registration "logged in" is "anyone", so an
+        // unnamed write endpoint is world-writable, and ->public() on one is
+        // that threat said out loud. The rule is about the RESOLVED posture, not
+        // the spelling: absent, 'logged_in', 'public', a namespace default and
+        // ->public() all land here. It refuses rather than registering a denying
+        // callback, because a route that was never handed to WordPress cannot be
+        // reached by a filter somebody removes later.
+        if ($shorthand && array_intersect($this->verbs($methods), self::WRITE) !== []) {
+            $this->refuse($route, $methods, sprintf(
+                'a write verb must name a capability or hand over its own callable — "%s" is not a gate',
+                $permission === self::ANONYMOUS ? 'public' : 'logged_in',
+            ));
 
             return;
         }
@@ -272,21 +397,36 @@ final class NTDST_Rest
             ];
         }
 
+        // A shorthand goes to WordPress as the string itself, so get_routes()
+        // stays readable — but only on a route with no rate_limit: a core
+        // function has no side effect worth memoizing, while a budget still has
+        // to be spent, so a limited route registers the guard() closure as
+        // before and trades that readability for the limiter.
+        $literal = $shorthand && ($options['rate_limit'] ?? null) === null;
+
         register_rest_route($this->namespace, $route, array_diff_key($options, array_flip(self::OWN)) + [
             'methods'             => $methods,
             'callback'            => $handler,
-            'permission_callback' => $this->guard($permission, $route, $methods, $options),
+            'permission_callback' => $literal ? $permission : $this->guard($permission, $route, $methods, $options),
         ]);
 
         // Recorded HERE, below every refusal path: a route the wrapper turned
         // away never registered, and must not read as surface.
-        $declared = $options['permission'] ?? null;
-
+        //
+        // A shorthand is filed by its RESOLVED posture, so the default and its
+        // spelled-out twin are one entry type — and so an unnamed route reads as
+        // 'logged_in' rather than joining the closures under 'callable', which
+        // would report a knowable route as unknowable.
         self::$surface[$this->key($route, $methods)] = [
             'namespace'  => $this->namespace,
             'route'      => $route,
-            'methods'    => array_map('strtoupper', array_map('trim', explode(',', $methods))),
-            'permission' => is_string($declared) && $declared !== '' ? $declared : 'callable',
+            'methods'    => $this->verbs($methods),
+            'permission' => match (true) {
+                $permission === self::ANONYMOUS          => 'public',
+                $permission === self::INTERNAL           => 'logged_in',
+                is_string($declared) && $declared !== '' => $declared,
+                default                                  => 'callable',
+            },
         ];
     }
 
@@ -403,7 +543,7 @@ final class NTDST_Rest
     {
         $limit  = $options['rate_limit'] ?? null;
         $window = (int) ($options['rate_window'] ?? 60);
-        $verbs  = array_map('strtoupper', array_map('trim', explode(',', $methods)));
+        $verbs  = $this->verbs($methods);
 
         return $this->memoize(function ($request) use ($permission, $limit, $window, $route, $verbs) {
             $allowed = $permission($request);
@@ -446,9 +586,17 @@ final class NTDST_Rest
      */
     private function key(string $route, string $methods): string
     {
-        $verbs = array_map('strtoupper', array_map('trim', explode(',', $methods)));
+        return $this->namespace . '|' . $route . '|' . implode(',', $this->verbs($methods));
+    }
 
-        return $this->namespace . '|' . $route . '|' . implode(',', $verbs);
+    /**
+     * WP's methods option ('GET', or 'GET,POST') as normalized verbs.
+     *
+     * @return list<string>
+     */
+    private function verbs(string $methods): array
+    {
+        return array_map('strtoupper', array_map('trim', explode(',', $methods)));
     }
 
     /**
