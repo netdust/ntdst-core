@@ -1,0 +1,138 @@
+# core-trim — tasks
+
+Plan: `specs/core-trim/plan.md` · Spec: `specs/core-trim/spec.md` (rev 2) · Invariants: `ARCHITECTURE-INVARIANTS.md`
+
+Repos: **CORE** = `~/Sites/ntdst-core` (T01–T10, T13), on `feat/core-shape` after `field-types` has landed. **STRIDE** = `~/Sites/stride`, branch `chore/core-trim` off `staging` (T11), never merged by this plan. **DAAN** = `~/Sites/daan`, the existing branch `chore/core-path-repo` (T12), never merged.
+
+Every CORE task closes with `cd ~/Sites/ntdst-core && composer gate` exit 0 and one atomic commit staged by pathspec (never `git add -A`). A task that removes a symbol adds it to `bin/guard.sh` and to `tests/Unit/PackageBootIntegrityTest.php::removedSymbolProvider()` with `'5.0.0'` in the same commit.
+
+---
+
+### Cluster A — Bootstrap loads nothing by guessing (CORE)
+
+Stakes: high — this changes how every consumer's services are loaded and removes the only switch that could keep one off; a wrong refusal is a site down at boot, a wrong acceptance loads code nobody listed.
+
+Behaviour: Bootstrap registers exactly the classes the consumer listed and PHP can already resolve — loaded by require_once, Composer, or any autoloader — and refuses an unresolvable one loudly, reading no file and deriving no path.
+Observable: on daan's DDEV, `ddev exec wp eval 'new NTDST_Bootstrap(["services" => ["core" => ["Nope\\Missing"]]])->register();' 2>&1 | grep -c 'Nope\\Missing'` prints `1`, and `ddev exec wp eval 'var_dump(ntdst_get(\daan\services\musician\ProfileService::class) instanceof \daan\services\musician\ProfileService);'` prints `bool(true)` (daan-core loads by require_once, no Composer map).
+RED until: tests/Unit/BootstrapResolvesOnlyLoadedClassesTest.php
+
+- [ ] T01 — register(): class_exists() or a loud refusal; discovery and path-guessing deleted [Tier A]  (files: core/Bootstrap.php, tests/Unit/BootstrapResolvesOnlyLoadedClassesTest.php, tests/Unit/BootstrapNamespacePathTest.php, tests/Unit/BootstrapWithoutSectorsTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
+  Satisfies: FR-1, SC-1
+  Test-author: split
+  Proven by: new test
+  Unit test: `new NTDST_Bootstrap(['services' => ['core' => ['Nope\\Missing']]])->register()` — with `_doing_it_wrong` captured through Brain Monkey `Functions\expect()` — produces exactly 1 call whose message contains `Nope\Missing` and `services.core`, and `Functions\expect('file_get_contents')->never()`, `Functions\expect('glob')->never()` both hold; a class declared inline in the test file (no autoloader, plain PHP) listed under `services.core` registers (`ntdst_get()` returns an instance after `bootFeatures()`); a config carrying `'auto_discover' => true, 'discovery_paths' => [sys_get_temp_dir()]` with a planted `ProbeService.php` in that directory registers 0 services from it and reads 0 files; `register()` called twice emits the refusal once (re-entry). `BootstrapNamespacePathTest.php` is deleted (it pinned the path-guessing); `BootstrapWithoutSectorsTest::testABootWithDiscoveryOffScansNoThemeDirectory` is re-pointed to "no directory is scanned whatever the config says". `ReflectionClass(NTDST_Bootstrap)` has no method named `discoverServices`, `discoverServicesInPath`, `getClassNameFromFile`, `isInConditionalConfig`. `removedSymbolProvider()` gains `discoverServices`, `getClassNameFromFile`, `auto_discover`, `discovery_paths` (`5.0.0`).
+
+- [ ] T02 — the enable switch goes; overrides keep one renamed filter and refuse a typo [Tier A]  (files: core/Bootstrap.php, tests/Unit/BootstrapServiceSlugTest.php, tests/Unit/BootstrapOverridesTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
+  Satisfies: FR-2
+  Test-author: split
+  Proven by: new test
+  Unit test: a service whose `metadata()` returns `['enabled' => false]` is not registered; a `conditional` entry whose condition returns false is not registered; with `Functions\expect('get_option')->never()` and `Filters\expectApplied('ntdst_service_security_enabled')->never()`, a service with no `enabled` key registers — there is no third switch; with `services.overrides.security => ['hide_wp_version' => true]` and a registered class whose slug derives to `security`, `Filters\expectApplied('ntdst/service/security/config')` receives defaults and returns them merged with the override, and `Filters\expectApplied('ntdst_service_security_config')->never()`; with `services.overrides.typo => []` and no service deriving to `typo`, `register()` emits exactly 1 `_doing_it_wrong` whose message contains `services.overrides.typo`; `BootstrapServiceSlugTest::testADeclaredNamePinsTheEnabledFilterAndItsOption` is rewritten to pin the config filter name only. `ReflectionClass(NTDST_Bootstrap)` public methods are exactly `__construct`, `register`, `bootCore`, `bootFeatures`, `config`. `removedSymbolProvider()` gains `ntdst_service_`, `getServiceConfig`, `getBootedServices`, `hasService`, `isBooted` (`5.0.0`), with `README.md` as the `exceptPath` for the migration rows.
+
+- [ ] T03 — Logger loads first; every function_exists guard on a core helper is deleted [Tier B]  (files: ntdst-core.php, api/Data.php, api/Rest.php, admin/MetaboxGenerator.php, services/Mailer.php, core/Theme.php, services/Logger.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
+  Satisfies: FR-3, SC-2
+  Test-author: solo — loader order and guard removal, no authorization semantics; `bin/guard.sh` carries the check
+  Proven by: machine gate — `bin/guard.sh` asserts `grep -c "function_exists('ntdst_" api/*.php core/*.php admin/*.php services/*.php` = 0 and that `require_once … services/Logger.php` precedes `require_once … api/FieldTypes.php` in `ntdst-core.php`; `PackageBootIntegrityTest::testEveryFileInTheLoaderListParsesAndDefinesItsSymbols` still passes with the new order
+  Unit test: none beyond the existing loader-list test — the guard is the assertion (Tier B).
+
+Integration gate: `cd ~/Sites/ntdst-core && composer gate && cd ~/Sites/daan && git checkout chore/core-path-repo && ddev composer update netdust/ntdst-core && ddev exec wp eval 'var_dump(ntdst_get(\daan\services\musician\ProfileService::class) instanceof \daan\services\musician\ProfileService);' && ddev exec wp eval 'new NTDST_Bootstrap(["services" => ["core" => ["Nope\\Missing"]]])->register();' 2>&1 | grep -c 'Nope\\Missing' && curl -s -o /dev/null -w '%{http_code}\n' https://daan.ddev.site/ && tail -50 web/app/logs/debug.log | grep -c "Notice\|Warning" ` — expected `bool(true)`, `1`, `200`, `0`.
+
+── REVIEW GATE ── *(provisional tier: FULL — reviewer + security-sentinel + invariant-auditor + code-simplicity)*
+
+---
+
+### Cluster B — one query API, one logger, one hook spelling (CORE)
+
+Stakes: standard — deletions and a rename; the risk is a daan listener left silently inert, which T06 pins by name and T12 renames.
+
+- [ ] T04 — Data: the second query API and the term helpers go; the model's public surface is pinned [Tier A]  (files: api/Data.php, tests/Unit/DataSurfaceTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
+  Satisfies: FR-4, SC-3
+  Test-author: solo — cluster stakes standard; deletions pinned by a surface test, no new behaviour
+  Proven by: new test
+  Unit test: `ReflectionClass(NTDST_Data_Manager)` static public methods are exactly `addScope`, `getScope`; instance public methods exactly `register`, `registerTaxonomy`, `get`, `isRegistered`; `function_exists('ntdst_get_formatted_posts')` is false; `ReflectionClass(NTDST_Data_Model)` has no method named `attachTerms`, `syncTerms`, `detachTerms`, `whereDate`, `orWhere`; the model's public non-chain, non-CRUD methods are exactly `getSchema`, `getMetaPrefix`, `restFields`, `registerRestMeta` (the list the field-types spec pinned, unchanged); `->withMeta()->withTerms()->get()` on a model still returns rows carrying `meta` and `terms` keys (Brain Monkey `WP_Query` stub with 1 post). `removedSymbolProvider()` gains `getFormattedPosts`, `ntdst_get_formatted_posts`, `getPostTerms`, `attachTerms`, `syncTerms`, `detachTerms`, `whereDate`, `orWhere` (`5.0.0`).
+
+- [ ] T05 — Logger: channels, levels, file and error_log; the database half and the handler API go [Tier A]  (files: services/Logger.php, tests/Unit/LoggerSurfaceTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
+  Satisfies: FR-5, SC-3
+  Test-author: solo — cluster stakes standard; removal pinned by a surface test plus one kept-behaviour test
+  Proven by: new test
+  Unit test: constructing `new NTDST_Logger('probe')` with `Functions\expect('ntdst_data')->never()` and `Functions\expect('register_post_type')->never()` holds (no `log_entry` post type); `ReflectionClass(NTDST_Logger)` public methods are exactly `__construct`, `flushBatchedLogs`, `flush`, `debug`, `info`, `warning`, `error`, `critical`; `function_exists()` is false for `ntdst_log_debug`, `ntdst_log_info`, `ntdst_log_error`; `Filters\expectApplied('ntdst_log_database_enabled')->never()` and `Actions\expectDone('ntdst_log')->never()` hold across one `->error('x')`; after `->error('probe', ['k' => 'v'])` and `flushBatchedLogs()`, the file `WP_CONTENT_DIR/logs/probe-<Y-m-d>.log` (temp dir in the test) contains one line ending `probe.ERROR: probe {"k":"v"}`; `error_log` is called once for that error (`Functions\expect('error_log')->once()`) and never for `->info()`. `removedSymbolProvider()` gains `log_entry`, `ntdst_log_database_enabled`, `addHandler`, `removeHandler`, `setMinLevel`, `setBatchingEnabled`, `ntdst_log_debug`, `ntdst_log_info`, `ntdst_log_error` (`5.0.0`).
+
+- [ ] T06 — the six model hooks are spelled ntdst/model/* [Tier A]  (files: api/Data.php, tests/Unit/DataModelHooksTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
+  Satisfies: FR-11, SC-4
+  Test-author: solo — cluster stakes standard; a rename pinned by hook-name assertions
+  Proven by: new test
+  Unit test: with `wp_insert_post`/`wp_update_post`/`wp_delete_post` stubbed to succeed, `create([...])` fires `Actions\expectDone('ntdst/model/creating')->once()->with($type, $data)` then `ntdst/model/created` with `($type, $post_id, $data)`; `update($id, [...])` fires `ntdst/model/updating` then `ntdst/model/updated` with `($type, $id, $data)`; `delete($id)` fires `ntdst/model/deleting` then `ntdst/model/deleted` with `($type, $id)`; `Actions\expectDone('ntdst_model_create_before')->never()` (and the other five old names) hold; `bin/guard.sh` gains `grep -rn "do_action('ntdst_\|apply_filters('ntdst_\|do_action(\"ntdst_\|apply_filters(\"ntdst_" api core admin services` = 0 lines — this line goes RED at T06 if T02/T05 left any `ntdst_` hook and GREEN only once all three have landed, so it is added here, last in the cluster. `removedSymbolProvider()` gains `ntdst_model_create_before`, `ntdst_model_create_after`, `ntdst_model_update_before`, `ntdst_model_update_after`, `ntdst_model_delete_before`, `ntdst_model_delete_after` (`5.0.0`).
+
+Integration gate: `cd ~/Sites/ntdst-core && composer gate && grep -rn "do_action('ntdst_\|apply_filters('ntdst_" api core admin services | wc -l` — expected `0`.
+
+── REVIEW GATE ── *(provisional tier: STANDARD — reviewer + code-simplicity)*
+
+---
+
+### Cluster C — the surface sweep (CORE)
+
+Stakes: standard — removals; the two behaviours that must survive are stride's reminders (T11 re-creates them with WordPress) and stride's mail (T11 receives the class).
+
+- [ ] T07 — Container keeps set/get/has; RelationField stops claiming to be a service [Tier A]  (files: core/Container.php, admin/RelationField.php, tests/Unit/ContainerSurfaceTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
+  Satisfies: FR-6, FR-10, SC-3
+  Test-author: solo — cluster stakes standard; removal pinned by a surface test plus the kept autowiring
+  Proven by: new test
+  Unit test: `ReflectionClass(NTDST_Container)` public methods are exactly `__construct`, `set`, `get`, `has`; `function_exists('ntdst_make')` is false; `function_exists()` is true for `ntdst_container`, `ntdst_set`, `ntdst_get`; `ntdst_set(Probe::class)` then `ntdst_get(Probe::class)` twice returns the same instance whose constructor dependency (`ProbeDep`) was autowired; `ReflectionClass(NTDST_Container)` has no property `callableReflections`; `ReflectionClass(NTDST_RelationField)` has no method `metadata` and does not implement `NTDST_Service_Meta`. Every existing test that called `flush()`/`forget()`/`make()`/`call()` (found by `grep -rlE "->(flush|forget|make|call)\(|ntdst_make" tests/`) is rewritten to construct a fresh `NTDST_Container` instead. `removedSymbolProvider()` gains `ntdst_make`, `callableReflections` (`5.0.0`); `make`, `call`, `forget`, `flush`, `keys` are too generic for the scanner — `bin/guard.sh` pins them as `grep -c "function make\|function call\|function forget\|function flush\|function keys" core/Container.php` = 0.
+
+- [ ] T08 — Scheduler leaves the package [Tier B]  (files: services/Scheduler.php, tests/Unit/SchedulerTest.php, tests/bootstrap.php, ntdst-core.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
+  Satisfies: FR-7, SC-3
+  Test-author: solo — cluster stakes standard; file deletion pinned by the loader-list test and the removed-symbol scanner
+  Proven by: machine gate — `composer gate` (the loader-list test fails if `ntdst-core.php` or `tests/bootstrap.php` still names the file; the scanner fails if any shipped file names `NTDST_Scheduler`)
+  Unit test: none new — `SchedulerTest.php` is deleted with the class; `removedSymbolProvider()` gains `NTDST_Scheduler`, `ntdst_scheduler`, `ntdst_schedule_recurring`, `ntdst_clear_recurring` (`5.0.0`) and that existing test is the assertion (Tier B).
+
+- [ ] T09 — Theme loses mixin(), __call(), when(), templatePath(); on()/filter() stay [Tier A]  (files: core/Theme.php, tests/Unit/ThemeTrimTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
+  Satisfies: FR-8, SC-3
+  Test-author: solo — cluster stakes standard; removal pinned by a surface test; the kept pair tested through the hooks they register
+  Proven by: new test
+  Unit test: `ReflectionClass(NTDST_Theme)` has no method `__call`, `mixin`, `when`, `templatePath`, and no property `mixins`; `on('init', $cb, 5, 2)` results in `has_action('init', $cb) === 5` and `filter('the_title', $cb2)` in `has_filter('the_title', $cb2) === 10` (Brain Monkey hook stubs); constructing `new NTDST_Theme([])` calls none of `ntdst_data`, `ntdst_pages`, `ntdst_response`, `ntdst_log`, `ntdst_mail` (`Functions\expect(...)->never()` for each); calling `$theme->pages()` throws `Error` (undefined method) — this replaces core-shape T12's mixin-proxy assertion if that test already exists (plan `## Sequencing note`). `removedSymbolProvider()` gains `wireMixins`, `templatePath` (`5.0.0`); `bin/guard.sh` pins `grep -c "function __call\|function mixin\|function when" core/Theme.php` = 0.
+
+- [ ] T10 — Mailer leaves core [Tier B]  (files: services/Mailer.php, ntdst-core.php, tests/bootstrap.php, core/Theme.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php, README.md)
+  Satisfies: FR-9 (core half)
+  Test-author: solo — file deletion pinned by the loader-list test and the removed-symbol scanner
+  Proven by: machine gate — `composer gate`; `grep -rn "ntdst_mail\|NTDST_Mailer\|ntdst_send_queued_mail\|ntdst_notify" api core admin services ntdst-core.php` = 0 lines
+  Unit test: none new — `removedSymbolProvider()` gains `NTDST_Mailer`, `ntdst_mail`, `ntdst_send_mail`, `ntdst_notify`, `ntdst_wrap_email_in_layout`, `ntdst_send_queued_mail`, `ntdst_notification`, `ntdst_mail_before_send`, `ntdst_mail_sent`, `ntdst_mail_template_paths`, `ntdst_mail_attachment_bases`, `ntdst_email_layout_paths`, `ntdst_wrap_all_emails` (`5.0.0`, `README.md` as `exceptPath`), and the scanner is the assertion (Tier B). README's 5.0.0 section gains the row `ntdst_mail()` → `new \Netdust\Mail\Mailer()` (netdust-mail ≥ the T11 commit) so the scanner's README exception has something to point at.
+
+Integration gate: `cd ~/Sites/ntdst-core && composer gate && ls services/ && grep -c "require_once" ntdst-core.php` — expected `services/` lists only `Logger.php`, and the require count equals the loader-list test's count.
+
+── REVIEW GATE ── *(provisional tier: STANDARD — reviewer + code-simplicity)*
+
+---
+
+### Cluster D — consumers, docs, invariants (STRIDE branch · DAAN branch · CORE)
+
+Stakes: standard — adapt commits on never-merged branches and the fleet's migration record; a missed row is a fatal somebody meets later, which README + the scanner are there to prevent.
+
+- [ ] T11 — stride adapts: Mailer moves into netdust-mail; reminders on two WordPress lines; config filter and repository docblocks renamed [Tier A]  (files: ../stride/web/app/plugins/netdust-mail/src/Mailer.php, ../stride/web/app/plugins/netdust-mail/src/MailService.php, ../stride/web/app/plugins/netdust-mail/tests/Unit/MailerTest.php, ../stride/web/app/mu-plugins/stride-core/Modules/Reminder/GateReminderService.php, ../stride/web/app/themes/stridence/services/SecurityService.php, ../stride/web/app/themes/stridence/services/PerformanceService.php, ../stride/web/app/mu-plugins/stride-core/Infrastructure/AbstractRepository.php)
+  Satisfies: FR-7, FR-9 (plugin half), FR-11, SC-5
+  Test-author: solo — a move and four renames; the plugin's own unit test pins the kept Mailer contract
+  Proven by: new test
+  Unit test: in netdust-mail's suite (ground-truth the runner from `web/app/plugins/netdust-mail/composer.json` before trusting this line — stride is the legacy Codeception stack and the plugin may carry its own phpunit), `(new \Netdust\Mail\Mailer())->to('a@b.c')->subject('s')->message('<p>x</p>', true)->attach('/tmp/f.txt')->send()` calls `wp_mail` once with `['a@b.c']`, `'s'`, a body containing `<p>x</p>`, headers containing `Content-Type: text/html`, and `['/tmp/f.txt']`, returning `wp_mail`'s bool; `->to([])->send()` returns false without calling `wp_mail`; `ReflectionClass(\Netdust\Mail\Mailer)` public methods are exactly `to`, `cc`, `bcc`, `subject`, `from`, `message`, `template`, `attach`, `send` — no `queue`, `toArray`, `header`. `MailService.php:256` reads `new Mailer()`; `GateReminderService::init()` reads `if (!wp_next_scheduled('stride_gate_reminders')) { wp_schedule_event(time(), 'daily', 'stride_gate_reminders'); } add_action('stride_gate_reminders', [$this, 'run']);`; `SecurityService.php:60` and `PerformanceService.php:39` apply `ntdst/service/security/config` and `ntdst/service/performance/config`; `AbstractRepository.php` docblocks no longer name `getFormattedPosts()`. One commit on `chore/core-trim` (off `staging`), pathspecs only; stride's own suite (ground-truthed: `composer test` or `vendor/bin/codecept run unit` — read `composer.json`) exits 0.
+
+- [ ] T12 — daan adapts: ProfileService on the chain; PressKitService on the new hook names [Tier A]  (files: ../daan/web/app/mu-plugins/daan-core/services/musician/ProfileService.php, ../daan/web/app/mu-plugins/daan-core/services/musician/PressKitService.php, ../daan/tests/Unit/ProfileServiceChainTest.php)
+  Satisfies: FR-4, FR-11, SC-5, SC-6
+  Test-author: solo — two call-site rewrites pinned by daan's own unit test
+  Proven by: new test
+  Unit test: in daan's suite (Brain Monkey; runner ground-truthed from `~/Sites/daan/composer.json` — `composer gate` is expected), `ProfileService::getProfile()` with a stubbed model whose `->where('ID', $id)->withMeta()->first()` returns a row with `meta['stage_name']` yields the same array shape the old `ntdst_get_formatted_posts()` path produced (`['ID' => …, 'meta' => […]]`), and `Functions\expect('ntdst_get_formatted_posts')->never()` holds; `PressKitService::__construct()` registers `has_action('ntdst/model/created', [$svc, 'pruneEmptyCollections']) === 10` and the same for `ntdst/model/updated`, and `has_action('ntdst_model_create_after', …) === false`. One commit on `chore/core-path-repo`, pathspecs only; `cd ~/Sites/daan && composer gate` exits 0 (its 8 known reds unchanged, counted before and after).
+
+- [ ] T13 — README migration table, philosophy §4 fixed, INV-9 + INV-10 with bin/zero-readers.sh [Tier B]  (files: README.md, docs/philosophy.md, ARCHITECTURE-INVARIANTS.md, bin/zero-readers.sh, bin/guard.sh)
+  Satisfies: FR-12, SC-7, SC-8
+  Test-author: solo
+  Proven by: machine gate — `bash bin/zero-readers.sh | wc -l` = 0; the INV-10 grep = 0; `grep -c "^| " README.md` between the `#### core-trim` heading and the next `###` ≥ 30 rows; `PackageBootIntegrityTest` (README scanned outside `## Versions`) passes
+  Unit test: none (Tier B). `bin/zero-readers.sh`: for every `public function NAME` / `function ntdst_NAME` / quoted `ntdst/…` hook in `api core admin services support`, count occurrences across `api core admin services support ntdst-core.php` excluding the defining file plus the consumer roots `../daan/web/app/mu-plugins/daan-core ../daan/web/app/themes/daan ../josworld/app/content/mu-plugins/josworld-core ../josworld/app/content/themes/josworld ../stride/web/app/mu-plugins/stride-core ../stride/web/app/plugins/netdust-lti ../stride/web/app/plugins/netdust-mail ../stride/web/app/themes/stridence ../todai-client/web/app/mu-plugins/todai-core ../todai-client/web/app/themes/todai-child ../netdust/web/app/mu-plugins/netdust-core ../netdust/web/app/themes/netdust` (vendor and tests excluded); print `file:NAME` for each 0 count; a missing consumer root is skipped with a note to stderr, never an error. `docs/philosophy.md` §4: the `ntdst_service_{slug}_enabled` fail-open paragraph is replaced by one sentence saying the switch was removed in 5.0.0 (core-trim FR-2). `ARCHITECTURE-INVARIANTS.md` gains INV-9 and INV-10 in the doc's existing shape (statement · convergence point · bypass smell · mechanical check · status "holds (`<sha>`)"), and INV-1's text drops `restSubFields()` if field-types has not already done so.
+
+Integration gate: `cd ~/Sites/ntdst-core && composer gate && bash bin/zero-readers.sh | wc -l && grep -c "glob(\|file_get_contents(\|preg_match('/^\\\\s*namespace\|spl_autoload_register" core/Bootstrap.php; git diff --stat $(git merge-base HEAD main)..HEAD -- core services api/Data.php | tail -1` — expected `0`, `0`, and a deletions count ≥ 900 in the last line.
+
+── REVIEW GATE ── *(provisional tier: STANDARD — reviewer + code-simplicity + invariant-auditor)*
+
+---
+
+## [HUMAN] yield points
+
+- After Cluster A's review gate — Bootstrap's loading model changed (D2): confirm daan boots on the branch (AF-1/AF-2) before Cluster B starts; this is the one cluster with a boot-time blast radius.
+- Before T10 — `Mailer` leaves core and stride's mail depends on it; confirm stride's `chore/core-trim` branch is where the class lands (T11) and that stride stays pinned to `v3.0.0` until its own migration.
+- After T13 — the README table is the fleet's only migration record for ~45 removed symbols; confirm it has been read once by a human before the core-shape release task (T14 there) tags `v5.0.0`.
+- josworld is not adapted by this plan (spec revision 2): its `getPostMetaFromCache()` accessor predates this work and its `boolean` rename belongs to field-types' consumer task; confirm that is understood before anyone runs `composer update` there.
