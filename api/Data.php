@@ -386,6 +386,11 @@ class NTDST_Data_Model
      * filter, may tighten how a field is cleaned; it may not switch
      * wp_kses_post() off on a `html` field and post markup through REST
      * (threat row #6).
+     *
+     * An override must be IDEMPOTENT, like the entry it composes on:
+     * register_post_meta() runs this callback again on the value it has already
+     * cleaned, so one that appends or re-encodes grows the stored value on every
+     * write. It runs on the way IN only — a read casts, it does not re-sanitize.
      */
     private function sanitizerFor(string $field, mixed $config): \Closure
     {
@@ -436,7 +441,6 @@ class NTDST_Data_Model
             $seen[$key] = $name;
 
             $type = self::declaredType($config);
-            $entry = $this->typeFor($type, $where);
 
             if ($type === 'repeater') {
                 $this->assertRowTypes($field, is_array($config) ? ($config['sub_fields'] ?? null) : null, $at);
@@ -444,9 +448,10 @@ class NTDST_Data_Model
                 continue;
             }
 
-            if (!$entry->cell) {
+            if (!$this->typeFor($type, $where)->cell) {
                 throw new InvalidArgumentException(
-                    "{$where}: '{$type}' cannot be a repeater sub-field — it has no cell control.",
+                    "{$where}: '{$type}' cannot be a repeater sub-field — it has no cell control. "
+                    . "Use 'textarea' for a cell, or declare '{$type}' as a top-level field.",
                 );
             }
         }
@@ -486,9 +491,17 @@ class NTDST_Data_Model
     /**
      * The key a repeater cell is stored under: sanitize_key() of its name.
      *
-     * A name already inside sanitize_key()'s own character set IS its own key,
-     * so the common declaration answers without calling WordPress at all —
-     * which also keeps a model constructible before WordPress is loaded.
+     * A name already inside sanitize_key()'s own character set is its own key,
+     * so the ordinary declaration answers without calling WordPress — which is
+     * why a model can be constructed before WordPress is loaded (the collision
+     * check is not worth a hard dependency on load order).
+     *
+     * The caveat, stated rather than hidden: sanitize_key() is filterable. A
+     * plugin on the `sanitize_key` filter could map a clean name to something
+     * else, and this fast path would not see it — the collision check would then
+     * disagree with NTDST_FieldTypes::declarations(), which calls the filtered
+     * function. Nothing on the fleet filters it, and a filter that renames a
+     * clean key already breaks every stored row it touches.
      */
     private static function rowKey(string $name): string
     {
@@ -521,13 +534,10 @@ class NTDST_Data_Model
             return sanitize_text_field($value);
         }
 
-        $sanitizer = $this->sanitizers[$field];
-
-        if (is_callable($sanitizer)) {
-            return $sanitizer($value);
-        }
-
-        return $value;
+        // Always a Closure: setupSanitizers() binds every declared field
+        // through sanitizerFor(), so there is no "not callable" case to fall
+        // back from any more.
+        return ($this->sanitizers[$field])($value);
     }
 
     /**
@@ -1042,12 +1052,14 @@ class NTDST_Data_Model
             return new WP_Error('not_found', 'Post not found', ['status' => 404]);
         }
 
-        // Sanitize value based on this model's field schema — the same bound
-        // closure create()/update() use, so one write path cannot clean a field
-        // differently from another.
-        $fieldSchema = $this->schema[$key] ?? null;
-        if ($fieldSchema && is_array($fieldSchema)) {
-            $value = ($this->sanitizerFor($key, $fieldSchema))($value);
+        // The field's OWN bound closure — the one create(), update() and the
+        // REST registration all use. Read off `$this->sanitizers`, never rebuilt
+        // and never re-derived from the declaration: a field declared as a bare
+        // string (`'body' => 'html'`) is bound like any other, and this path used
+        // to store it raw. A key this model does not declare is not this model's
+        // to clean, and passes through untouched.
+        if (isset($this->sanitizers[$key])) {
+            $value = ($this->sanitizers[$key])($value);
         }
 
         $metaKey = $this->prefixMetaKey($key);
@@ -1079,10 +1091,9 @@ class NTDST_Data_Model
         $previousMeta = [];
 
         foreach ($data as $key => $value) {
-            // Get field schema for sanitization (schema IS the fields array)
-            $fieldSchema = $this->schema[$key] ?? null;
-            if ($fieldSchema && is_array($fieldSchema)) {
-                $value = ($this->sanitizerFor((string) $key, $fieldSchema))($value);
+            // The same bound closure updateMeta() uses, for the same reason.
+            if (isset($this->sanitizers[$key])) {
+                $value = ($this->sanitizers[$key])($value);
             }
 
             $metaKey = $this->prefixMetaKey($key);
@@ -1822,17 +1833,15 @@ class NTDST_Data_Model
     }
 
     /**
-     * Format meta according to schema — through the SAME vocabulary the write
-     * side asks, so a field reads back as the type it was declared as.
+     * Format meta according to schema — a READ, so it casts and decodes; it does
+     * not re-sanitize and it never looks anything up.
      *
-     * Every sanitizer is idempotent by constraint, so applying it to a stored
-     * value is safe: a `bool` stored as "1" reads back true, an `int` stored as
-     * "-3" reads back -3, and neither answer is a second type table's.
-     *
-     * Two shapes are storage, not value, and are decoded before the type is
-     * asked: a list kept as a JSON STRING (`json`/`relation`/`gallery` — the
-     * metabox has written that shape for years), and a repeater, whose rows may
-     * also be legacy-serialized.
+     * A stored value was already cleaned on the way in, by this same model's
+     * sanitizer. What a read owes is the declared PHP type — a `bool` stored as
+     * "1" reads back true, an `int` stored as "-3" reads back -3 — and the
+     * decoding of the shapes WordPress hands back as storage rather than as
+     * values. Cost is the reason it stops there: find() runs this once per row,
+     * so a 50-row withMeta() list must not buy 50 attachment lookups.
      *
      * Handles meta_prefix: looks up prefixed keys in raw meta,
      * returns unprefixed keys in formatted result.
@@ -1856,28 +1865,49 @@ class NTDST_Data_Model
             // Look up the prefixed key in meta, return unprefixed field name
             $metaKey = $this->meta_prefix . $field;
             $value = $meta[$metaKey] ?? $meta[$field] ?? null;
-            $type = self::declaredType($type_config);
-
-            if ($type === 'repeater') {
-                $formatted[$field] = $this->formatRepeaterField($value);
-
-                continue;
-            }
-
-            // A list kept as a JSON string is a storage format: decode it, then
-            // let the type answer. Asked raw, `relation` would read the whole
-            // string as one id.
-            if (in_array($type, ['json', 'relation', 'gallery'], true)) {
-                $value = $this->decodeArrayField($value);
-            }
-
-            $formatted[$field] = (NTDST_FieldTypes::get($type)->sanitize)(
-                $value,
-                is_array($type_config) ? $type_config : [],
-            );
+            $formatted[$field] = $this->readValue($type_config, $value);
         }
 
         return $formatted;
+    }
+
+    /**
+     * One stored value, read back as its declared type.
+     *
+     * INV-8 says every reader of a type name asks the registry, and this asks it
+     * — for the ENTRY, then keys on `->control`, which is the registry's own
+     * grouping (image and file are one `media`, array and json are one `json`).
+     * The five arms below are the declared **read-side storage decoding**
+     * exception to INV-8, recorded in README (T09), and they exist because a
+     * READ may not do what a WRITE does:
+     *
+     *   media    — `(int)`, never `sanitize`: the entry verifies the attachment
+     *              still exists, which is a lookup per field per row.
+     *   json     — decode only. The stored keys were sanitized on the way in,
+     *              and re-running sanitize_key() on a read can only rename them.
+     *   relation — decode, then intval. Same reason, plus absint() would flip a
+     *   gallery    stored negative and array_filter() would drop a stored 0.
+     *   repeater — its rows may be legacy-serialized; formatRepeaterField()
+     *              knows both shapes.
+     *   date     — as stored. Re-parsing a date on every read is strtotime()
+     *              per field, and the write side already refused a non-date.
+     *
+     * Everything else is a free cast — number, decimal, checkbox and the text
+     * family — and takes the registry's own sanitizer, which is idempotent by
+     * constraint and so cannot change a value this model stored.
+     */
+    private function readValue(mixed $config, mixed $value): mixed
+    {
+        $entry = NTDST_FieldTypes::get(self::declaredType($config));
+
+        return match ($entry->control) {
+            'repeater' => $this->formatRepeaterField($value),
+            'json' => $this->decodeArrayField($value),
+            'relation', 'gallery' => array_map('intval', $this->decodeArrayField($value)),
+            'media' => is_scalar($value) ? (int) $value : 0,
+            'date' => is_scalar($value) ? (string) $value : '',
+            default => ($entry->sanitize)($value, is_array($config) ? $config : []),
+        };
     }
 }
 
