@@ -30,9 +30,24 @@ final class DataRegistersRestMetaTest extends TestCase
         parent::setUp();
         Monkey\setUp();
 
-        foreach (['sanitize_text_field', 'sanitize_textarea_field', 'esc_url_raw', 'sanitize_email', 'wp_kses_post'] as $fn) {
-            Functions\when($fn)->returnArg(1);
+        // TAGGED stubs, not pass-throughs. T03 asks whether a registration
+        // carries the model's OWN sanitizer for that field, and a pass-through
+        // stub cannot answer: sanitize_text_field() and sanitize_textarea_field()
+        // would both return the probe unchanged, so the wrong wiring would pass.
+        // Each tag names the function that produced the value.
+        foreach ([
+            'sanitize_text_field'     => 'text',
+            'sanitize_textarea_field' => 'textarea',
+            'esc_url_raw'             => 'url',
+            'sanitize_email'          => 'email',
+            'wp_kses_post'            => 'html',
+        ] as $fn => $tag) {
+            Functions\when($fn)->alias(static fn($v) => $tag . ':' . trim((string) $v));
         }
+
+        // The model names absint() by string ('int' => 'absint'); nothing in
+        // this process defines it.
+        Functions\when('absint')->alias(static fn($v) => abs((int) $v));
     }
 
     protected function tearDown(): void
@@ -302,5 +317,471 @@ final class DataRegistersRestMetaTest extends TestCase
                 );
             }
         }
+    }
+
+    // ---------------------------------------------------------------- T03 --
+    // registerRestMeta(): what reaches register_post_meta(), and what never does.
+    //
+    // WordPress puts a `meta` object in a post type's /wp/v2 response only when
+    // BOTH halves hold: the type supports `custom-fields`, and the key was
+    // registered with show_in_rest. Both halves are asserted here — the
+    // per-field registration first, then the `supports` entry register() owes.
+    //
+    // A registration is a WRITE surface as much as a read one: a /wp/v2 meta
+    // write is admitted by the auth_callback and cleaned by the sanitize_callback
+    // of the registration itself. Those two callables are therefore asserted
+    // BEHAVIOURALLY — called, and judged on what they return — never merely for
+    // being callable.
+
+    /** @var list<array<int, mixed>> register_post_meta() calls, in order. */
+    private array $metaCalls = [];
+
+    /** @var list<array<int, mixed>> register_post_type() calls, in order. */
+    private array $postTypeCalls = [];
+
+    /** @var list<array<int, mixed>> current_user_can() calls, in order. */
+    private array $capChecks = [];
+
+    /** Record what registration actually asked WordPress to do. */
+    private function captureRegistrations(): void
+    {
+        $this->metaCalls = [];
+        $this->postTypeCalls = [];
+
+        Functions\when('register_post_meta')->alias(function (...$args) {
+            $this->metaCalls[] = $args;
+
+            return true;
+        });
+
+        Functions\when('register_post_type')->alias(function (...$args) {
+            $this->postTypeCalls[] = $args;
+
+            return new stdClass();
+        });
+
+        Functions\when('is_wp_error')->justReturn(false);
+        Functions\when('apply_filters')->returnArg(2);
+        Functions\when('do_action')->justReturn();
+    }
+
+    /**
+     * The brief's shape: three fields that opted in — one of them a repeater —
+     * and two that did not, one by silence and one by refusal.
+     *
+     * @return array<string, mixed>
+     */
+    private function declaredAndSilentFields(): array
+    {
+        return [
+            'venue'      => ['type' => 'text', 'show_in_rest' => true],
+            'capacity'   => ['type' => 'int', 'show_in_rest' => true],
+            'provenance' => [
+                'type' => 'repeater',
+                'show_in_rest' => true,
+                'sub_fields' => [
+                    'year' => ['type' => 'text', 'show_in_rest' => true],
+                    'lot'  => ['type' => 'int', 'show_in_rest' => true],
+                ],
+            ],
+            'promo_budget' => ['type' => 'float'],                          // silent
+            'reserve'      => ['type' => 'float', 'show_in_rest' => false], // refused
+        ];
+    }
+
+    /** @return list<string> the meta keys registration asked for, in order. */
+    private function metaKeys(): array
+    {
+        return array_map(
+            static fn(array $args): string => (string) ($args[1] ?? ''),
+            $this->metaCalls,
+        );
+    }
+
+    /**
+     * The one call that registered $metaKey — a second call for the same key is
+     * as wrong as none.
+     *
+     * @return array<int, mixed>
+     */
+    private function callFor(string $metaKey): array
+    {
+        $matches = array_values(array_filter(
+            $this->metaCalls,
+            static fn(array $args): bool => ($args[1] ?? null) === $metaKey,
+        ));
+
+        $this->assertCount(1, $matches, "Expected exactly one register_post_meta() call for '{$metaKey}'.");
+
+        return $matches[0];
+    }
+
+    /**
+     * The registration array, with the two callables masked AFTER checking that
+     * each is one — so the rest of the payload can be compared whole.
+     *
+     * @param  array<int, mixed> $call
+     * @return array<string, mixed>
+     */
+    private function payloadOf(array $call): array
+    {
+        $payload = $call[2] ?? null;
+        $this->assertIsArray($payload, 'register_post_meta() must receive an args array.');
+
+        foreach (['sanitize_callback', 'auth_callback'] as $key) {
+            $this->assertArrayHasKey($key, $payload, "A registration without a {$key} is not a boundary.");
+            $this->assertIsCallable($payload[$key]);
+            $payload[$key] = '<callable>';
+        }
+
+        ksort($payload);
+
+        return $payload;
+    }
+
+    /**
+     * Exactly the five keys the contract names — no more. Key ORDER is not part
+     * of the contract, so both sides are ksort()ed.
+     *
+     * @param  mixed $showInRest
+     * @return array<string, mixed>
+     */
+    private function expectedPayload(string $type, $showInRest): array
+    {
+        $expected = [
+            'type'             => $type,
+            'single'           => true,
+            'sanitize_callback' => '<callable>',
+            'auth_callback'    => '<callable>',
+            'show_in_rest'     => $showInRest,
+        ];
+
+        ksort($expected);
+
+        return $expected;
+    }
+
+    /** The model's own sanitizer for a field — what the registration must carry. */
+    private function modelSanitizer(NTDST_Data_Model $model, string $field): callable
+    {
+        $property = new ReflectionProperty(NTDST_Data_Model::class, 'sanitizers');
+        $property->setAccessible(true);
+
+        $sanitizers = $property->getValue($model);
+        $this->assertArrayHasKey($field, $sanitizers);
+
+        return $sanitizers[$field];
+    }
+
+    /** Register a model through the Manager, the way a module declares one. */
+    private function registerModel(array $fields, array $extra = []): void
+    {
+        (new NTDST_Data_Manager())->register('probe_cpt', array_merge([
+            'label'        => 'Probe',
+            'fields'       => $fields,
+            'meta_prefix'  => '_probe_',
+            'auto_metabox' => false,
+        ], $extra));
+    }
+
+    /** @return list<string> `supports` as register_post_type() actually got it. */
+    private function supportsReceived(): array
+    {
+        $this->assertCount(1, $this->postTypeCalls, 'Expected exactly one register_post_type() call.');
+
+        $args = $this->postTypeCalls[0][1] ?? null;
+        $this->assertIsArray($args);
+        $this->assertArrayHasKey('supports', $args);
+        $this->assertIsArray($args['supports']);
+
+        return array_values($args['supports']);
+    }
+
+    // -- Denial: what registration must refuse to publish --------------------
+
+    /** Opt-in, kept at the registration boundary: silence and refusal register nothing. */
+    public function testAFieldThatStayedSilentIsNeverRegistered(): void
+    {
+        $this->captureRegistrations();
+
+        $this->model($this->declaredAndSilentFields())->registerRestMeta('probe_cpt');
+
+        $this->assertCount(3, $this->metaCalls, 'Only the declared fields may be registered.');
+        $this->assertNotContains('_probe_promo_budget', $this->metaKeys());
+        $this->assertNotContains('_probe_reserve', $this->metaKeys());
+
+        $keys = $this->metaKeys();
+        sort($keys);
+        $this->assertSame(['_probe_capacity', '_probe_provenance', '_probe_venue'], $keys);
+    }
+
+    /**
+     * Strict `=== true` survives the trip to WordPress. A `'yes'` typo must
+     * leave the field unregistered, not publish it as a writable meta key.
+     *
+     * @dataProvider truthyNearMissProvider
+     */
+    public function testATruthyNearMissIsNeverRegistered(mixed $declaration): void
+    {
+        $this->captureRegistrations();
+
+        $this->model(['cost' => ['type' => 'float', 'show_in_rest' => $declaration]])
+            ->registerRestMeta('probe_cpt');
+
+        $this->assertSame([], $this->metaCalls);
+    }
+
+    /** A model with nothing declared registers nothing. */
+    public function testAModelWithNothingDeclaredRegistersNothing(): void
+    {
+        $this->captureRegistrations();
+
+        $this->model([])->registerRestMeta('probe_cpt');
+
+        $this->assertSame([], $this->metaCalls);
+    }
+
+    /**
+     * The write side, refused. WordPress calls the auth callback as
+     * ($allowed, $meta_key, $object_id, $user_id, $cap, $caps) — the incoming
+     * $allowed is TRUE here, so a callback that passes its first argument
+     * through would grant the write. The capability decides, nothing else.
+     */
+    public function testTheAuthCallbackRefusesWhenTheUserCannotEditThePost(): void
+    {
+        $this->captureRegistrations();
+        $this->capChecks = [];
+        Functions\when('current_user_can')->alias(function (...$args) {
+            $this->capChecks[] = $args;
+
+            return false;
+        });
+
+        $this->model($this->declaredAndSilentFields())->registerRestMeta('probe_cpt');
+
+        $auth = $this->callFor('_probe_venue')[2]['auth_callback'];
+
+        $this->assertSame(false, $auth(true, '_probe_venue', 4242, 7, 'edit_post', ['edit_posts']));
+        $this->assertSame([['edit_post', 4242]], $this->capChecks, "The check is current_user_can('edit_post', \$postId).");
+    }
+
+    /** And granted on the same authority — against an incoming $allowed of false. */
+    public function testTheAuthCallbackAllowsWhenTheUserCanEditThePost(): void
+    {
+        $this->captureRegistrations();
+        $this->capChecks = [];
+        Functions\when('current_user_can')->alias(function (...$args) {
+            $this->capChecks[] = $args;
+
+            return true;
+        });
+
+        $this->model($this->declaredAndSilentFields())->registerRestMeta('probe_cpt');
+
+        $auth = $this->callFor('_probe_provenance')[2]['auth_callback'];
+
+        $this->assertSame(true, $auth(false, '_probe_provenance', 99, 7, 'edit_post', ['edit_posts']));
+        $this->assertSame([['edit_post', 99]], $this->capChecks);
+    }
+
+    // -- What each declared field registers as -------------------------------
+
+    /**
+     * A scalar publishes as `show_in_rest => true`; WordPress infers the rest
+     * from `type`. The payload is compared WHOLE: exactly these five keys.
+     */
+    public function testAScalarFieldRegistersUnderShowInRestTrue(): void
+    {
+        $this->captureRegistrations();
+
+        $model = $this->model($this->declaredAndSilentFields());
+        $model->registerRestMeta('probe_cpt');
+
+        $venue = $this->callFor('_probe_venue');
+        $this->assertSame('probe_cpt', $venue[0]);
+        $this->assertSame('_probe_venue', $venue[1]);
+        $this->assertSame($model->restSchemaFor('venue')['type'], $venue[2]['type']);
+        $this->assertSame($this->expectedPayload('string', true), $this->payloadOf($venue));
+
+        $capacity = $this->callFor('_probe_capacity');
+        $this->assertSame('probe_cpt', $capacity[0]);
+        $this->assertSame($model->restSchemaFor('capacity')['type'], $capacity[2]['type']);
+        $this->assertSame($this->expectedPayload('integer', true), $this->payloadOf($capacity));
+    }
+
+    /**
+     * An array value has no shape WordPress can guess, so the whole schema
+     * travels — and it is the CLOSED one restSchemaFor() built, which is what
+     * keeps an undeclared sub-field out of the response.
+     */
+    public function testARepeaterRegistersItsWholeSchemaUnderShowInRest(): void
+    {
+        $this->captureRegistrations();
+
+        $model = $this->model($this->declaredAndSilentFields());
+        $model->registerRestMeta('probe_cpt');
+
+        $call = $this->callFor('_probe_provenance');
+        $schema = $model->restSchemaFor('provenance');
+
+        $this->assertSame($this->expectedPayload('array', ['schema' => $schema]), $this->payloadOf($call));
+        $this->assertSame(['year', 'lot'], array_keys($call[2]['show_in_rest']['schema']['items']['properties']));
+        $this->assertFalse($call[2]['show_in_rest']['schema']['items']['additionalProperties']);
+    }
+
+    /** The same rule for an object type. */
+    public function testAnObjectFieldRegistersItsSchemaRatherThanBareTrue(): void
+    {
+        $this->captureRegistrations();
+
+        $model = $this->model(['payload' => ['type' => 'json', 'show_in_rest' => true]]);
+        $model->registerRestMeta('probe_cpt');
+
+        $this->assertSame(
+            $this->expectedPayload('object', ['schema' => ['type' => 'object', 'additionalProperties' => true]]),
+            $this->payloadOf($this->callFor('_probe_payload')),
+        );
+    }
+
+    /**
+     * The registered key is the STORED key. A model registering `venue` while
+     * storing `_probe_venue` publishes a key that holds nothing and leaves the
+     * real one unregistered.
+     */
+    public function testTheRegisteredKeyIsThePrefixedStorageKey(): void
+    {
+        $this->captureRegistrations();
+
+        (new NTDST_Data_Model('probe', ['venue' => ['type' => 'text', 'show_in_rest' => true]], '_house_'))
+            ->registerRestMeta('probe_cpt');
+
+        $this->assertSame(['_house_venue'], $this->metaKeys());
+    }
+
+    /** No prefix declared, no prefix invented. */
+    public function testAModelWithoutAMetaPrefixRegistersTheBareFieldName(): void
+    {
+        $this->captureRegistrations();
+
+        (new NTDST_Data_Model('probe', ['venue' => ['type' => 'text', 'show_in_rest' => true]], ''))
+            ->registerRestMeta('probe_cpt');
+
+        $this->assertSame(['venue'], $this->metaKeys());
+    }
+
+    /**
+     * A /wp/v2 meta write is cleaned by the registration's own sanitize_callback.
+     * If that callback is not the model's sanitizer for the field, a REST write
+     * stores something a create() write never could.
+     */
+    public function testTheSanitizeCallbackIsTheModelsOwnSanitizerForThatField(): void
+    {
+        $this->captureRegistrations();
+
+        $model = $this->model($this->declaredAndSilentFields());
+        $model->registerRestMeta('probe_cpt');
+
+        $probes = [
+            '_probe_venue'      => ['venue', '  Salle Wagram  ', 'text:Salle Wagram'],
+            '_probe_capacity'   => ['capacity', '12abc', 12],
+            '_probe_provenance' => [
+                'provenance',
+                [['year' => '  1998  ', 'lot' => '7x']],
+                [['year' => 'text:1998', 'lot' => 7]],
+            ],
+        ];
+
+        foreach ($probes as $metaKey => [$field, $dirty, $clean]) {
+            $callback = $this->callFor($metaKey)[2]['sanitize_callback'];
+
+            $this->assertSame($clean, $callback($dirty), "The registered sanitizer for '{$field}' does not clean like the declared type.");
+            $this->assertSame(
+                ($this->modelSanitizer($model, $field))($dirty),
+                $callback($dirty),
+                "The registered sanitizer for '{$field}' is not the model's own.",
+            );
+        }
+    }
+
+    // -- register(): the custom-fields half of the same promise ---------------
+
+    /**
+     * `custom-fields` is what makes WordPress expose `meta` at all. A post type
+     * with nothing declared must not gain that surface — undeclared fields are
+     * exactly the ones that must stay off /wp/v2.
+     */
+    public function testRegisterAddsNoCustomFieldsSupportWhenNothingIsDeclared(): void
+    {
+        $this->captureRegistrations();
+
+        $this->registerModel([
+            'promo_budget' => ['type' => 'float'],
+            'reserve'      => ['type' => 'float', 'show_in_rest' => false],
+        ]);
+
+        $this->assertSame([], $this->metaCalls);
+        $this->assertNotContains('custom-fields', $this->supportsReceived());
+        $this->assertSame(['title', 'editor', 'thumbnail'], $this->supportsReceived());
+    }
+
+    /** Same, for a model that declares no fields at all. */
+    public function testRegisterAddsNoCustomFieldsSupportWhenThereAreNoFieldsAtAll(): void
+    {
+        $this->captureRegistrations();
+
+        $this->registerModel([]);
+
+        $this->assertSame([], $this->metaCalls);
+        $this->assertNotContains('custom-fields', $this->supportsReceived());
+    }
+
+    /** One declared field turns the surface on — once, and without losing the defaults. */
+    public function testRegisterAddsCustomFieldsSupportExactlyOnceWhenAFieldIsDeclared(): void
+    {
+        $this->captureRegistrations();
+
+        $this->registerModel($this->declaredAndSilentFields());
+
+        $supports = $this->supportsReceived();
+
+        $this->assertSame(1, count(array_keys($supports, 'custom-fields', true)), '`custom-fields` exactly once.');
+        $this->assertContains('title', $supports);
+        $this->assertContains('editor', $supports);
+        $this->assertContains('thumbnail', $supports);
+    }
+
+    /** A caller that already listed it gets no second copy, and keeps its own list. */
+    public function testRegisterDoesNotDuplicateCustomFieldsSupportTheCallerAlreadyListed(): void
+    {
+        $this->captureRegistrations();
+
+        $this->registerModel($this->declaredAndSilentFields(), ['supports' => ['title', 'custom-fields']]);
+
+        $supports = $this->supportsReceived();
+
+        $this->assertSame(1, count(array_keys($supports, 'custom-fields', true)));
+        $this->assertContains('title', $supports);
+    }
+
+    /**
+     * The wiring itself: declaring fields on a model is the whole act. Nobody
+     * calls register_post_meta() by hand, so register() must.
+     */
+    public function testRegisterSendsEveryDeclaredFieldToRegisterPostMeta(): void
+    {
+        $this->captureRegistrations();
+
+        $this->registerModel($this->declaredAndSilentFields());
+
+        $keys = $this->metaKeys();
+        sort($keys);
+
+        $this->assertCount(3, $this->metaCalls);
+        $this->assertSame(['_probe_capacity', '_probe_provenance', '_probe_venue'], $keys);
+        $this->assertSame(
+            ['probe_cpt', 'probe_cpt', 'probe_cpt'],
+            array_map(static fn(array $call) => $call[0], $this->metaCalls),
+            'Meta is registered against the post type that was just registered.',
+        );
     }
 }

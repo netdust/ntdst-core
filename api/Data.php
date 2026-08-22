@@ -183,6 +183,11 @@ class NTDST_Data_Model
         return $this->schemaForType((string) ($config['type'] ?? 'string'), $config);
     }
 
+    /** Register every declared field as post meta on $postType (T03). */
+    public function registerRestMeta(string $postType): void
+    {
+    }
+
     /**
      * One type name, one published shape.
      *
