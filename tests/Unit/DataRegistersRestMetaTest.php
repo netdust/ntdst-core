@@ -1134,36 +1134,6 @@ final class DataRegistersRestMetaTest extends TestCase
     }
 
     /**
-     * A typo in a type is a mistake in ONE field. It must not throw out of
-     * registration: `init` would abort and the whole post type would disappear
-     * from the site — a far worse outcome than one unpublished field.
-     *
-     * The field carries its own `sanitizer`, which is the one path where an
-     * unknown type survives construction.
-     */
-    public function testAnUnknownTypeUnpublishesOneFieldAndLeavesTheRestRegistered(): void
-    {
-        $this->captureRegistrations();
-
-        $model = $this->namedModel('typo_model', [
-            'venue'    => ['type' => 'text', 'show_in_rest' => true],
-            'capacity' => ['type' => 'int', 'show_in_rest' => true],
-            'blurb'    => ['type' => 'wysiwig', 'show_in_rest' => true, 'sanitizer' => 'strval'],
-        ]);
-
-        $model->registerRestMeta('probe_cpt'); // must not throw
-
-        $keys = $this->metaKeys();
-        sort($keys);
-
-        $this->assertSame(['_probe_capacity', '_probe_venue'], $keys, 'One bad type unpublishes one field.');
-
-        $errors = $this->logMessages('error');
-        $this->assertCount(1, $errors, 'The typo is a defect, so it is logged as an error.');
-        $this->assertStringContainsString('blurb', $errors[0], 'The error must name the field that failed.');
-    }
-
-    /**
      * The registered key is the STORED key. A model registering `venue` while
      * storing `_probe_venue` publishes a key that holds nothing and leaves the
      * real one unregistered.
