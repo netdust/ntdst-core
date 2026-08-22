@@ -63,7 +63,11 @@ final class NtdstRestDefaultsTest extends TestCase
     /** The fake WP route table: '/ns/route' => every arg-array handed to register_rest_route(). */
     private array $routeTable = [];
 
-    /** Callbacks the wrapper hung on a WP hook, so a deferred registration can be flushed. */
+    /**
+     * Callbacks hung on a WP hook, keyed by hook then PRIORITY, so a deferred
+     * registration can be flushed in the order WordPress would flush it:
+     * ['rest_api_init' => [10 => [cb, cb], 11 => [cb]]].
+     */
     private array $hooked = [];
 
     /** Every _doing_it_wrong() call this test provoked: [function, message, version]. */
@@ -72,8 +76,21 @@ final class NtdstRestDefaultsTest extends TestCase
     /** Every capability current_user_can() was asked about, in order. */
     private array $capsAsked = [];
 
-    /** Drives did_action('rest_api_init') — 0 while declarations are pending, 1 after the flush. */
-    private bool $restApiInitFired = false;
+    /**
+     * Drives did_action('rest_api_init') — 0 while declarations are pending, 1
+     * from the moment the hook STARTS firing (this is what WordPress does: the
+     * counter is incremented before the callbacks run).
+     */
+    private int $restApiInitDid = 0;
+
+    /**
+     * Drives doing_action('rest_api_init') — true only WHILE the callbacks run.
+     * Together with $restApiInitDid this gives the three states a consumer can
+     * declare from: before the hook (0/false), inside it (1/true), after it
+     * (1/false). The middle state is the idiomatic WordPress registration point
+     * and is indistinguishable from the last one by did_action() alone.
+     */
+    private bool $restApiInitDoing = false;
 
     protected function setUp(): void
     {
@@ -84,7 +101,19 @@ final class NtdstRestDefaultsTest extends TestCase
         $this->hooked           = [];
         $this->wrongs           = [];
         $this->capsAsked        = [];
-        $this->restApiInitFired = false;
+        $this->restApiInitDid   = 0;
+        $this->restApiInitDoing = false;
+
+        // tests/bootstrap.php defines add_filter as a REAL recording function
+        // (it must be, for the whole suite), and in WordPress add_action IS
+        // add_filter. Anything this file's namespace mounted in an earlier test
+        // survives in those globals, so the hook is cleared here — otherwise a
+        // stale flush from the previous test would run against this test's
+        // route table.
+        unset(
+            $GLOBALS['_ntdst_test_filters']['rest_api_init'],
+            $GLOBALS['_ntdst_test_filters_at']['rest_api_init'],
+        );
 
         // NTDST_Rest caches wrappers and de-duplicates refusals per PROCESS.
         // Without this reset the second test to use a namespace would inherit
@@ -116,15 +145,30 @@ final class NtdstRestDefaultsTest extends TestCase
         // it and Patchwork throws DefinedTooEarly if a plain definition wins the
         // race. Recording through Brain Monkey lets a queued registration be
         // flushed by fireRestApiInit().
+        //
+        // The PRIORITY is recorded, because a flush mounted from inside the
+        // running hook only reaches WordPress if it is mounted at a priority
+        // the iteration has not passed yet.
         Functions\when('add_action')->alias(function ($hook, $cb = null, $priority = 10, $args = 1) {
-            $this->hooked[(string) $hook][] = $cb;
+            $this->hooked[(string) $hook][(int) $priority][] = $cb;
             return true;
         });
 
-        // The whole point of this file's timing cases: BEFORE the flush the hook
-        // has not fired, so a declaration is pending and ->public() can still
-        // mark it. After the flush it has fired and nothing is pending.
-        Functions\when('did_action')->alias(fn($hook) => $this->restApiInitFired ? 1 : 0);
+        // The whole point of this file's timing cases: BEFORE the hook fires a
+        // declaration is pending and ->public() can still mark it. AFTER it has
+        // finished, the declaration registered immediately and nothing is
+        // pending. did_action() alone CANNOT tell "inside the hook" from
+        // "after the hook" — it reads 1 in both — which is why doing_action()
+        // is stubbed alongside it.
+        Functions\when('did_action')->alias(fn($hook = null) => $this->restApiInitDid);
+
+        Functions\when('doing_action')->alias(function ($hook = null) {
+            if ($hook === null || (string) $hook === 'rest_api_init') {
+                return $this->restApiInitDoing;
+            }
+
+            return false;
+        });
 
         // Refusals are observable as _doing_it_wrong() calls, counted and read.
         Functions\when('_doing_it_wrong')->alias(function ($function = '', $message = '', $version = '') {
@@ -153,6 +197,11 @@ final class NtdstRestDefaultsTest extends TestCase
 
     protected function tearDown(): void
     {
+        unset(
+            $GLOBALS['_ntdst_test_filters']['rest_api_init'],
+            $GLOBALS['_ntdst_test_filters_at']['rest_api_init'],
+        );
+
         Monkey\tearDown();
         parent::tearDown();
     }
@@ -180,16 +229,91 @@ final class NtdstRestDefaultsTest extends TestCase
         }
     }
 
-    /** Fire rest_api_init once, flushing every pending declaration. */
+    /**
+     * Every callback mounted on rest_api_init, keyed by priority, read fresh.
+     *
+     * Two sources are merged because two recorders exist: this file's Brain
+     * Monkey add_action stub, and the REAL add_filter that tests/bootstrap.php
+     * defines (in WordPress add_action IS add_filter, so a wrapper that mounts
+     * through either one must be flushed by this harness).
+     *
+     * @return array<int, list<callable>> priority => callbacks, in mount order
+     */
+    private function restApiInitCallbacks(): array
+    {
+        $byPriority = $this->hooked['rest_api_init'] ?? [];
+
+        foreach (($GLOBALS['_ntdst_test_filters_at']['rest_api_init'] ?? []) as $priority => $callback) {
+            $priority = (int) $priority;
+
+            if (in_array($callback, $byPriority[$priority] ?? [], true)) {
+                continue; // recorded by both stubs; run it once
+            }
+
+            $byPriority[$priority][] = $callback;
+        }
+
+        ksort($byPriority);
+
+        return $byPriority;
+    }
+
+    /**
+     * Fire rest_api_init once, the way WP_Hook::apply_filters() fires it.
+     *
+     * Three things here are the contract, not convenience:
+     *
+     * 1. did_action() becomes 1 BEFORE the callbacks run, and doing_action()
+     *    is true only WHILE they run. A consumer registering from inside the
+     *    hook — the idiomatic place — therefore sees did_action() === 1, which
+     *    is the same value it reads long after the hook has finished.
+     * 2. The recorded callback list is RE-READ after every callback, so a flush
+     *    that a declaration mounts from inside the running hook still runs. This
+     *    is real WP_Hook behaviour: `$this->callbacks` is walked live.
+     * 3. A callback mounted at a priority the iteration has ALREADY PASSED does
+     *    NOT run — WordPress never walks backwards. A wrapper that defers to an
+     *    earlier priority is broken, and this harness shows it as an absent route
+     *    rather than hiding it.
+     */
     private function fireRestApiInit(): void
     {
-        $queued                 = $this->hooked['rest_api_init'] ?? [];
-        $this->hooked['rest_api_init'] = [];
-        $this->restApiInitFired = true;
+        $this->restApiInitDid   = 1;
+        $this->restApiInitDoing = true;
 
-        foreach ($queued as $callback) {
+        $ran             = [];   // "priority:index" of every callback already invoked
+        $currentPriority = null; // the priority the iteration has reached
+
+        while (true) {
+            $next = null;
+
+            foreach ($this->restApiInitCallbacks() as $priority => $callbacks) {
+                if ($currentPriority !== null && $priority < $currentPriority) {
+                    continue; // already passed — WordPress will not go back for it
+                }
+
+                foreach ($callbacks as $index => $callback) {
+                    if (isset($ran[$priority . ':' . $index])) {
+                        continue;
+                    }
+
+                    $next = [$priority, $index, $callback];
+                    break 2;
+                }
+            }
+
+            if ($next === null) {
+                break;
+            }
+
+            [$priority, $index, $callback] = $next;
+
+            $ran[$priority . ':' . $index] = true;
+            $currentPriority               = $priority;
+
             $callback(rest_get_server());
         }
+
+        $this->restApiInitDoing = false;
     }
 
     /** @return list<array<string, mixed>> every registration WP received for this route key */
@@ -562,6 +686,12 @@ final class NtdstRestDefaultsTest extends TestCase
         // return $this and let the author believe the route is anonymous.
         $this->fireRestApiInit(); // the hook has already fired: declarations now register immediately
 
+        $this->assertSame(1, did_action('rest_api_init'), 'control: the hook has fired.');
+        $this->assertFalse(
+            (bool) doing_action('rest_api_init'),
+            'control: the hook has FINISHED — this is the after state, not the inside-the-hook state.',
+        );
+
         $rest = ntdst_rest('late/v1');
         $rest->get('/thing', fn() => ['ok' => true]);
 
@@ -604,5 +734,250 @@ final class NtdstRestDefaultsTest extends TestCase
         $this->assertCount(1, $this->wrongs, 'public() with no pending declaration must report _doing_it_wrong once.');
         $this->assertSame([], $this->routeKeys(), 'public() must not conjure a route of its own.');
         $this->assertSame($rest, $returned, 'public() is chainable even when it refuses.');
+    }
+
+    // =====================================================================
+    // FIX ROUND 1 — the idiomatic registration point
+    // (T04 review, Important 1)
+    // =====================================================================
+
+    public function testPublicWorksWhenDeclaredInsideARestApiInitCallback(): void
+    {
+        // WHY: `add_action('rest_api_init', ...)` is where WordPress documents
+        // route registration, so it is where consumers will write. Inside that
+        // callback did_action('rest_api_init') already reads 1 — the same value
+        // it reads an hour after the hook finished — so a wrapper that decides
+        // "pending or not" on did_action() alone registers immediately here and
+        // then refuses the public() that follows. The consumer's endpoint is
+        // then INTERNAL while its author reads an anonymous declaration: a
+        // silent wrong-way failure, and the reason this case is a denial case.
+        //
+        // The two states are separated by doing_action(): inside the hook it is
+        // true, after it is false.
+        $handler = fn() => ['ok' => true];
+
+        add_action('rest_api_init', function () use ($handler) {
+            $this->assertSame(1, did_action('rest_api_init'), 'control: WordPress has already counted the hook.');
+            $this->assertTrue((bool) doing_action('rest_api_init'), 'control: the hook is RUNNING.');
+
+            $rest = ntdst_rest('hook/v1');
+            $rest->get('/prices', $handler)->public();
+            $rest->get('/internal', $handler);
+        });
+
+        $this->fireRestApiInit();
+
+        $this->assertSame(
+            [],
+            $this->wrongs,
+            'declaring inside rest_api_init is the documented way — it must not be reported as misuse: '
+                . implode(' | ', $this->wrongMessages()),
+        );
+        $this->assertContains('/hook/v1/internal', $this->routeKeys(), 'control: the sibling declaration registered.');
+        $this->assertSame(
+            'is_user_logged_in',
+            $this->permissionCallbackOf('/hook/v1/internal'),
+            'control: an unnamed GET declared inside the hook keeps the internal default.',
+        );
+        $this->assertCount(
+            1,
+            $this->registrationsFor('/hook/v1/prices'),
+            'the route reaches register_rest_route() exactly ONCE — no register-then-re-register.',
+        );
+        $this->assertSame(
+            '__return_true',
+            $this->permissionCallbackOf('/hook/v1/prices'),
+            'public() inside a rest_api_init callback must publish the route it follows.',
+        );
+    }
+
+    public function testDeclaringInsideRestApiInitStillRefusesAnUnnamedWriteVerb(): void
+    {
+        // WHY: whatever mechanism makes the hook-time declaration pending must
+        // not become a bypass for the write-verb rule (threat model item 4). A
+        // deferred POST is still a POST.
+        $handler = fn() => ['written' => true];
+
+        add_action('rest_api_init', function () use ($handler) {
+            $rest = ntdst_rest('hookw/v1');
+            $rest->post('/named', $handler, ['permission' => 'edit_posts']);
+            $rest->post('/unnamed', $handler);
+        });
+
+        $this->fireRestApiInit();
+
+        $this->assertContains('/hookw/v1/named', $this->routeKeys(), 'control: a named capability registers.');
+        $this->assertNotContains(
+            '/hookw/v1/unnamed',
+            $this->routeKeys(),
+            'an unnamed write declared inside rest_api_init is refused exactly as one declared before it.',
+        );
+        $this->assertCount(1, $this->wrongs, 'the refused write reports once.');
+    }
+
+    // =====================================================================
+    // FIX ROUND 1 — the pending slot belongs to the DECLARATION
+    // (T04 review, Important 2; threat model item 5)
+    // =====================================================================
+
+    public function testPublicOnTheCachedFacadeFindsNothingPendingAndRefuses(): void
+    {
+        // WHY: ntdst_rest('shop/v1') hands back a CACHED object, so two modules
+        // that never met share it. If the pending slot lived on that object,
+        // module B's public() would publish module A's route — and A's author
+        // would never see the line that did it. The pending declaration belongs
+        // to what the verb returned; the facade holds nothing, so a public()
+        // aimed at it refuses and A stays internal.
+        $handler = fn() => ['private' => true];
+
+        ntdst_rest('shop/v1')->get('/a', $handler); // module A, pending
+        $returned = ntdst_rest('shop/v1')->public(); // module B, later in the request
+
+        $this->fireRestApiInit();
+
+        $this->assertContains('/shop/v1/a', $this->routeKeys(), "control: module A's route still registers.");
+        $this->assertSame(
+            'is_user_logged_in',
+            $this->permissionCallbackOf('/shop/v1/a'),
+            "another module's public() must NOT publish the route this module declared.",
+        );
+        $this->assertCount(
+            1,
+            $this->wrongs,
+            'public() on the namespace facade has nothing pending to mark and must report once: '
+                . implode(' | ', $this->wrongMessages()),
+        );
+        $this->assertIsObject($returned, 'a refusing public() is still chainable.');
+    }
+
+    public function testAChainedVerbMovesThePendingSlotToTheNewDeclaration(): void
+    {
+        // WHY: the fluent chain reads as one sentence, so public() at its end
+        // must mean the LAST declaration and not the first. (Already asserted in
+        // spirit by testPublicMarksOnlyTheMostRecentPendingRoute; kept here as
+        // the chain-shaped control for the two cases around it.)
+        $handler = fn() => ['ok' => true];
+
+        ntdst_rest('chain/v1')->get('/a', $handler)->get('/b', $handler)->public();
+
+        $this->fireRestApiInit();
+
+        $this->assertSame(
+            '__return_true',
+            $this->permissionCallbackOf('/chain/v1/b'),
+            'public() publishes the declaration it directly follows.',
+        );
+        $this->assertSame(
+            'is_user_logged_in',
+            $this->permissionCallbackOf('/chain/v1/a'),
+            'the earlier link in the same chain stays internal.',
+        );
+        $this->assertSame([], $this->wrongs, 'a chained declaration is not misuse.');
+    }
+
+    public function testAHeldDeclarationMarksItsOwnRouteAfterASiblingWasDeclared(): void
+    {
+        // WHY: this is the case that separates "the declaration owns the
+        // pending slot" from "the namespace owns the most recent one". A module
+        // that keeps the handle in a variable and publishes it a few lines later
+        // — with an unrelated declaration in between, possibly from a different
+        // file — must publish ITS OWN route. If the slot is per-namespace, the
+        // sibling gets published instead: a route nobody wrote public() next to
+        // becomes anonymous. Both halves are asserted, because the dangerous
+        // half is the one that is silently OPEN.
+        $handler = fn() => ['ok' => true];
+
+        $held = ntdst_rest('hold/v1')->get('/a', $handler);
+        ntdst_rest('hold/v1')->get('/c', $handler); // an unrelated later declaration
+        $held->public();
+
+        $this->fireRestApiInit();
+
+        $this->assertSame(
+            'is_user_logged_in',
+            $this->permissionCallbackOf('/hold/v1/c'),
+            'the sibling declared in between must NOT be published by a public() aimed at another declaration.',
+        );
+        $this->assertSame(
+            '__return_true',
+            $this->permissionCallbackOf('/hold/v1/a'),
+            'the held declaration publishes the route IT declared.',
+        );
+        $this->assertSame([], $this->wrongs, 'marking a declaration that is still pending is not misuse.');
+    }
+
+    public function testNamespaceDefaultsStillApplyToRoutesDeclaredThroughTheVerbObject(): void
+    {
+        // WHY: moving the pending slot off the facade must not cut the
+        // declaration off from its namespace. defaults() is declared on the
+        // facade; a route declared through the verb — and a route chained off
+        // that verb's return — must still inherit it, or a namespace-wide
+        // permission silently stops covering the routes it was written for.
+        $handler = fn() => ['ok' => true];
+
+        ntdst_rest('d/v1')
+            ->defaults(['permission' => 'edit_posts'])
+            ->post('/w', $handler)
+            ->get('/r', $handler);
+
+        $this->fireRestApiInit();
+
+        $this->assertContains('/d/v1/w', $this->routeKeys(), 'the namespace default names a capability, so the write registers.');
+        $this->assertContains('/d/v1/r', $this->routeKeys(), 'the route chained off the verb registers too.');
+        $this->assertSame([], $this->wrongs, 'an inherited capability is not a refusal.');
+
+        foreach (['/d/v1/w', '/d/v1/r'] as $key) {
+            $callback = $this->permissionCallbackOf($key);
+
+            $this->assertIsCallable($callback, "{$key} inherits a real permission_callback from defaults().");
+            $this->assertFalse(
+                (bool) $callback(null),
+                "{$key} must ASK current_user_can('edit_posts') — the sentinel holds only manage_options.",
+            );
+        }
+
+        $this->assertSame(
+            ['edit_posts', 'edit_posts'],
+            $this->capsAsked,
+            'both routes inherited the capability the namespace declared.',
+        );
+    }
+
+    // =====================================================================
+    // FIX ROUND 1 — a stated capability is a decision, not a suggestion
+    // (T04 review, Important 3)
+    // =====================================================================
+
+    public function testPublicCannotDowngradeAnExplicitlyNamedCapability(): void
+    {
+        // WHY: the two lines contradict each other, and only one direction is
+        // safe to guess. Silently taking the LAST word would turn a route whose
+        // author named a capability into an anonymous one — the open direction,
+        // reached by a stray public() a merge left behind. The contradiction is
+        // reported, and the stated capability is what registers.
+        $handler = fn() => ['ok' => true];
+
+        $returned = ntdst_rest('cap2/v1')->get('/x', $handler, ['permission' => 'edit_posts'])->public();
+
+        $this->fireRestApiInit();
+
+        $this->assertContains('/cap2/v1/x', $this->routeKeys(), 'the route still registers — the capability stands.');
+
+        $callback = $this->permissionCallbackOf('/cap2/v1/x');
+
+        $this->assertNotSame('__return_true', $callback, 'the stated capability must NOT be downgraded to anonymous.');
+        $this->assertIsCallable($callback, 'the capability closure is what registers.');
+        $this->assertFalse(
+            (bool) $callback(null),
+            'the registered gate still DENIES — the sentinel does not hold edit_posts.',
+        );
+        $this->assertSame(['edit_posts'], $this->capsAsked, 'the declared capability is the one checked.');
+        $this->assertCount(
+            1,
+            $this->wrongs,
+            'public() over a stated capability is a contradiction and must be reported exactly once: '
+                . implode(' | ', $this->wrongMessages()),
+        );
+        $this->assertIsObject($returned, 'a refusing public() is still chainable.');
     }
 }
