@@ -522,7 +522,46 @@ deliberately.
 
 ---
 
-## 5. Sources
+## 5. How to get it done — one spec, one phased plan (Stefan, 03:20: "look into how to get this done")
+
+**One spec, one plan, five phases.** `gate-check.py` parses phases and review
+clusters inside `tasks.md` (`## ` headings are phase boundaries; clusters ≤4
+tasks, each closed by `Integration gate:` and a `── REVIEW GATE ──` marker where
+`building` halts). Phases are the native shape. Separate specs are for
+independent features, and these are not independent: Actions cannot leave until
+Rest has `->public()` and RelationField has a route; Response's trims follow
+Pages' rewrap; README and the tag come last. Cross-spec dependencies are
+invisible to the gate; cross-phase ones are what it checks.
+
+The spec's `## Intent decisions` table is already written: every ruling above
+carries a quote and a time — the `Source:` line the gate requires per FR.
+`superpowers:brainstorming` must still be invoked (the guard denies `spec.md`
+without it); tomorrow it is a confirmation of the six open rows, not a design
+session.
+
+| phase | scope | order reason |
+|---|---|---|
+| 1 · Data | `show_in_rest` → `register_post_meta()` + `custom-fields`; schema mapping incl. repeaters; `restFields()` as the route-side reader | the ask, and the anonymous-exposure surface — the threat model lives here |
+| 2 · Rest | internal default, `->public()`, write-verb refusal, `'is_user_logged_in'` string, `cors()` on `allowed_http_origins`, delete the surface registry | Actions cannot leave until this exists |
+| 3 · Actions out | RelationField → route + `wp.apiFetch`; delete `Actions.php`, `/get_nonce`, `ntdst-api.js`, the `api*` envelopes, the boot line, tests | depends on 2 |
+| 4 · Pages · Loader · Response | `path()` on rewrite rules; Loader to its own file, one `locate()`, `{$type}_template` with WP's candidates; delete `render()`, the error page, the mime table, the extra redirects | independent of 1–3; largest diff, so not first |
+| 5 · Theme · docs · release | Theme trims; README 5.0.0 guide for every break; `philosophy.md` + `specs/routing-services` reconciled; `v5.0.0` tag | last by definition |
+
+Gates the overlay will demand, already answered here: `## Threat model` (the D2
+tables); `## First working version` — phase 1's `register_post_meta` gives it
+(`curl /wp-json/wp/v2/gig` shows a declared field and hides an undeclared one);
+`ARCHITECTURE-INVARIANTS.md` — ntdst-core has none and the overlay requires it
+when the work touches authorization. Tonight's rulings are the invariants:
+nothing leaves unless named · one surface (`Rest`) · WordPress's word before ours
+· one template resolver. ~30 lines via `netdust-agent:architecture-invariants`,
+written before the spec; every phase's reviewers converge on it.
+
+Own later specs, not this one: daan's migration, stride / netdust / rossi, search
+/ import / export.
+
+Spec dir: `specs/core-shape/` (spec.md · plan.md · tasks.md).
+
+## 6. Sources
 
 - `docs/session-2026-08-21-actions-to-rest.md` — rulings A1–A9, the session's own
   account.
