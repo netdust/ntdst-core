@@ -74,6 +74,8 @@ Integration gate: `cd ~/Sites/ntdst-core && composer gate && cd ~/Sites/daan && 
 
 ### Cluster 3 — Actions out (CORE)
 
+> Runs after field-types Cluster D (`specs/field-types/plan.md` `## Schedule`): T07 edits `admin/MetaboxGenerator.php`, which field-types rewrites first.
+
 Stakes: high — removes a CSRF mechanism and moves the admin picker's gate onto a route.
 
 Behaviour: the relation picker works through a REST route and wp.apiFetch with the same per-type capability gate, and the package has no command dispatcher, no nonce endpoint and no JS client of its own.
