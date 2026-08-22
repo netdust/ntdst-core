@@ -9,7 +9,7 @@ Canonical mapping used below (FR-3, D4): `integer`→`int` · `signed_int`→`in
 · `double`→`float` · `boolean`→`bool` · `wysiwyg`→`html` · `content`→`html`
 · `person`→`relation` · `post_relation`→`relation` · `datetime`→`date`.
 (`string`, `number`, `decimal`, `longtext` are in the 13-name retired list
-but no FIELD-DECLARATION hit below is one of them (stride's 32 `'string'` hits are REST arg schemas — see its table). `themes/` directories on daan and stride were also grepped: 0 hits. — they map `string`→`text`, `number`→`int` (the registry's message table: the metabox rendered `number` as a step-1 integer),
+but no FIELD-DECLARATION hit below is one of them (stride's 32 `'string'` hits are REST arg schemas — see its table). `themes/` directories on daan and stride were also grepped: 0 hits. Retired names INSIDE `sub_fields` blocks (security audit, Cluster A gate): 0 on daan, josworld and stride — every declared sub-type is canonical (`text textarea url select file email relation`). — they map `string`→`text`, `number`→`int` (the registry's message table: the metabox rendered `number` as a step-1 integer),
 `decimal`→`float`, `longtext`→`textarea` per FR-2/D4 if ever found.)
 
 ---
