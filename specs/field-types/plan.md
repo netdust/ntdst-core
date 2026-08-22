@@ -136,10 +136,16 @@ One wake = one cluster + its review gate (core-shape's loop budget rule, kept). 
 | 2 | | **field-types Cluster B** (T03 Data binds + validates, T04 schema reads + deletions) | FULL | after T03: the `int` sign change is live for every site that updates — confirm README wording |
 | 3 | | **field-types Cluster C** (T05 save path, T06 one renderer) | FULL | edit-screen artifact load before the panel |
 | 4 | | **field-types Cluster D** (T07 daan gate — its rename commit was pulled forward to wake 2 because daan fatals at `init` the moment Cluster B lands on the path repo; T08 josworld/stride/todai renames, T09 README/philosophy/INV-8) | STANDARD + invariant-auditor | before T08: consumer branches receive commits — confirm each target branch |
-| 5 | | core-shape **Cluster 3** (T07 relation route — now against the single renderer; T08 Actions out) | FULL | after Cluster 3: fleet-breakage acceptance (core-shape yield) |
-| 6 | | core-shape **Cluster 4a** (T09) | STANDARD | — |
-| 7 | | core-shape **Cluster 4b** (T10–T11) | STANDARD | — |
-| 8 | | core-shape **Cluster 5** (T12–T14) | STANDARD | before T14: README read by a human; the remote `5.0.0` tag at `3cc96b7` must be reconciled |
+| 5 | | **core-trim Cluster A** — Bootstrap loads nothing by guessing (core-trim T01–T03, split) | FULL | after the gate: daan must boot on the branch |
+| 6 | | **core-trim Cluster B** — one query API, one logger, `ntdst/model/*` hooks (T04–T06) | per its plan | — |
+| 7 | | **core-trim Cluster C** — Container+RelationField, Scheduler out, Theme magic out, Mailer out (T07–T10) | per its plan | before T10: Mailer leaves core |
+| 8 | | **core-trim Cluster D** — stride adapt (`chore/core-trim`), daan adapt (`chore/core-path-repo`), README + INV-9/INV-10 + `bin/zero-readers.sh` (T11–T13) | per its plan | after T13: README read once before the tag |
+| 9 | | core-shape **Cluster 3** (T07 relation route — against the single renderer; T08 Actions out) | FULL | fleet-breakage acceptance (core-shape yield) |
+| 10 | | core-shape **Cluster 4a** (T09) | STANDARD | — |
+| 11 | | core-shape **Cluster 4b** (T10–T11) | STANDARD | — |
+| 12 | | core-shape **Cluster 5** (T12–T14) — README + tag cover all three specs | STANDARD | before T14: README read by a human; the remote `5.0.0` tag at `3cc96b7` must be reconciled |
+
+Order ruled by Stefan (2026-08-23, via the core-trim session): field-types → core-trim A→D → core-shape T07–T14, serial on `feat/core-shape` in one session — core-trim T04 edits `api/Data.php` and T03 `ntdst-core.php` (hot in field-types); core-trim T09/T10 touch Theme/Mailer, which core-shape T09/T12 also touch; core-shape T13/T14 last so the release covers all three. No parallel worktree: the overlap would only produce merge conflicts. core-trim's plan: `specs/core-trim/plan.md` (`14df1c0`, gate-check PASS).
 
 Rule learned at wake 2: a consumer that runs the path repo must carry its rename commit BEFORE Cluster B's gate — threat row #7's refusal is site-wide (`wp-cli` included).
 
