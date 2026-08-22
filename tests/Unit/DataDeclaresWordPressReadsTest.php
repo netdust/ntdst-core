@@ -56,6 +56,14 @@ final class DataDeclaresWordPressReadsTest extends TestCase
             Functions\when($fn)->alias(static fn($v) => $tag . ':' . trim((string) $v));
         }
 
+        // Real-equivalent, no tag: WordPress's own algorithm. The repeater
+        // sanitizer reaches NTDST_FieldTypes' declarations(), which keys every
+        // declared sub-field by sanitize_key() of its name (T03), so a model
+        // carrying a repeater cannot be exercised without it.
+        Functions\when('sanitize_key')->alias(
+            static fn($value) => (string) preg_replace('/[^a-z0-9_\-]/', '', strtolower((string) $value)),
+        );
+
         Functions\when('absint')->alias(static fn($v) => abs((int) $v));
 
         $this->metaCalls = [];
