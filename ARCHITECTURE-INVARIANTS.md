@@ -85,7 +85,7 @@ field description, and `/wp/v2` is anonymous-readable by WordPress's design.
 resolver: it maps every declared shape to WordPress's own callables
 (`'__return_true'`, `'is_user_logged_in'`, `current_user_can`), and
 `registerOne()` refuses on the RESOLVED POSTURE rather than on the spelling, so
-absent, `'logged_in'`, `'public'`, a namespace default and `->public()` all
+absent, `'logged_in'`, a namespace default and `->public()` all
 reach the same rule. The two postures register as LITERAL STRINGS, so
 `get_routes()` can be read back — except on a rate-limited route, where the
 limiter has to run and `guard()`'s closure registers instead. `->public()`

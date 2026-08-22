@@ -165,7 +165,7 @@ final class NTDST_Rest {
     public function public(): self;                               // T04 — marks the most recently declared route anonymous
     // permission resolution (T04):
     //   null/absent   → 'is_user_logged_in'                  (a string; shows as such in get_routes())
-    //   'public'      → '__return_true'
+    //   'public'      → REFUSED (the route is absent; ->public() is the one door — Stefan 2026-08-22)
     //   'logged_in'   → 'is_user_logged_in'
     //   any other string → static fn() => current_user_can($string)   (a string is a CAPABILITY; no is_callable() first — gate C2)
     //   callable      → as given
