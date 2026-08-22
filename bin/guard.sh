@@ -26,10 +26,15 @@ fi
 #
 # v3.0.0: the v2 routing facades.
 # v5.0.0: the NTDST_Rest surface registry — WordPress's get_routes() is the
-#         registry now — and the test file that asserted on it.
-REMOVED=$(grep -rnE "ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest" \
+#         registry now — and the test file that asserted on it. The removed
+#         METHOD is pinned as the three ways PHP can reach it (::surface(,
+#         ->surface(, $surface) rather than as the bare word: this codebase
+#         writes "the exposure surface" in prose, and a grep for `surface`
+#         would fail on a sentence.
+REMOVED=$(grep -rnE "ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface" \
     --include='*.php' . \
-    | grep -v /vendor/ | grep -v '^\./tests/' | grep -v '^\./specs/' \
+    | grep -v /vendor/ \
+    | grep -vE "^(\./)?tests/|^(\./)?specs/" \
     | grep -vE ':[0-9]+: *(\*|//|#|/\*)' || true)
 if [ -n "$REMOVED" ]; then
     echo "Shipped code still references a symbol removed in v3.0.0 or v5.0.0:"

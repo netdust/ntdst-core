@@ -6,9 +6,10 @@
  * What it adds over raw WordPress:
  *  - a route that names no permission is INTERNAL, never anonymous by
  *    omission: it registers as 'is_user_logged_in', which is WordPress's own
- *    wp_ajax_ posture. A WRITE verb (POST, PUT, PATCH, DELETE) that names none
- *    is REFUSED outright — on a site with open registration "logged in" is
- *    "anyone" — and ->public() is the one way a route reaches anonymous;
+ *    wp_ajax_ posture. Only a READ verb may reach a posture that way; every
+ *    other verb that names no capability is REFUSED outright — on a site with
+ *    open registration "logged in" is "anyone" — and ->public() is the one way
+ *    a route reaches anonymous;
  *  - permission shorthands ('public', 'logged_in', a capability name) so the
  *    common cases need no closure;
  *  - namespace-level defaults, so you declare permission once;
@@ -40,23 +41,37 @@ final class NTDST_Rest
     private const OWN = ['permission', 'rate_limit', 'rate_window'];
 
     /**
-     * The two postures WordPress can already name for itself.
-     *
-     * They are the functions THEMSELVES, not closures over them, because
-     * rest_get_server()->get_routes() is the only place a site can read back
-     * what it published — and a closure there is opaque, so "is anything on
-     * this site anonymous?" stops being a question code can answer.
+     * The two postures WordPress can already name for itself, registered as
+     * the functions THEMSELVES so rest_get_server()->get_routes() stays
+     * readable — a closure there is opaque, and "is anything on this site
+     * anonymous?" stops being a question code can answer.
      */
     private const INTERNAL  = 'is_user_logged_in';
     private const ANONYMOUS = '__return_true';
 
-    /** The verbs that mutate. None of them opens on a shorthand. */
-    private const WRITE = ['POST', 'PUT', 'PATCH', 'DELETE'];
+    /**
+     * The verbs that may default to a posture — an ALLOW-LIST, because a deny
+     * list of the four writes reads every custom verb (PURGE, LINK, SEARCH) as
+     * safe, and a custom verb is exactly where a destructive action hides.
+     */
+    private const READ = ['GET', 'HEAD', 'OPTIONS'];
 
     /** Options this class used to accept, mapped to what replaced them. */
     private const RETIRED = [
         'cors' => 'declare it once with ntdst_rest(...)->cors([...]) — it is site-wide now',
         'before_dispatch' => 'filter rest_pre_dispatch and bill with ->charge($route, $methods, $request)',
+    ];
+
+    /**
+     * Why a public() call had nothing to publish, in the author's words. The
+     * cause is part of the message because _doing_it_wrong() is the only thing
+     * a consumer reads, and "public() did nothing" is not a remediation.
+     */
+    private const PUBLIC_REFUSALS = [
+        'after-hook'         => 'public:after-hook — rest_api_init has finished, WordPress holds the route and its callback cannot be swapped now',
+        'nothing-pending'    => 'public:nothing-pending — chain public() onto the verb whose route it publishes, not onto ntdst_rest(), which every module in the namespace shares',
+        'already-registered' => 'public:already-registered — this declaration has already been handed to WordPress, so its permission can no longer be changed',
+        'stated-permission'  => 'public:stated-permission — the declaration already names its own permission, so public() contradicts it; the named permission stands and the route is NOT published',
     ];
 
     /** @var array<string, self> */
@@ -66,38 +81,32 @@ final class NTDST_Rest
     private static array $reported = [];
 
     /**
-     * The two things WordPress has no answer for, merged from every namespace
-     * that declared one. The ORIGINS are not here: they go to WordPress's own
-     * allowed_http_origins list (INV-5 — core keeps no table WordPress already
-     * keeps). Two allow-lists is one too many, because the one WordPress reads
-     * would drift from the one we check.
+     * What WordPress has no answer for, merged from every namespace that
+     * declared one. The ORIGINS are not here: they go to WordPress's own
+     * allowed_http_origins list (INV-5 — this class keeps no table WordPress
+     * already keeps). Two allow-lists is one too many, because the one
+     * WordPress reads would drift from the one we check.
      *
-     * @var array{credentials: bool, max_age: int}
+     * @var array{declared: bool, max_age: int}
      */
-    private static array $cors = ['credentials' => false, 'max_age' => 0];
+    private static array $cors = ['declared' => false, 'max_age' => 0];
 
     /**
-     * The declaration waiting for WordPress's own hooks, not an allow-list.
+     * Declared origin => whether the declaration that named it asked for
+     * credentials. INPUT for the two filters below, never consulted for
+     * allowed-ness — that question has one address, is_allowed_http_origin().
+     * It is a map rather than a list because credentials belong to the module
+     * that asked for them, not to the site.
      *
-     * cors() writes these; the two named callbacks below read them and hand
-     * them to WordPress. Nothing else asks them whether an origin is allowed —
-     * that question has one address, is_allowed_http_origin(). They exist
-     * because the callbacks must be named statics rather than closures over
-     * the declaration (see cors()), and a named static has nowhere to close
-     * over.
-     *
-     * @var list<string>
+     * @var array<string, bool>
      */
     private static array $corsOrigins = [];
 
     /** @var list<callable> Resolvers, asked per request about one origin. */
     private static array $corsResolvers = [];
 
-    /** Whether a policy was declared at all. Until one is, the emitter abstains. */
-    private static bool $corsDeclared = false;
-
-    /** @var array<string, mixed> Namespace-level option defaults. */
-    private array $defaults = [];
+    /** @var array<string, array<string, mixed>> Option defaults, per namespace. */
+    private static array $defaults = [];
 
     /**
      * The ONE declaration this handle carries and has not registered yet — the
@@ -107,19 +116,9 @@ final class NTDST_Rest
      * facade. ntdst_rest('shop/v1') hands the same object to every module in
      * the request, so a pending slot living there would let one module's
      * public() publish a route another module declared, from a line that
-     * module's author never sees. Each verb returns its own clone instead, so
-     * public() can only reach the declaration it was chained onto, and
-     * ntdst_rest('shop/v1')->public() finds nothing and says so.
+     * module's author never sees.
      */
     private ?object $pending = null;
-
-    /**
-     * The cached namespace facade this handle was declared through, or null on
-     * the facade itself. A clone keeps the link so it can still read the
-     * namespace's defaults() at flush time rather than a copy frozen when the
-     * verb ran.
-     */
-    private ?self $facade = null;
 
     /**
      * Declared limits, so charge() can bill a route without the caller
@@ -137,16 +136,40 @@ final class NTDST_Rest
     }
 
     /**
-     * Options every route in this namespace inherits. Per-route options win.
+     * Options every route in this namespace inherits. Per-route options win,
+     * and a route reads them as they stand WHEN ITS VERB RUNS (see route()).
+     *
+     * A default may set a POSTURE ('logged_in', a capability); it may not OPEN.
+     * defaults() is the most distant place a permission can be written from —
+     * one line in a bootstrap file, inherited by routes added months later by
+     * someone who never read it — and a callable default would additionally
+     * satisfy the "this route named its own gate" rule for every unnamed write
+     * in the namespace. An opening default is refused and dropped; the other
+     * defaults are kept, because taking show_in_index away over an unrelated
+     * key punishes the wrong line.
      *
      * @param array<string, mixed> $options
      */
     public function defaults(array $options): self
     {
-        // Written to the FACADE, so it reaches every route in the namespace and
+        $permission = $options['permission'] ?? null;
+
+        if ($permission !== null && (!is_string($permission) || $permission === '' || $permission === 'public')) {
+            $this->refuse(
+                '(defaults)',
+                '-',
+                'defaults:opening — a namespace default may narrow the posture ("logged_in", a capability) but never open it, so the "permission" default was dropped (called at ' . self::callSite() . ')',
+                false,
+                '5.0.0',
+                'defaults',
+            );
+
+            unset($options['permission']);
+        }
+
+        // Written per NAMESPACE, so it reaches every route declared there and
         // not just the ones declared through the handle this was called on.
-        $facade           = $this->facade();
-        $facade->defaults = $options + $facade->defaults;
+        self::$defaults[$this->namespace] = $options + (self::$defaults[$this->namespace] ?? []);
 
         return $this;
     }
@@ -158,18 +181,20 @@ final class NTDST_Rest
      * `allowed_http_origins`, the list `is_allowed_http_origin()` answers over
      * (wp-includes/http.php). This class keeps none of its own.
      *
-     * That list is site-wide in a second sense: admin-ajax's
-     * send_origin_headers() reads it too, so an origin declared here for REST
-     * also reaches the site's ajax surface. That is the price of one
-     * allow-list instead of two — declare only origins that may have both.
+     * SCOPED TO REST, and that is the whole of threat row #9. That list is
+     * site-wide: admin-ajax.php, admin-post.php and the customizer all call
+     * send_origin_headers(), which grants Access-Control-Allow-Credentials:
+     * true to every allowed origin — unconditionally, whatever $credentials
+     * says here. A declared origin could therefore fetch
+     * admin-ajax.php?action=rest-nonce with the victim's cookies and read the
+     * answer. So the declaration applies only while WordPress is serving a REST
+     * request; those surfaces keep WordPress's own defaults.
      *
      * A CALLABLE is a per-request question, so it goes on the other end of the
      * same function: `allowed_http_origin`, which is handed THE ORIGIN BEING
-     * ASKED ABOUT. Putting a resolver on the list filter instead would mean
-     * appending get_http_origin() to a list that other code enumerates, and
-     * answering about the request's origin even when the caller asked about a
-     * different one. It only ever ADDS: a resolver that says no must not take
-     * WordPress's own origins away with it.
+     * ASKED ABOUT. It only ever ADDS: a resolver that says no must not take
+     * WordPress's own origins away with it. Credentials follow a NAMED origin,
+     * so a resolver never grants them.
      *
      * This also REMOVES core's rest_send_cors_headers, which echoes ANY origin
      * back with Access-Control-Allow-Credentials: true — meaning any site can
@@ -198,7 +223,14 @@ final class NTDST_Rest
             ));
 
             if (in_array('*', $declared, true)) {
-                $this->refuse('(cors)', '-', '"*" is never a valid allow-list entry');
+                $this->refuse(
+                    '(cors)',
+                    '-',
+                    '"*" was refused as an allow-list entry: allowed_http_origins is site-wide, so a wildcard hands every origin this site\'s REST surface. Write the origins out, or hand cors() a resolver',
+                    false,
+                    '5.0.0',
+                    'cors',
+                );
 
                 // The WHOLE declaration goes down, not the wildcard alone:
                 // half-honouring a bad list is the worst outcome, because the
@@ -211,43 +243,37 @@ final class NTDST_Rest
                 $maxAge      = 0;
             }
 
-            // A set: WordPress reads it with in_array(), so a second copy
-            // changes no answer and only hides which module asked for what.
+            // A set: WordPress reads the list with in_array(), so a second copy
+            // changes no answer. Credentials are OR'd per origin, so the module
+            // that asked for them grants them to the origin IT named and to no
+            // other module's.
             foreach ($declared as $origin) {
-                if (!in_array($origin, self::$corsOrigins, true)) {
-                    self::$corsOrigins[] = $origin;
-                }
-            }
-
-            if (self::$corsOrigins !== []) {
-                add_filter('allowed_http_origins', [self::class, 'filterAllowedOrigins'], 10, 1);
+                self::$corsOrigins[$origin] = $credentials || (self::$corsOrigins[$origin] ?? false);
             }
         } else {
-            if (!in_array($origins, self::$corsResolvers, true)) {
-                self::$corsResolvers[] = $origins;
-            }
-
-            add_filter('allowed_http_origin', [self::class, 'filterAllowedOrigin'], 10, 2);
+            self::$corsResolvers[] = $origins;
         }
 
-        self::$corsDeclared = true;
+        self::$cors = ['declared' => true, 'max_age' => max($maxAge, self::$cors['max_age'])];
 
-        self::$cors = [
-            'credentials' => $credentials || self::$cors['credentials'],
-            'max_age'     => max($maxAge, self::$cors['max_age']),
-        ];
-
-        // No "already hooked" flag. Such a flag claims "this process mounted
-        // it", which is not the same as "it is mounted": anything that rebuilds
-        // $wp_filter — WP_UnitTestCase snapshots and restores it around every
-        // test — drops the callback while the flag stays true, and the policy
-        // silently stops running from test two onward. Named static callbacks
-        // get a stable id from _wp_filter_build_unique_id(), so WordPress
+        // Mounted unconditionally, and mounted TOGETHER with the swap below:
+        // widening the site-wide list while core's reflect-any-origin emitter
+        // is still on the bus is the open direction. Named static callbacks get
+        // a stable id from _wp_filter_build_unique_id(), so WordPress
         // de-duplicates these itself and a second cors() call is free — which
-        // is why the two filters above are methods too, and why the declaration
-        // they read lives in statics rather than in a closure. A closure would
-        // NOT dedupe: every cors() call would stack another copy.
-        add_action('rest_api_init', [self::class, 'mountCors'], 15);
+        // is why they are methods rather than closures over the declaration.
+        add_filter('allowed_http_origins', [self::class, 'filterAllowedOrigins'], 10, 1);
+        add_filter('allowed_http_origin', [self::class, 'filterAllowedOrigin'], 10, 2);
+
+        if (self::timing() === 'before') {
+            add_action('rest_api_init', [self::class, 'mountCors'], 15);
+
+            return $this;
+        }
+
+        // Inside the hook past priority 15, or after it has finished: there is
+        // no hook left to schedule the swap on, so it happens now.
+        self::mountCors();
 
         return $this;
     }
@@ -256,14 +282,18 @@ final class NTDST_Rest
     public static function mountCors(): void
     {
         remove_filter('rest_pre_serve_request', 'rest_send_cors_headers');
-        add_filter('rest_pre_serve_request', [self::class, 'sendCors'], 10, 1);
+
+        // The LAST word: rest_pre_serve_request is a filter any plugin can
+        // join, and the last writer of a header wins on the wire.
+        add_filter('rest_pre_serve_request', [self::class, 'sendCors'], PHP_INT_MAX, 1);
     }
 
     /**
-     * Add the declared origins to WordPress's own allow-list.
+     * Add the declared origins to WordPress's own allow-list, on REST requests.
      *
      * WordPress's entries stay first and in their order; ours follow, once
-     * each. Nothing else is added — this list also answers for admin-ajax.
+     * each. Nothing else is added — this list also answers for admin-ajax,
+     * which is why it is untouched there (see cors()).
      *
      * @param mixed $origins
      * @return list<string>
@@ -272,9 +302,13 @@ final class NTDST_Rest
     {
         $list = is_array($origins) ? array_values($origins) : [];
 
-        foreach (self::$corsOrigins as $origin) {
-            if (!in_array($origin, $list, true)) {
-                $list[] = $origin;
+        if (!self::servingRest()) {
+            return $list;
+        }
+
+        foreach (array_keys(self::$corsOrigins) as $origin) {
+            if (!in_array((string) $origin, $list, true)) {
+                $list[] = (string) $origin;
             }
         }
 
@@ -282,13 +316,13 @@ final class NTDST_Rest
     }
 
     /**
-     * Let a declared resolver answer for the origin WordPress was asked about.
+     * Let a declared resolver answer for the origin WordPress was asked about,
+     * on REST requests.
      *
      * ADDITIVE ONLY, in both directions: an origin WordPress already allows is
      * returned untouched — a resolver grants, it never revokes — and a
      * resolver that declines leaves the verdict exactly as WordPress made it.
-     * Only `true` grants; the resolver is declared as fn(string): bool, and on
-     * an allow-list an ambiguous yes is a no.
+     * Only `true` grants; on an allow-list an ambiguous yes is a no.
      *
      * @param mixed $allowed The origin when WordPress allows it, '' when not.
      * @param mixed $origin  The origin asked about, or null for the request's own.
@@ -296,7 +330,7 @@ final class NTDST_Rest
      */
     public static function filterAllowedOrigin($allowed, $origin = null)
     {
-        if (is_string($allowed) && $allowed !== '') {
+        if ((is_string($allowed) && $allowed !== '') || !self::servingRest()) {
             return $allowed;
         }
 
@@ -311,12 +345,52 @@ final class NTDST_Rest
         }
 
         foreach (self::$corsResolvers as $resolver) {
-            if ($resolver($candidate) === true) {
+            if (self::resolverAllows($resolver, $candidate)) {
                 return $candidate;
             }
         }
 
         return $allowed;
+    }
+
+    /**
+     * Ask one resolver, and survive it.
+     *
+     * A resolver is consumer code called from inside a WordPress filter on a
+     * request already being served: one that talks to a database or an HTTP API
+     * will throw eventually, and an exception here takes the whole request down
+     * — ajax surfaces included. It fails closed and leaves a trace.
+     *
+     * @param callable $resolver fn(string $origin): bool — a full-string match on
+     *                           'scheme://host[:port]', never a substring, and it
+     *                           must not throw.
+     */
+    private static function resolverAllows(callable $resolver, string $origin): bool
+    {
+        try {
+            return $resolver($origin) === true;
+        } catch (Throwable $error) {
+            if (function_exists('ntdst_log')) {
+                ntdst_log('api')->error('CORS resolver threw — the origin is refused', [
+                    'origin' => $origin,
+                    'error'  => $error->getMessage(),
+                ]);
+            }
+
+            return false;
+        }
+    }
+
+    /**
+     * True only while WordPress is serving a REST request.
+     *
+     * function_exists() guarded because the function arrived in WP 6.5, and the
+     * missing-function answer must be "not REST" — the declaration then widens
+     * nothing, which is the closed direction.
+     */
+    private static function servingRest(): bool
+    {
+        return function_exists('wp_is_serving_rest_request') && (bool) wp_is_serving_rest_request();
     }
 
     public function get(string $route, $handler, array $options = []): self
@@ -347,19 +421,12 @@ final class NTDST_Rest
     /**
      * Publish the declaration this call follows. The ONE way to anonymous.
      *
-     * It marks a PENDING declaration, which means before rest_api_init or from
-     * inside it — the idiomatic registration point, and the one did_action()
-     * cannot distinguish from "long after". Only once the hook has FINISHED is
-     * there nothing left to mark: WordPress holds the route and its callback
-     * cannot be swapped behind it. With nothing to mark, this refuses out loud
-     * rather than returning quietly — the silent version leaves an author
-     * believing a route is open when it is internal, or the reverse, and only
-     * one of those two mistakes is discovered by using the site.
-     *
-     * It reaches the declaration it was CHAINED ONTO and no other. Called on
-     * ntdst_rest('ns') itself it finds nothing, because that object is shared
-     * by every module in the namespace and publishing a stranger's route is the
-     * bug this shape exists to make impossible.
+     * It marks a PENDING declaration — one that has not yet reached
+     * register_rest_route() — and it reaches the declaration it was CHAINED
+     * ONTO and no other. Every other case refuses OUT LOUD rather than
+     * returning quietly: a silent no-op leaves an author believing a route is
+     * open when it is internal, or the reverse, and only one of those two
+     * mistakes is discovered by using the site.
      *
      * A write verb stays unpublishable: registerOne() refuses it, because
      * "anyone may write" is the threat itself and not an exception to it.
@@ -368,44 +435,24 @@ final class NTDST_Rest
      */
     public function public(): self
     {
-        // Three causes, three dedup ids, so the first misuse in a process does
-        // not silence a different one on the next line.
-        if ($this->pending === null) {
-            if (did_action('rest_api_init') && !self::doingRestApiInit()) {
-                $this->refuse(
-                    '(public:after-hook)',
-                    '-',
-                    'public() came too late — rest_api_init has finished, WordPress holds the route and its callback cannot be swapped now',
-                    false,
-                    '5.0.0',
-                );
+        $cause = match (true) {
+            $this->pending === null    => self::timing() === 'after' ? 'after-hook' : 'nothing-pending',
+            $this->pending->registered => 'already-registered',
+            ($this->pending->options['permission'] ?? null) !== null => 'stated-permission',
+            default                    => null,
+        };
 
-                return $this;
-            }
-
+        if ($cause !== null) {
+            // The CALL SITE is part of the message, and so part of the dedup id:
+            // two misuses in one namespace are two things to fix, and a
+            // namespace-keyed report tells the author about the first one only.
             $this->refuse(
-                '(public:nothing-pending)',
+                '(public)',
                 '-',
-                'public() found no pending declaration — chain it onto the verb whose route it publishes, not onto ntdst_rest(), which every module in the namespace shares',
+                self::PUBLIC_REFUSALS[$cause] . ' (called at ' . self::callSite() . ')',
                 false,
                 '5.0.0',
-            );
-
-            return $this;
-        }
-
-        // A stated permission is a decision, not a suggestion. The two lines
-        // contradict each other and only one direction is safe to guess: taking
-        // public() as the last word would turn a route whose author named a gate
-        // into an anonymous one, which is the open direction and is reachable by
-        // a stray public() a merge left behind. Reported, and the gate stands.
-        if (($this->pending->options['permission'] ?? null) !== null) {
-            $this->refuse(
-                '(public:stated-permission)',
-                '-',
-                'the declaration already names its own permission, so public() contradicts it — the named permission stands and the route is NOT published',
-                false,
-                '5.0.0',
+                'public',
             );
 
             return $this;
@@ -426,92 +473,137 @@ final class NTDST_Rest
     public function route(string $route, string $methods, $handler, array $options = []): self
     {
         // The handle this returns owns the declaration; the facade never does.
-        // Its defaults copy is emptied so the namespace has exactly one place
-        // to read them from — facade()->defaults — and a clone can never drift
-        // from the namespace it was declared through.
-        $handle           = clone $this;
-        $handle->facade   = $this->facade();
-        $handle->pending  = null;
-        $handle->defaults = [];
+        $handle          = clone $this;
+        $handle->pending = null;
 
-        // THREE states, and did_action() cannot tell the last two apart: the
-        // counter is incremented before the first callback, so it already reads
-        // 1 inside the running hook — the same value it reads an hour after the
-        // hook finished. Only doing_action() separates them.
-        //
-        //   before  0 / false  → pending
-        //   inside  1 / TRUE   → pending, flushed later in the same firing
-        //   after   1 / false  → register now; the hook never fires again
-        if (did_action('rest_api_init') && !self::doingRestApiInit()) {
-            $this->registerOne($route, $methods, $handler, $options + $this->facade()->defaults);
+        // The namespace defaults are SNAPSHOT here, not read at flush time: a
+        // defaults() call made later — by another module, in another file —
+        // must not reach back and rewrite a route already declared. They are
+        // kept beside the stated options rather than merged into them, so
+        // ->public() can still tell "this route named a permission" from "this
+        // route inherited one".
+        $inherited = self::$defaults[$this->namespace] ?? [];
+        $timing    = self::timing();
+
+        if ($timing === 'after') {
+            $this->registerOne($route, $methods, $handler, $options + $inherited);
 
             return $handle;
         }
 
-        $declaration     = (object) ['options' => $options];
+        if ($timing === 'inside' && self::hookPriority() === PHP_INT_MAX) {
+            // WP_Hook re-reads its callback list as it walks, but it never walks
+            // backwards, and PHP_INT_MAX is where the flush below goes. A
+            // consumer already hooked there declares into a flush that can never
+            // run: the route would vanish with no error and 404 in production.
+            $this->refuse(
+                $route,
+                $methods,
+                'rest_api_init is already running at PHP_INT_MAX, which is where this declaration would be flushed — nothing mounted now can still run, so hook earlier (priority 10 is the documented place)',
+                true,
+                '5.0.0',
+            );
+
+            return $handle;
+        }
+
+        $declaration     = (object) ['options' => $options, 'inherited' => $inherited, 'registered' => false];
         $handle->pending = $declaration;
 
         // Mutable, so public() can change the permission between here and the
-        // flush; and the namespace defaults are merged at FLUSH time, so a
-        // defaults() call made after this route still reaches it. The
-        // declaration's own permission wins the merge, which is what lets
-        // ->public() beat defaults(['permission' => 'logged_in']).
+        // flush. The MARK is what makes a declaration a statement rather than
+        // an instruction to be replayed: rest_api_init is reached more than
+        // once in ordinary use (rest_get_server() fires it while building the
+        // server), and a route handed to WordPress twice is counted twice by
+        // every audit that reads the register back.
         $register = function () use ($route, $methods, $handler, $declaration): void {
-            $this->registerOne($route, $methods, $handler, $declaration->options + $this->facade()->defaults);
+            if ($declaration->registered) {
+                return;
+            }
+
+            $declaration->registered = true;
+
+            $this->registerOne($route, $methods, $handler, $declaration->options + $declaration->inherited);
         };
 
-        // Inside the running hook the flush goes at the LAST priority. WP_Hook
-        // picks up callbacks added while it iterates, but it never walks
-        // backwards — mount at the priority currently firing and the iteration
-        // may already have passed it, and the route then simply never registers.
-        add_action('rest_api_init', $register, self::doingRestApiInit() ? PHP_INT_MAX : 10);
+        add_action('rest_api_init', $register, $timing === 'inside' ? PHP_INT_MAX : 10);
 
         return $handle;
     }
 
-    /** This handle's namespace facade — itself, when it IS the facade. */
-    private function facade(): self
+    /**
+     * Where this call stands relative to rest_api_init — the ONE place the
+     * question is asked.
+     *
+     *   before  did_action 0 / doing_action false  → queue it, flush at 10
+     *   inside  did_action 1 / doing_action TRUE   → queue it, flush at the end
+     *   after   did_action 1 / doing_action false  → do it now; the hook is done
+     *
+     * did_action() alone cannot separate the last two: the counter is
+     * incremented before the first callback, so it reads 1 inside the running
+     * hook and the same 1 an hour later. function_exists() guarded so a harness
+     * that stubs one and not the other reads a state instead of fatalling.
+     */
+    private static function timing(): string
     {
-        return $this->facade ?? $this;
+        if (function_exists('doing_action') && doing_action('rest_api_init')) {
+            return 'inside';
+        }
+
+        return function_exists('did_action') && did_action('rest_api_init') ? 'after' : 'before';
+    }
+
+    /** The priority rest_api_init is firing at, when WordPress can say. */
+    private static function hookPriority(): ?int
+    {
+        $hook = $GLOBALS['wp_filter']['rest_api_init'] ?? null;
+
+        if (!is_object($hook) || !method_exists($hook, 'current_priority')) {
+            return null;
+        }
+
+        $priority = $hook->current_priority();
+
+        return is_int($priority) ? $priority : null;
     }
 
     /**
-     * True only WHILE rest_api_init's callbacks run.
-     *
-     * function_exists() guarded because a unit harness that stubs did_action()
-     * and not doing_action() must read "not running" rather than fatal.
+     * The consumer line that reached us — in the message, so an author reading
+     * one refusal knows which of their calls made it, and in the dedup id.
      */
-    private static function doingRestApiInit(): bool
+    private static function callSite(): string
     {
-        return function_exists('doing_action') && (bool) doing_action('rest_api_init');
+        foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $frame) {
+            if (isset($frame['file']) && $frame['file'] !== __FILE__) {
+                return basename((string) $frame['file']) . ':' . ($frame['line'] ?? 0);
+            }
+        }
+
+        return 'unknown';
     }
 
     /**
      * Resolve the 'permission' option to what WordPress will be handed, or null
      * when the option was declared and is unusable.
      *
-     * absent               → 'is_user_logged_in' — internal is the default
-     * 'logged_in'          → 'is_user_logged_in'
-     * 'public'             → '__return_true'
-     * a global function's name → itself, as a callable
-     * any other string     → fn(): bool => current_user_can($string)
-     * a callable           → as given
+     * absent           → 'is_user_logged_in' — internal is the default
+     * 'logged_in'      → 'is_user_logged_in'
+     * 'public'         → '__return_true'
+     * any other string → fn(): bool => current_user_can($string)
+     * a callable       → as given
      *
-     * That fourth line is a real ambiguity, not an oversight: a capability slug
-     * and a function name are both plain strings, and PHP cannot tell them
-     * apart, so a capability that happens to share a name with a defined global
-     * function is handed to WordPress as that function. Nothing at this layer
-     * can separate them; a site with such a capability must pass a closure.
+     * A STRING IS A CAPABILITY, with no is_callable() check in front of it.
+     * Capability slugs and function names are the same bytes, and WordPress
+     * itself ships edit_post(), delete_plugins() and activate_plugins() — every
+     * one of them a capability slug too, and every one of them loaded on an
+     * admin request. Asking is_callable() first would run somebody's admin
+     * function as an authorization check and take its return value as the
+     * answer; 'wp_is_json_request' would admit every REST client alive. A
+     * consumer with a gate of its own passes the callable itself.
      *
-     * The two shorthands resolve to the core functions as STRINGS (see the
-     * INTERNAL/ANONYMOUS constants). A capability is the one case that must be
-     * a closure, because core has no function that names it — so a capability
-     * route reads as opaque in get_routes(), and a site that wants to answer
-     * for it has to read the route's declaration.
-     *
-     * Returns `mixed` rather than `?callable` because a string is only of type
-     * `callable` while the function it names happens to be defined, and the
-     * resolution must not change with load order.
+     * Returns `mixed` rather than `?callable` because the two shorthands
+     * resolve to core function NAMES, which are of type `callable` only while
+     * the function they name happens to be defined.
      */
     private function permission(mixed $permission): mixed
     {
@@ -525,11 +617,7 @@ final class NTDST_Rest
             return match ($permission) {
                 'public'    => self::ANONYMOUS,
                 'logged_in' => self::INTERNAL,
-                // A capability slug and a typo'd function name are
-                // byte-identical, so an unrecognised string becomes a
-                // capability check — false for everyone, rather than true for
-                // anyone.
-                default     => is_callable($permission) ? $permission : static fn (): bool => current_user_can($permission),
+                default     => static fn (): bool => current_user_can($permission),
             };
         }
 
@@ -563,9 +651,10 @@ final class NTDST_Rest
         // ->public() all land here. It refuses rather than registering a denying
         // callback, because a route that was never handed to WordPress cannot be
         // reached by a filter somebody removes later.
-        if ($shorthand && array_intersect($this->verbs($methods), self::WRITE) !== []) {
+        if ($shorthand && array_diff(self::verbs($methods), self::READ) !== []) {
             $this->refuse($route, $methods, sprintf(
-                'a write verb must name a capability or hand over its own callable — "%s" is not a gate',
+                'only %s may carry a posture — every other verb must name a capability or hand over its own callable, and "%s" is not a gate',
+                implode(', ', self::READ),
                 $permission === self::ANONYMOUS ? 'public' : 'logged_in',
             ), true, '5.0.0');
 
@@ -629,6 +718,10 @@ final class NTDST_Rest
      * `scheme://host[:port]`: never a substring, never case-folded. A
      * leftover 'origins' key in $policy decides nothing, in either direction.
      *
+     * Access-Control-Allow-Headers is never sent, which is core's gap too:
+     * WP_REST_Server::serve_request() answers preflights with the headers the
+     * request asked for, and this decision does not join that conversation.
+     *
      * @param array{credentials: bool, max_age: int} $policy
      * @return array{set: list<string>, remove: list<string>}
      */
@@ -653,8 +746,11 @@ final class NTDST_Rest
             return $revoke;
         }
 
+        // The origin is attacker-controlled and it is about to be written into
+        // a response header. sanitize_url() is what core's own
+        // send_origin_headers() runs it through first.
         $set = [
-            'Access-Control-Allow-Origin: ' . $origin,
+            'Access-Control-Allow-Origin: ' . sanitize_url($origin),
             'Access-Control-Allow-Methods: OPTIONS, GET, POST, PUT, PATCH, DELETE',
         ];
 
@@ -672,8 +768,13 @@ final class NTDST_Rest
     }
 
     /**
-     * The decision for the site policy, or null when none was declared. One
-     * allow-list, site-wide — nothing to look up, so no route to pass.
+     * The decision for this origin, or null when no policy was declared.
+     *
+     * Credentials are read PER ORIGIN, from the declaration that named it: one
+     * site-wide flag would hand a third-party origin whitelisted for a public
+     * feed the credentials another module asked for. max_age is shared and
+     * takes the highest — it is a cache hint, and the worst a longer one does
+     * is make a preflight rarer.
      *
      * A declaration that granted nothing — an empty list, a refused wildcard —
      * still decides. It fails CLOSED, which means overriding core's headers,
@@ -683,7 +784,14 @@ final class NTDST_Rest
      */
     public static function corsDecisionFor(?string $origin): ?array
     {
-        return self::$corsDeclared ? self::corsDecision($origin, self::$cors) : null;
+        if (!self::$cors['declared']) {
+            return null;
+        }
+
+        return self::corsDecision($origin, [
+            'credentials' => (bool) (self::$corsOrigins[(string) $origin] ?? false),
+            'max_age'     => self::$cors['max_age'],
+        ]);
     }
 
     /**
@@ -741,7 +849,7 @@ final class NTDST_Rest
     {
         $limit  = $options['rate_limit'] ?? null;
         $window = (int) ($options['rate_window'] ?? 60);
-        $verbs  = $this->verbs($methods);
+        $verbs  = self::verbs($methods);
 
         return $this->memoize(function ($request) use ($permission, $limit, $window, $route, $verbs) {
             $allowed = $permission($request);
@@ -784,15 +892,15 @@ final class NTDST_Rest
      */
     private function key(string $route, string $methods): string
     {
-        return $this->namespace . '|' . $route . '|' . implode(',', $this->verbs($methods));
+        return $this->namespace . '|' . $route . '|' . implode(',', self::verbs($methods));
     }
 
     /**
-     * WP's methods option ('GET', or 'GET,POST') as normalized verbs.
+     * WP's methods option ('GET', or 'get , post') as normalized verbs.
      *
      * @return list<string>
      */
-    private function verbs(string $methods): array
+    private static function verbs(string $methods): array
     {
         return array_map('strtoupper', array_map('trim', explode(',', $methods)));
     }
@@ -875,22 +983,39 @@ final class NTDST_Rest
     }
 
     /**
-     * @param bool   $fatal False when the route still registers — a retired
-     *                      option, or a public() the declaration overrules. The
-     *                      message is then used as written, because "Route was
-     *                      not registered" would be a lie.
+     * Say it once, and say it where it can be read.
+     *
+     * The dedup id carries the REASON as well as the route: registerOne() runs
+     * on every REST request, so a repeated refusal would flood the log, but a
+     * route-only key also swallows the SECOND, different fault on that route —
+     * the author fixes the one they were told about and the route still does
+     * not exist, now silently.
+     *
+     * Both channels, because neither is enough alone: _doing_it_wrong() is
+     * SUPPRESSED inside a REST request (core's doing_it_wrong_trigger_error is
+     * false there), so a production refusal is invisible without the log.
+     *
+     * @param bool    $fatal False when the route still registers — a retired
+     *                       option, a refused CORS entry, a public() the
+     *                       declaration overrules. The message is then used as
+     *                       written, because "Route was not registered" would
+     *                       be a lie.
      * @param ?string $since The version whose rule this refusal enforces, which
      *                       is what WordPress prints; it is not always this
-     *                       class's own age. Null takes the floor below, and
-     *                       that floor is written at the _doing_it_wrong() call
-     *                       rather than in this signature because the package's
-     *                       own release-marker audit reads the call.
+     *                       class's own age.
+     * @param string  $from  The method that refused, so the report names the
+     *                       call the author has to look at.
      */
-    private function refuse(string $route, string $methods, string $why, bool $fatal = true, ?string $since = null): void
-    {
-        $id = $this->namespace . '|' . $route . '|' . $methods . '|' . (int) $fatal;
+    private function refuse(
+        string $route,
+        string $methods,
+        string $why,
+        bool $fatal = true,
+        ?string $since = null,
+        string $from = 'route'
+    ): void {
+        $id = implode('|', [$this->namespace, $route, $methods, (int) $fatal, $why]);
 
-        // Once per process: registerOne() runs on every REST request.
         if (isset(self::$reported[$id])) {
             return;
         }
@@ -898,23 +1023,29 @@ final class NTDST_Rest
         self::$reported[$id] = true;
 
         _doing_it_wrong(
-            self::class . '::route',
+            self::class . '::' . $from,
             $fatal ? sprintf('Route was not registered — %s.', $why) : $why,
             $since ?? '3.0.0',
         );
 
-        if (!$fatal) {
+        if (!function_exists('ntdst_log')) {
             return;
         }
 
-        if (function_exists('ntdst_log')) {
-            ntdst_log('api')->error('REST route registration refused', [
-                'namespace' => $this->namespace,
-                'route'     => $route,
-                'methods'   => $methods,
-                'reason'    => $why,
-            ]);
+        $entry = [
+            'namespace' => $this->namespace,
+            'route'     => $route,
+            'methods'   => $methods,
+            'reason'    => $why,
+        ];
+
+        if ($fatal) {
+            ntdst_log('api')->error('REST route registration refused', $entry);
+
+            return;
         }
+
+        ntdst_log('api')->warning('REST declaration refused', $entry);
     }
 }
 
