@@ -1,6 +1,6 @@
 # core-shape — ntdst-core 5.0.0: declare in Data, route through Rest, WordPress does the rest
 
-**Status:** spec, revision 3 (2026-08-22 — Cluster 2 gate rulings: FR-6 declared origins apply to REST requests only; FR-4 a string permission is a capability; `defaults()` may set a posture, never an opening; write-verb rule is a READ allow-list; revision 2 2026-08-22 — Cluster 1 gate rulings approved by Stefan: FR-1 attribution, FR-2 json and repeater rows, FR-3 readers, SC-1 path, assumption on `additionalProperties`; revision 1 2026-08-23 09:40 — ground-truth amendments to FR-2, FR-9, FR-14, SC-10, two assumptions) — written 2026-08-23 from the rulings in
+**Status:** spec, revision 3 — approved by Stefan 2026-08-22 (Cluster 2 gate rulings: FR-6 declared origins apply to REST requests only; FR-4 a string permission is a capability; `defaults()` may set a posture, never an opening; write-verb rule is a READ allow-list; revision 2 2026-08-22 — Cluster 1 gate rulings approved by Stefan: FR-1 attribution, FR-2 json and repeater rows, FR-3 readers, SC-1 path, assumption on `additionalProperties`; revision 1 2026-08-23 09:40 — ground-truth amendments to FR-2, FR-9, FR-14, SC-10, two assumptions) — written 2026-08-23 from the rulings in
 `docs/plans/2026-08-23-core-shape-brief.md`, confirmed in brainstorming the same
 morning. Awaiting Stefan's review, then `writing-plans`.
 **Target release:** v5.0.0 (breaking, unreleased — the 5.0.0 `Rest` rewrite is
