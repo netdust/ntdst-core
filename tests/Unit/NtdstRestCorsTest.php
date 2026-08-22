@@ -70,6 +70,14 @@ final class NtdstRestCorsTest extends TestCase
     /** @var list<string> Every origin handed to sanitize_url(), in order. */
     private array $sanitized = [];
 
+    /**
+     * A stand-in for $GLOBALS['wp_filter']['rest_api_init'], mounted only by
+     * the cases that care WHICH priority the hook has reached. WP_Hook answers
+     * that with current_priority(); here each callback sets it on entry, which
+     * is the same thing observed from inside the callback.
+     */
+    private ?object $restApiInitHook = null;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -79,6 +87,8 @@ final class NtdstRestCorsTest extends TestCase
         $this->doingItWrong = [];
         $this->actions = [];
         $this->sanitized = [];
+        $this->restApiInitHook = null;
+        unset($GLOBALS['wp_filter']['rest_api_init']);
         $_SERVER = ['REMOTE_ADDR' => '203.0.113.9'];
 
         // The CORS declaration is SITE-WIDE and lives in class statics, so it
@@ -162,6 +172,8 @@ final class NtdstRestCorsTest extends TestCase
 
     protected function tearDown(): void
     {
+        unset($GLOBALS['wp_filter']['rest_api_init']);
+
         Monkey\tearDown();
         parent::tearDown();
     }
@@ -616,6 +628,98 @@ final class NtdstRestCorsTest extends TestCase
         );
     }
 
+    /**
+     * Mount core's CORS emitter the way WordPress really mounts it: NOT before
+     * the request, but from rest_api_default_filters(), which is itself a
+     * rest_api_init callback at priority 10 (wp-includes/rest-api.php). The
+     * rest of this file pre-seeds it, because most cases are about what is on
+     * the bus rather than when it got there. This one is about exactly that.
+     */
+    private function wordPressMountsItsCorsEmitterFromRestApiInit(): void
+    {
+        unset(
+            $GLOBALS['_ntdst_test_filters_at']['rest_pre_serve_request'],
+            $GLOBALS['_ntdst_test_filters']['rest_pre_serve_request'],
+        );
+
+        $hook = $this->restApiInitHook = new class {
+            public int $current = 0;
+
+            public function current_priority(): int
+            {
+                return $this->current;
+            }
+        };
+
+        $GLOBALS['wp_filter']['rest_api_init'] = $hook;
+
+        add_action('rest_api_init', static function () use ($hook): void {
+            $hook->current = 10;
+            add_filter('rest_pre_serve_request', 'rest_send_cors_headers', 10, 4);
+        }, 10);
+    }
+
+    /** Declare from inside the hook at a stated priority, with current_priority() saying so. */
+    private function declareAtRestApiInitPriority(int $priority, callable $declare): void
+    {
+        $hook = $this->restApiInitHook;
+
+        add_action('rest_api_init', static function () use ($declare, $hook, $priority): void {
+            if ($hook !== null) {
+                $hook->current = $priority;
+            }
+
+            $declare();
+        }, $priority);
+    }
+
+    public function testCorsDeclaredInsideTheHookBeforeCoreMountsItsEmitterStillTakesItOff(): void
+    {
+        // WHY: found on the real wire — daan's probe declares its routes from
+        // rest_api_init at priority 5, which is an ordinary thing to write.
+        // Core does not mount rest_send_cors_headers() before the request; it
+        // mounts it from rest_api_default_filters(), a rest_api_init callback
+        // at priority 10. A cors() that swaps the emitter IMMEDIATELY at
+        // priority 5 therefore calls remove_filter() on a handler WordPress has
+        // not added yet — the removal is a no-op, core mounts five priorities
+        // later, and the reflect-any-origin emitter is on the bus for the whole
+        // request while the site-wide allow-list has already been widened.
+        //
+        // The wire survived only because sendCors runs last and takes the
+        // headers back off; that is a second line of defence doing the first
+        // one's job, and it stops being enough the moment anything between
+        // priority 10 and PHP_INT_MAX reads the state of that filter.
+        //
+        // (The expected shape, for the reader rather than for the assertion:
+        // inside the hook below 15, schedule the swap at 15 — the same place
+        // the BEFORE state schedules it; inside at 15 or later, and after the
+        // hook, swap immediately. Both branches are covered:
+        // testCorsTakesCoresEmitterOffTheBusInEveryHookState mounts at 20.)
+        $this->wordPressMountsItsCorsEmitterFromRestApiInit();
+        $this->restApiInitState('before');
+
+        $this->declareAtRestApiInitPriority(5, function (): void {
+            ntdst_rest('cors-early/v1')->cors([self::ALLOWED]);
+        });
+
+        $this->fireRestApiInit();
+
+        $this->assertFalse(
+            $this->coreCorsEmitterIsMounted(),
+            "declared at rest_api_init:5, core mounts its reflect-any-origin emitter AFTER the swap ran — "
+                . 'and it is still on rest_pre_serve_request when the hook completes.',
+        );
+        $this->assertNotNull(
+            $this->ntdstCorsEmitterPriority(),
+            'and ours must be on the bus in its place.',
+        );
+        $this->assertContains(
+            self::ALLOWED,
+            $this->allowListIfMounted(),
+            'control: the declaration did widen WordPress\'s list, which is what makes the order matter.',
+        );
+    }
+
     // =====================================================================
     // FIX WAVE 1 — B18: our emitter gets the LAST word (sentinel I6)
     // =====================================================================
@@ -741,6 +845,39 @@ final class NtdstRestCorsTest extends TestCase
             'Access-Control-Allow-Credentials',
             $without['remove'],
             "and core's own credentials header is taken back off the wire for it.",
+        );
+    }
+
+    public function testAResolverNeverGrantsCredentialsHoweverItWasDeclared(): void
+    {
+        // WHY: credentials say "this origin may read authenticated responses as
+        // the logged-in visitor". A named origin is a decision somebody wrote
+        // down and can be asked about; a resolver is a PATTERN, and it answers
+        // for a set nobody enumerated — a `str_ends_with($origin, '.vad.be')`
+        // hands the flag to every subdomain anyone ever registers, including
+        // one an attacker takes over. So `cors($resolver, true)` grants the
+        // origin and NOT the credentials: the flag attaches to names only.
+        ntdst_rest('cors-fn-cred/v1')->cors(static fn(string $origin): bool => true, true);
+
+        $this->wordPressAllowsOnly('https://any.test');
+
+        $decision = NTDST_Rest::corsDecisionFor('https://any.test');
+
+        $this->assertIsArray($decision, 'control: the site declared a policy, so it decides.');
+        $this->assertContains(
+            'Access-Control-Allow-Origin: https://any.test',
+            $decision['set'],
+            'control: the resolver did grant the origin — this case must not pass by refusing everything.',
+        );
+        $this->assertNotContains(
+            'Access-Control-Allow-Credentials: true',
+            $decision['set'],
+            'a resolver cannot vouch for a set nobody enumerated; credentials attach to a NAMED origin.',
+        );
+        $this->assertContains(
+            'Access-Control-Allow-Credentials',
+            $decision['remove'],
+            "and core's own unconditional credentials header is taken back off the wire.",
         );
     }
 

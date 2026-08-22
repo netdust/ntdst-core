@@ -312,13 +312,22 @@ final class NtdstRestDefaultsTest extends TestCase
         );
     }
 
-    public function testANamespaceDefaultOfPublicCannotOpenAWriteVerb(): void
+    public function testANamespaceDefaultOfPublicOpensNothingAtAll(): void
     {
         // WHY: defaults() is declared once, far from the route that inherits
-        // it — the exact distance at which a permission stops being read. A
-        // namespace-wide 'public' opens its GETs and must still refuse its
-        // writes, so a later ->post() added under that default cannot be
-        // published by a line its author never looked at.
+        // it — the exact distance at which a permission stops being read. This
+        // case used to allow the READ half: a namespace-wide 'public' opened
+        // its GETs and only its writes were refused.
+        //
+        // AMENDED by the independent test-author under the Cluster 2 gate
+        // ruling, and the spec moved first: revision 3 of specs/core-shape
+        // (FR-4, committed e0c2018) says defaults() may set a POSTURE and never
+        // an OPENING, because the one line that opens a route has to be the one
+        // line next to it. So the opening is refused under its own id and
+        // dropped, and both routes fall back: the GET to the internal default,
+        // the write to nothing at all. Nothing was relaxed — the read is now
+        // pinned CLOSED where it was pinned open, and the refusal count went
+        // from one to two.
         $rest = ntdst_rest('nsdef/v1')->defaults(['permission' => 'public']);
         $rest->get('/read', fn() => ['ok' => true]);
         $rest->post('/write', fn() => ['written' => true]);
@@ -326,16 +335,27 @@ final class NtdstRestDefaultsTest extends TestCase
         $this->fireRestApiInit();
 
         $this->assertSame(
-            '__return_true',
+            'is_user_logged_in',
             $this->permissionCallbackOf('/nsdef/v1/read'),
-            "the namespace default publishes the GET as the literal '__return_true'.",
+            'the refused opening is DROPPED, so the GET falls back to the internal default.',
         );
         $this->assertNotContains(
             '/nsdef/v1/write',
             $this->routeKeys(),
             'a namespace default of "public" must NOT publish a write verb.',
         );
-        $this->assertCount(1, $this->wrongs, 'the refused write reports once.');
+        $this->assertCount(
+            2,
+            $this->wrongs,
+            'two faults, two reports — the opening default, and the write that named no capability: '
+                . implode(' | ', $this->wrongMessages()),
+        );
+        $this->assertStringContainsString(
+            'defaults:opening',
+            $this->wrongsText(),
+            'one of the two must name the default that tried to open the namespace. Reported: '
+                . $this->wrongsText(),
+        );
     }
 
     // =====================================================================
@@ -1027,9 +1047,15 @@ final class NtdstRestDefaultsTest extends TestCase
         // verb ran.
         $handler = fn() => ['ok' => true];
 
+        // The default is a CAPABILITY, not an opening: a default may narrow and
+        // never widen (FR-4, spec revision 3), so 'public' would be refused and
+        // dropped here and the case would prove nothing about snapshotting.
+        // 'logged_in' is indistinguishable from the absent default, which is
+        // the other way to make this control vacuous. A capability is visibly
+        // different from both.
         $rest = ntdst_rest('snap/v1');
         $rest->get('/before', $handler);
-        $rest->defaults(['permission' => 'public']);
+        $rest->defaults(['permission' => 'edit_posts']);
         $rest->get('/after', $handler);
 
         $this->fireRestApiInit();
@@ -1039,11 +1065,16 @@ final class NtdstRestDefaultsTest extends TestCase
             $this->permissionCallbackOf('/snap/v1/before'),
             'a default declared AFTER a route must not reach back and change it.',
         );
-        $this->assertSame(
-            '__return_true',
-            $this->permissionCallbackOf('/snap/v1/after'),
-            'control: the default does apply to the route declared after it.',
+
+        $inherited = $this->permissionCallbackOf('/snap/v1/after');
+
+        $this->assertIsCallable($inherited, 'control: the default does apply to the route declared after it.');
+        $this->assertFalse(
+            (bool) $inherited(null),
+            "control: the inherited gate ASKS current_user_can('edit_posts') — the sentinel does not hold it.",
         );
+        $this->assertSame(['edit_posts'], $this->capsAsked, 'and it asks about the capability the namespace named.');
+        $this->assertSame([], $this->wrongs, 'a capability default is a posture — nothing to refuse.');
     }
 
     public function testANamespaceDefaultOfPublicIsRefusedAndDropped(): void
