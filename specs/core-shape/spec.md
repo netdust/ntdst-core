@@ -1,6 +1,6 @@
 # core-shape — ntdst-core 5.0.0: declare in Data, route through Rest, WordPress does the rest
 
-**Status:** spec — written 2026-08-23 from the rulings in
+**Status:** spec, revision 1 (2026-08-23 09:40 — ground-truth amendments to FR-2, FR-9, FR-14, SC-10, two assumptions) — written 2026-08-23 from the rulings in
 `docs/plans/2026-08-23-core-shape-brief.md`, confirmed in brainstorming the same
 morning. Awaiting Stefan's review, then `writing-plans`.
 **Target release:** v5.0.0 (breaking, unreleased — the 5.0.0 `Rest` rewrite is
@@ -68,8 +68,8 @@ they do not inform the design (D5).
 
 - **FR-1:** A field description may say `show_in_rest => true`, with WordPress's meaning: opt in. `NTDST_Data_Model::register()` calls `register_post_meta($type, <prefixed key>, [...])` for every such field and adds `custom-fields` to the CPT's `supports` when at least one field is declared. An undeclared field is never registered with WordPress and never appears on `/wp/v2/<type>`. Establishes INV-1.
   Source: D1 + D1a — Stefan 2026-08-22 01:40 "with show_in_rest we prove it"; 2026-08-23 "Core adds it automatically"
-- **FR-2:** The registration carries a REST schema derived from the field type: `int`/`signed_int`/`image`/`file`/`relation`/`post_relation`/`person` → `integer`; `float` → `number`; `bool` → `boolean`; `text`/`textarea`/`html`/`wysiwyg`/`content`/`select`/`date`/`email`/`url` → `string` (`email` → `format: email`, `url` → `format: uri`); `array` → `array` of `string`; `gallery` → `array` of `integer`; `json` → `object`; `repeater` → `array` of `object` whose `properties` are exactly the sub-fields that themselves say `show_in_rest => true`. `single => true`; `sanitize_callback` is the model's sanitizer for the type; `auth_callback` requires `edit_post` on the post.
-  Source: invented — approved 2026-08-23 (design §2, brainstorm); the ID-typed storage shapes are ground-truthed in the plan before T01 closes
+- **FR-2:** The registration carries a REST schema derived from the field type: `int`/`signed_int`/`image`/`file` → `integer`; `float` → `number`; `bool` → `boolean`; `text`/`textarea`/`html`/`wysiwyg`/`content`/`select`/`date`/`email`/`url` → `string` (`email` → `format: email`, `url` → `format: uri`); `array` → `array` of `string`; `gallery`/`relation`/`post_relation`/`person` → `array` of `integer` (their sanitizers store a list of IDs — ground-truthed 2026-08-23 against `api/Data.php:231–244`); `json` → `object`; `repeater` → `array` of `object` whose `properties` are exactly the sub-fields that themselves say `show_in_rest => true`. `single => true`; `sanitize_callback` is the model's sanitizer for the type; `auth_callback` requires `edit_post` on the post.
+  Source: invented — approved 2026-08-23 (design §2, brainstorm); storage shapes ground-truthed 2026-08-23 (spec revision 1)
 - **FR-3:** `restFields()` and `restSubFields()` remain the only readers of the declaration inside `Data`, for routes that filter themselves. `Data` gains no other exposure helper — no projector, no shape, no allow-list. Establishes INV-1.
   Source: Stefan 2026-08-21 22:14 "data is for quering. we would add a public/private to fields description"; A1/A2 in `docs/session-2026-08-21-actions-to-rest.md`
 
@@ -91,7 +91,7 @@ they do not inform the design (D5).
 
 ### Phase 4 — Pages on rewrite rules; one template loader; Response trimmed
 
-- **FR-9:** `NTDST_Pages::path($pattern, $callback, $method)` compiles `:param` placeholders into `add_rewrite_rule()` + registered query vars, and dispatches on `template_redirect` reading `get_query_var()`. The rule set is flushed when its hash (stored in an option) changes. A callback returns a template path or `null`; it never exits inside a WordPress filter. `commitOk()`, `resolveRouteResult()`, `renderResponse()` and the `redirect_canonical` filter are removed; a refusal is `$wp_query->set_404()`. `template()` / `single()` / `page()` / `archive()` / `when()` remain as filter wraps whose callback returns a path. Establishes INV-6.
+- **FR-9:** `NTDST_Pages::path($pattern, $callback, $method)` compiles `:param` placeholders into `add_rewrite_rule()` + registered query vars, and dispatches on `template_redirect` reading `get_query_var()`. The rule set is flushed when its hash (stored in an option) changes. A callback returns a template path or `null`; it never exits inside a WordPress filter. `commitOk()`, `resolveRouteResult()`, `renderResponse()`, `redirect()` (the package keeps one redirect: `NTDST_Response::redirect()`) and the `redirect_canonical` filter are removed; a refusal is `$wp_query->set_404()`. `template()` / `single()` / `page()` / `archive()` / `when()` remain as filter wraps whose callback returns a path. Establishes INV-6.
   Source: D8 — Stefan 2026-08-22 02:00 "doesn't reinvent or goes against wordpress"; design §5 approved 2026-08-23
 - **FR-10:** `NTDST_Template_Loader` moves to `core/TemplateLoader.php`. `locate()` is the only search over the registry (traversal guard, hit-only cache). `templateInclude()` is replaced by a `{$type}_template` filter that iterates WordPress's own candidate list over the registry; `locateInCustomPaths()` calls `locate()`. `page()` + `ntdst_page_data()` is the one way data reaches a template. `NTDST_Response::addPath()` and `$extra_paths` are removed; `Mailer` passes its directories to `locate()`'s existing `$extraPaths`. Establishes INV-5, INV-6.
   Source: Stefan 2026-08-22 03:05 "how does pages.php work with NTDST_Template_Loader? no duplication anywhere?"; brief D2f; design §5 approved 2026-08-23
@@ -104,7 +104,7 @@ they do not inform the design (D5).
   Source: D7 — Stefan 2026-08-23 "Drop them"; brief D2e (baseline `HeadCleanupService:143` owns `the_generator`)
 - **FR-13:** README's 5.0.0 section documents every break in this spec with a migration table (was → now), and no longer describes `/download`, `ntdst/api_download/`, `ntdst_actions()` or `get_nonce` as live. `docs/philosophy.md` §1 states the new default (internal, not refused) and `specs/routing-services/spec.md` is marked superseded by this spec.
   Source: brief §1 "README is now wrong about the package"; D4 — Stefan 2026-08-23 "After all five phases are green"
-- **FR-14:** daan's `composer.json` gains a dev-only `path` repository pointing at `~/Sites/ntdst-core` (symlinked, `require-dev`-scoped or via a local `composer.local.json` the plan decides), so every phase's observable is driven on daan's DDEV against the working tree. No file is ever copied into `web/app/mu-plugins/ntdst-core`.
+- **FR-14:** daan gets a never-merged branch `chore/core-path-repo` whose `composer.json` adds a `path` repository for `~/Sites/ntdst-core` (mirrored, not symlinked — daan's DDEV container cannot follow a host symlink) and requires `netdust/ntdst-core:5.0.x-dev`; core's `composer.json` gains the branch alias `dev-main → 5.0.x-dev`. `ddev composer update netdust/ntdst-core` re-mirrors the working tree; every phase's observable is driven on daan's DDEV that way. daan's `master` is untouched. No file is ever copied by hand into `web/app/mu-plugins/ntdst-core`.
   Source: D6 — Stefan 2026-08-23 "Dev-only composer path repository"; brief §2.4 (the substitution hazard)
 - **FR-15:** `v5.0.0` is tagged on `main` only after phases 1–5 are merged and `composer gate` exits 0, and the package is pushed then. The idle pane's typed `tag core 5.0.0` is not sent before that.
   Source: D4 — Stefan 2026-08-23 "After all five phases are green"
@@ -124,7 +124,7 @@ they do not inform the design (D5).
 - **SC-7:** `composer gate` exits 0 at the release commit with 0 failures, and the unit suite still carries ≥ 1 denial-path test for each of: the write-verb refusal, the relation-search capability gate, the anonymous-meta absence, the CORS fail-closed decision.
 - **SC-8:** README at the release commit names each of these 14 removed symbols at least once in the 5.0.0 section: `public_fields`, `publicRows`, `publicRow`, `getPublicShape`, `ntdst_actions`, `get_nonce`, `ntdst-api.js`, `apiSuccess`, `publicSurface`, `before_dispatch`, `ntdst_redirect`, `getMimeType`, `registerMimeType`, `Theme::style`.
 - **SC-9:** All 7 `ARCHITECTURE-INVARIANTS.md` mechanical checks return their stated result at the release commit (7 commands, 0 unexpected hits).
-- **SC-10:** daan's vendored `web/app/mu-plugins/ntdst-core` is a symlink (path repo) for the duration of the work, and `diff -rq` against `~/Sites/ntdst-core` reports 0 differing files at every review gate.
+- **SC-10:** On daan's `chore/core-path-repo` branch, after `ddev composer update netdust/ntdst-core`, `diff -rq --exclude=vendor --exclude=.git ~/Sites/ntdst-core web/app/mu-plugins/ntdst-core` reports 0 differing files at every review gate; daan `master`'s lock still points at the VCS repo.
 
 ---
 
@@ -155,8 +155,8 @@ The plan owes `## Acceptance flows`.
 One line each; visible at the review gate.
 
 - Meta is stored one value per key (`single => true`); the repeater is one serialized array under its key. Ground-truthed in the plan (FR-2).
-- `image`, `file`, `relation`, `post_relation`, `person` store an integer ID (attachment, post, user). If any stores an array, its schema row becomes `array` of `integer`; ground-truthed in the plan.
-- WordPress honours a partial `properties` list on a nested `object` schema so that un-named sub-fields are dropped from the response; verified against `WP_REST_Meta_Fields::prepare_value_for_response()` before T02 closes.
+- `image` and `file` store one attachment ID (`sanitizeAttachmentId`); `relation`, `post_relation`, `person`, `gallery` store a list of IDs. Verified 2026-08-23 (`api/Data.php:231–244`).
+- WordPress honours a partial `properties` list on a nested `object` schema: `WP_REST_Meta_Fields::default_additional_properties_to_false()` (`class-wp-rest-meta-fields.php:606`) makes un-named sub-fields drop on read and write. Verified 2026-08-23.
 - daan's DDEV is available and its integration suite's known reds (8) are the baseline; this spec adds no daan migration.
 - Core's suite stays Brain Monkey unit-only; every "on daan's DDEV" criterion is the shake-out's, not the unit suite's.
 - 5.0.0 is unreleased, so no shim, alias or deprecation path is owed to anyone.
