@@ -425,6 +425,45 @@ the four sites: `mixin` 20, `get` 15, `mail` 8, `filter` 8, `on` 7, `when` 4,
 | `single()` / `page()` / `archive()` forwarders onto Pages | — | the file calls them "a second public surface that has to track its owner's signature" and records two repairs. `$theme->pages()->single()` is one hop. One name per concept → drop the forwarders (12 call sites fleet-wide; fleet breaking is accepted). Decision, recommendation: drop |
 | `mixin()` / `__call()` — instance proxy + Reflection method-injection | nothing in WP; core's own composition | keep; the proxy form is what sites use (`mail()`, `data()`, `slug()`), the Reflection form is the heavier half — count its users in the spec before keeping both |
 
+**D2f — Pages ↔ Response ↔ Template_Loader: the seams (03:10).** How it works
+today: `Theme::templatePath()` → `Loader::addPath()` (registry). Automatic
+picking: `Loader::templateInclude` (`template_include` @99) and
+`locateInCustomPaths` (`theme_file_path`) choose files by name from the registry.
+Programmatic picking: `Pages::template()`/`single()`/`page()`/`archive()` on
+`{$type}_template`, `Pages::when()` (`template_include` @10),
+`Pages::handleTemplateInclude` (@999, for `path()`). A callback returns a path,
+or a `Response` with `->template()`, which Pages renders via `Response::render()`
+→ `Loader::locate()` → `extract()` + `include` + `exit`. Separately,
+`Loader::page()` returns a path and stashes data for `ntdst_page_data()`.
+
+Duplication, seven places:
+
+| # | what | where |
+|---|---|---|
+| 1 | the callback-result contract, three copies | `Pages.php:169, 251, 333` (self-acknowledged) |
+| 2 | 404-clear + `status_header`, two copies | `Pages::commitOk()`, `Response::commitRenderStatus()` ("mirrors") |
+| 3 | data → template, two mechanisms | `extract()` (`render()`/`html()`) vs stash (`page()` + `ntdst_page_data()`) |
+| 4 | search over `$custom_paths`, three loops | `locate()` (guard + cache), `templateInclude()`, `locateInCustomPaths()` (neither) |
+| 5 | "where templates live", three entries | `Theme::templatePath()`, `Loader::addPath()`, `Response::addPath()` (Mailer only) |
+| 6 | "which file renders", four hook sites in two classes | `template_include` @10/@99/@999 + `{$type}_template` |
+| 7 | redirect, three wrappers | `Response`, `ntdst_redirect()`, `Pages` |
+
+After D2d's rulings (`path()` on rewrite rules; callbacks return a path, never
+exit; hierarchy via `{$type}_template` with WP's candidates) it collapses:
+
+- `Pages`: `path()` + the filter wraps, all returning a path. No Response
+  handling, no result contract (#1), no `commitOk()` (#2), no canonical filter.
+- `Response::render()` loses its only caller → delete with `renderError()` and
+  `commitRenderStatus()`. `html()` stays (Mailer, theme helpers).
+- `Loader::page()` + `ntdst_page_data()` is *the* hand-off (#3). `locate()` is
+  the one search (#4); `templateInclude` → `{$type}_template`;
+  `locateInCustomPaths` calls `locate()`. `Response::addPath()` goes; Mailer
+  passes its dirs to `locate()`'s existing `$extraPaths` (#5).
+
+One way to choose a file (the Loader), one way to hand data (`page()`), one way
+to refuse (`set_404()`), one redirect. The Loader moves out of `Response.php`
+into its own file — it is not a response.
+
 **D3 — Same major, or a 6.0.0?** 5.0.0 is unreleased; nobody has taken it. Two
 majors in one week is worse than one larger one. Recommendation: all of this is
 5.0.0.
