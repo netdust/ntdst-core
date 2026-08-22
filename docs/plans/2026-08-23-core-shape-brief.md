@@ -333,6 +333,38 @@ Verdict on Actions: not wrong when written (2.x had no `Rest`; it beat
 permission model and its own CSRF scheme beside the one WordPress ships — two
 doors for one job, which `docs/philosophy.md` §1 forbids.
 
+**D2b — `Rest.php` audited against WordPress 7.0.4 (02:00).** Rule (Stefan):
+core wraps WordPress to make conventions easier or adds smart methods; it never
+reinvents or goes against WordPress. Every feature in the file, one verdict each:
+
+| feature | WordPress has | verdict |
+|---|---|---|
+| verb chain over `register_rest_route()`; `args` / `schema` / `show_in_index` / `allow_batch` forwarded; registers on `rest_api_init` | the function | wrap ✔ |
+| permission shorthands → `__return_true` / `is_user_logged_in` / `current_user_can` | WP's own callables | wrap ✔ |
+| route without permission refused | WP 5.5+ warns and registers it **public** | stricter, same direction ✔ → becomes the write-verb rule |
+| unknown option refused | WP passes it silently | smart ✔ |
+| retired option ignored + one `_doing_it_wrong` | WP idiom | ✔ |
+| permission memoized per request | WP calls `permission_callback` in dispatch and again in `rest_send_allow_header()` (`rest-api.php:892`) | smart ✔, verified |
+| `rate_limit` / `charge()` / `bucket()` (transients, `NTDST_ClientIp`) | nothing | smart ✔ |
+| permission before limiter | — | ✔ |
+| bare handler return; `WP_Error` + `status` for refusals | `rest_ensure_response`, `WP_Error` | ✔ no envelope |
+| OPTIONS / preflight | `rest_handle_options_request()` | nothing in core ✔ |
+| `surface()` / `publicSurface()` / `opaqueSurface()` | `WP_REST_Server::get_routes()` | reinvention → delete |
+| `cors()`: own static list, own decision, own emitter replacing `rest_send_cors_headers` | **vocabulary exists**: `get_allowed_http_origins()` + `allowed_http_origins` filter + `is_allowed_http_origin()` (`http.php:448–487`), used by `send_origin_headers()` for admin-ajax. `rest_send_cors_headers()` ignores it and reflects any origin with `Allow-Credentials: true` | half and half: the fail-closed REST behaviour fixes a real WP footgun (keep); the list is a second vocabulary (replace). Shape: `cors([...])` = `add_filter('allowed_http_origins', …)`; `sendCors()` decides with `is_allowed_http_origin()`. One list, WordPress's |
+
+Two alignments that follow: `'logged_in'` resolves to the string
+`'is_user_logged_in'`, not a closure, so WordPress's registry reads
+`__return_true` / `is_user_logged_in` / closure and the A7 test idiom works;
+`cors()` `credentials` — WP's `send_origin_headers()` sends `true` for any allowed
+origin, core defaults to off — keep strict (one line in the spec, recommendation:
+strict).
+
+**`Response.php` (755 lines) — not audited tonight.** Same check tomorrow. Two
+suspects by name only, unverified: `apiSuccess()` / `apiError()` /
+`apiSuccessResponse()` / `apiErrorResponse()` beside `WP_REST_Response` /
+`WP_Error`; `getMimeType()` / `registerMimeType()` beside `wp_check_filetype()`
+/ `get_allowed_mime_types()` / the `mime_types` filter.
+
 **D3 — Same major, or a 6.0.0?** 5.0.0 is unreleased; nobody has taken it. Two
 majors in one week is worse than one larger one. Recommendation: all of this is
 5.0.0.
