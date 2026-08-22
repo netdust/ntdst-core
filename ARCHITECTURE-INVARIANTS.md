@@ -186,10 +186,7 @@ Things core does that WordPress also does, kept on purpose. Each names why.
   than a refused route.
 - **`NTDST_Rest::$corsOrigins` / `$corsResolvers` are not an allow-list.** They
   are the INPUT to WordPress's own filters — `allowed_http_origins` and
-  `allowed_http_origin` — with exactly one reader each
-  (`filterAllowedOrigins()`, `filterAllowedOrigin()`), and nothing ever asks
-  them whether an origin is allowed: that question has one address,
-  `is_allowed_http_origin()`. They exist because a filter callback must be a
+  `allowed_http_origin` — with one filter reader each (`filterAllowedOrigins()`, `filterAllowedOrigin()`); `corsDecisionFor()` reads `$corsOrigins` only for the per-origin credentials flag, never for allow-ness — that question has one address, `is_allowed_http_origin()`. They exist because a filter callback must be a
   NAMED static to de-duplicate, and a named static has nowhere to close over.
   `$corsOrigins` maps origin → the credentials the declaration that named it
   asked for, so one module's grant does not reach another module's origin.

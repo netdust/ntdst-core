@@ -132,6 +132,8 @@ to every allowed origin **unconditionally** — whatever you passed for
 `$credentials` here. An origin declared for your REST API would otherwise be
 able to fetch `admin-ajax.php?action=rest-nonce` with a logged-in visitor's
 cookies, read the answer cross-origin, and hold that visitor's `wp_rest` nonce.
+
+The scoping reads `wp_is_serving_rest_request()`, which WordPress added in 6.5. On an older WordPress the function is absent and the declaration widens nothing — CORS stays closed for every consumer. ntdst-core 5.0 targets WordPress 7.0; that floor is the reason.
 So the declaration is scoped to `wp_is_serving_rest_request()`; those three
 surfaces keep WordPress's defaults. A resolver is not consulted there either.
 
