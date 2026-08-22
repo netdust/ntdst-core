@@ -135,11 +135,13 @@ One wake = one cluster + its review gate (core-shape's loop budget rule, kept). 
 | 1 | next | **field-types Cluster A** (T01 registry, T02 consumer ground-truth) | FULL | none |
 | 2 | | **field-types Cluster B** (T03 Data binds + validates, T04 schema reads + deletions) | FULL | after T03: the `int` sign change is live for every site that updates — confirm README wording |
 | 3 | | **field-types Cluster C** (T05 save path, T06 one renderer) | FULL | edit-screen artifact load before the panel |
-| 4 | | **field-types Cluster D** (T07 daan rename, T08 josworld/stride/todai renames, T09 README/philosophy/INV-8) | STANDARD + invariant-auditor | before T08: consumer branches receive commits — confirm each target branch |
+| 4 | | **field-types Cluster D** (T07 daan gate — its rename commit was pulled forward to wake 2 because daan fatals at `init` the moment Cluster B lands on the path repo; T08 josworld/stride/todai renames, T09 README/philosophy/INV-8) | STANDARD + invariant-auditor | before T08: consumer branches receive commits — confirm each target branch |
 | 5 | | core-shape **Cluster 3** (T07 relation route — now against the single renderer; T08 Actions out) | FULL | after Cluster 3: fleet-breakage acceptance (core-shape yield) |
 | 6 | | core-shape **Cluster 4a** (T09) | STANDARD | — |
 | 7 | | core-shape **Cluster 4b** (T10–T11) | STANDARD | — |
 | 8 | | core-shape **Cluster 5** (T12–T14) | STANDARD | before T14: README read by a human; the remote `5.0.0` tag at `3cc96b7` must be reconciled |
+
+Rule learned at wake 2: a consumer that runs the path repo must carry its rename commit BEFORE Cluster B's gate — threat row #7's refusal is site-wide (`wp-cli` included).
 
 Tracking: `specs/field-types/tasks.md` checkboxes (FT-xx) and `specs/core-shape/tasks.md` checkboxes (T-xx) are the ledger of record; the plan artifact's status strip mirrors them; the SDD ledger lives in `.superpowers/sdd/plan/progress.md` (gitignored).
 
