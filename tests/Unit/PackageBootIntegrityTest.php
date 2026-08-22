@@ -34,7 +34,13 @@ final class PackageBootIntegrityTest extends TestCase
      * removed method is pinned as the three ways PHP can reach it — a static
      * call, an instance call, and the property.
      *
-     * @return array<string, array{0: string, 1: string}>
+     * A third element EXEMPTS one path. Exactly one row needs it: the field
+     * vocabulary's own table of retired names (api/FieldTypes.php) has to spell
+     * `signed_int` out in order to answer "use 'int' instead" — naming a retired
+     * type in the message that retires it is the same exemption README's
+     * `## Versions` section already gets.
+     *
+     * @return array<string, array{0: string, 1: string, 2?: string}>
      */
     public static function removedSymbolProvider(): array
     {
@@ -60,13 +66,37 @@ final class PackageBootIntegrityTest extends TestCase
             'Rest::surface' => ['::surface(', '5.0.0'],
             'Rest->surface' => ['->surface(', '5.0.0'],
             'Rest $surface' => ['$surface', '5.0.0'],
+            // v5.0.0 field-types — the model's own type tables. Every one of
+            // these was a second vocabulary that could disagree with the first
+            // (INV-8): a `bool` sanitized one way on the metabox path and
+            // another on the model path, and adding a type meant editing seven
+            // places. NTDST_FieldTypes::get() is the table now.
+            'getDefaultSanitizer' => ['getDefaultSanitizer', '5.0.0'],
+            'sanitizeRepeater' => ['sanitizeRepeater', '5.0.0'],
+            'sanitizeBoolean' => ['sanitizeBoolean', '5.0.0'],
+            'sanitizeJson' => ['sanitizeJson', '5.0.0'],
+            'sanitizeNestedArray' => ['sanitizeNestedArray', '5.0.0'],
+            'sanitizeDate' => ['sanitizeDate', '5.0.0'],
+            'sanitizeAttachmentId' => ['sanitizeAttachmentId', '5.0.0'],
+            // The retired type NAME (D4: it folded into a signed `int`). Shipped
+            // code may not declare a field with it; the vocabulary's own
+            // retirement table is the one place that still says the word.
+            'signed_int' => ['signed_int', '5.0.0', 'api/FieldTypes.php'],
+            // v5.0.0 field-types — the two 0-reader REST reads of the field
+            // description. What shape a field publishes is asked once, by
+            // registerRestMeta(); a second PUBLIC way to ask it is a second
+            // exposure a consumer can assemble beside the convergence point,
+            // which is the thing INV-1 exists to prevent. Neither name is part
+            // of any other word, so both are pinned bare.
+            'restSubFields' => ['restSubFields', '5.0.0'],
+            'restSchemaFor' => ['restSchemaFor', '5.0.0'],
         ];
     }
 
     /**
      * @dataProvider removedSymbolProvider
      */
-    public function testNoShippedFileReferencesARemovedSymbol(string $symbol, string $removedIn): void
+    public function testNoShippedFileReferencesARemovedSymbol(string $symbol, string $removedIn, string $exceptPath = ''): void
     {
         $root = dirname(__DIR__, 2);
         $hits = [];
@@ -86,6 +116,10 @@ final class PackageBootIntegrityTest extends TestCase
             // vendor/ is third-party; tests/ and specs/ legitimately NAME the
             // removed symbols in order to assert their absence.
             if (str_contains($path, '/vendor/') || str_contains($path, '/tests/') || str_contains($path, '/specs/')) {
+                continue;
+            }
+            // The one file a row may exempt (see the provider).
+            if ($exceptPath !== '' && str_contains($path, $exceptPath)) {
                 continue;
             }
 

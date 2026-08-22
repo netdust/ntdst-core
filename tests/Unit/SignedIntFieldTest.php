@@ -1,6 +1,18 @@
 <?php // tests/Unit/SignedIntFieldTest.php
+// An int keeps its sign — under the CANONICAL name.
+//
+// The promise this file has always made is FR-5's: a price modifier in cents is
+// a negative number, and absint() (the original Stride 744b5b05 bug) strips the
+// sign on the way in. v5.0.0 keeps the promise and retires the name that carried
+// it: `signed_int` folds into a signed `int` (spec D4), so these two cases are
+// re-pointed at `int` and a third case pins the retirement itself.
+//
+// The file name stays: it is the name of the BUG this test exists to catch.
 defined('ABSPATH') || exit; // direct web hit: ABSPATH undefined → exit; under phpunit the bootstrap defines it first
 
+use Brain\Monkey;
+use Brain\Monkey\Functions;
+use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use PHPUnit\Framework\TestCase;
 
 /**
@@ -24,22 +36,37 @@ final class SignedIntFieldTestModel extends NTDST_Data_Model
 
 final class SignedIntFieldTest extends TestCase
 {
+    use MockeryPHPUnitIntegration;
+
+    protected function setUp(): void
+    {
+        parent::setUp();
+        Monkey\setUp();
+
+        // Real-equivalents. absint() is here because it is what the model binds
+        // TODAY for `int` — without it the RED below would be an
+        // undefined-function error instead of the wrong ANSWER, and a sign that
+        // gets stripped is a wrong answer.
+        Functions\when('absint')->alias(static fn($value) => abs((int) $value));
+        Functions\when('sanitize_text_field')->alias(static fn($value) => trim(strip_tags((string) $value)));
+    }
+
+    protected function tearDown(): void
+    {
+        Monkey\tearDown();
+        parent::tearDown();
+    }
+
     /**
-     * RED before the fix: getDefaultSanitizer() has no 'signed_int' arm, so
-     * setupSanitizers() — called from the constructor itself — throws
-     * InvalidArgumentException("Unknown field type 'signed_int'") before this
-     * test body ever reaches an assertion. That uncaught throw during
-     * construction IS the watched RED.
-     *
-     * GREEN after the fix: construction succeeds and the sanitizer keeps the
-     * sign — absint() (the original Stride 744b5b05 bug) would have stripped
-     * it.
+     * FR-5: `int` is signed. The same promise `signed_int` used to carry, under
+     * the one canonical name — and the same four answers, including the two
+     * that are not numbers at all.
      */
-    public function test_signed_int_is_a_known_type_and_keeps_its_sign(): void
+    public function test_int_keeps_its_sign(): void
     {
         $model = new SignedIntFieldTestModel(
             'vad_session',
-            ['price_modifier' => 'signed_int'],
+            ['price_modifier' => 'int'],
             '_ntdst_',
         );
 
@@ -50,15 +77,14 @@ final class SignedIntFieldTest extends TestCase
     }
 
     /**
-     * Same RED source as above (construction throws before the fix). GREEN
-     * proves the read side (formatMeta()) got the matching arm — a value
-     * sanitised as signed_int must also read back as int, not string.
+     * The read side owes the same answer: a value sanitised as a signed int must
+     * read back as a negative int, not as a string and not as its absolute value.
      */
-    public function test_formatted_read_returns_signed_int_as_int(): void
+    public function test_formatted_read_returns_int_as_signed_int(): void
     {
         $model = new SignedIntFieldTestModel(
             'vad_session',
-            ['price_modifier' => 'signed_int'],
+            ['price_modifier' => 'int'],
             '_ntdst_',
         );
 
@@ -68,11 +94,28 @@ final class SignedIntFieldTest extends TestCase
     }
 
     /**
-     * Additive edge case (not in the brief): the fail-fast guard for a
-     * GENUINELY unknown type must survive adding signed_int as a known one.
-     * This is the permanent, always-green proof of the denial path the RED
-     * above could only demonstrate transiently (once signed_int is known,
-     * those two tests stop exercising the throw).
+     * D3/D4: no aliases. `signed_int` is not a name any more — the one stride
+     * field that used it renames, and a site that did not rename learns at init
+     * which word to write instead (threat row #7).
+     */
+    public function test_signed_int_is_no_longer_a_name(): void
+    {
+        try {
+            new SignedIntFieldTestModel(
+                'vad_session',
+                ['price_modifier' => 'signed_int'],
+                '_ntdst_',
+            );
+            $this->fail("Expected InvalidArgumentException for the retired type 'signed_int'.");
+        } catch (InvalidArgumentException $e) {
+            $this->assertStringContainsString("Field 'price_modifier'", $e->getMessage());
+            $this->assertStringContainsString("Use 'int'.", $e->getMessage());
+        }
+    }
+
+    /**
+     * The permanent proof of the denial path: a genuinely unknown type still
+     * fails loudly, naming the field.
      */
     public function test_a_truly_unknown_type_still_throws(): void
     {
