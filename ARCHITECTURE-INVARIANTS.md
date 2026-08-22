@@ -1,0 +1,153 @@
+# Architecture invariants — ntdst-core
+
+The cross-cutting properties of this package and the ONE place each is decided.
+Reviews flag bypasses and second homes against this list instead of re-auditing
+the property. Authored 2026-08-23 at plan-time for `specs/core-shape`, from the
+rulings in `docs/plans/2026-08-23-core-shape-brief.md` and
+`docs/session-2026-08-21-actions-to-rest.md` §1.
+
+Each entry says whether it **holds today** or is **established by** a phase of
+`specs/core-shape`; the mechanical check is what `invariant-auditor` runs verbatim.
+The governing rule behind all of them is `docs/philosophy.md` §1: wrap WordPress,
+never replace it — where WordPress has a word, core uses it.
+
+---
+
+## INV-1 — A post-meta field reaches an HTTP surface only if its description names it
+
+A field leaves the model only when its description says `show_in_rest => true`,
+with WordPress's meaning: opt in, nobody-named-nobody-leaves. The model declares;
+it never shapes a response.
+
+**Convergence point:** `api/Data.php` — `NTDST_Data_Model::register()` hands every
+declared field to `register_post_meta(..., ['show_in_rest' => true])`;
+`restFields()` / `restSubFields()` are the only readers of the declaration.
+**Bypass smell:** `register_post_meta()` / `register_meta()` called outside
+`api/Data.php`; a route handler returning a row or `getMeta()` bag without
+projecting through `restFields()`; any `public_fields` / `public_shape` /
+`PUBLIC_SHAPE`-style allow-list; a `private`, `hidden` or `exposed` key on a field.
+**Mechanical check:** `grep -rn "register_post_meta\|register_meta(" --include=*.php . | grep -v "^./api/Data.php\|/vendor/\|/tests/"` → empty. `grep -rn "public_fields\|public_shape\|publicRow" --include=*.php . | grep -v /vendor/` → empty.
+**Status:** established by phase 1.
+
+## INV-2 — One HTTP surface: every route registers through `ntdst_rest()`
+
+Reads and commands are REST routes, registered by the wrapper. There is no
+command dispatcher, no `admin-ajax` handler, no second door.
+
+**Convergence point:** `api/Rest.php` — `NTDST_Rest::registerOne()` is the only
+caller of `register_rest_route()` in the package.
+**Bypass smell:** `register_rest_route(` anywhere else; `add_action('wp_ajax_`;
+an `ntdst/api_data/` or `ntdst/api/` dispatch filter; a route whose permission
+is decided somewhere other than its registration.
+**Mechanical check:** `grep -rn "register_rest_route(\|wp_ajax_\|ntdst/api_data\|ntdst_actions" --include=*.php --include=*.js . | grep -v "^./api/Rest.php\|/vendor/\|/tests/"` → empty.
+**Status:** established by phase 3 (today `api/Actions.php` and
+`admin/RelationField.php:47` violate it).
+
+## INV-3 — Anonymous reach is named; internal is the default; a write names its capability
+
+A route is reachable without login only through `->public()`. A route that says
+nothing is `is_user_logged_in`. A write verb (`POST`/`PUT`/`PATCH`/`DELETE`) that
+names no capability does not register.
+
+**Convergence point:** `api/Rest.php` — `NTDST_Rest::permission()` resolves the
+three states to WordPress's own callables (`__return_true`,
+`'is_user_logged_in'`, `current_user_can`) and `registerOne()` refuses the
+unnamed write.
+**Bypass smell:** `'permission' => '__return_true'` or a closure that returns
+`true` unconditionally; `->public()` on a write; a capability check inside a
+handler body instead of on the route; a second permission registry.
+**Mechanical check:** `grep -rn "__return_true\|=> 'public'\|->public()" --include=*.php . | grep -v "^./api/Rest.php\|/vendor/\|/tests/"` → every hit is a `GET`. A site asserts its anonymous surface with `rest_get_server()->get_routes($ns)` filtered on `permission_callback === '__return_true'` — WordPress's registry, not ours.
+**Status:** established by phase 2 (today: no default — unnamed routes are refused — and `publicSurface()` keeps a second registry).
+
+## INV-4 — CSRF and nonces are WordPress's; core mints nothing
+
+A cookie-authenticated REST request carries the `wp_rest` nonce in `X-WP-Nonce`
+and WordPress (`rest_cookie_check_errors()`) decides; a stale nonce is refreshed
+by `wp.apiFetch` against `admin-ajax.php?action=rest-nonce`. A nonce is a CSRF
+token, never access control.
+
+**Convergence point:** WordPress — `rest_cookie_check_errors()` and the
+`wp-api-fetch` nonce middleware. Core has no convergence point of its own, and
+that is the invariant.
+**Bypass smell:** `wp_create_nonce(` / `wp_verify_nonce(` / `check_ajax_referer(`
+in `api/`, `core/` or `admin/`; a route that mints or returns a nonce; a `fetch()`
+to `/wp-json/` in core's own JS that is not `wp.apiFetch`; an `Origin`/`Referer`
+check standing in for the nonce.
+**Mechanical check:** `grep -rn "wp_create_nonce\|wp_verify_nonce\|check_ajax_referer\|get_nonce\|HTTP_ORIGIN\|HTTP_REFERER" --include=*.php --include=*.js api core admin assets` → empty. `grep -rn "fetch(" assets/js` → only `wp.apiFetch`.
+**Status:** established by phase 3 (today `api/Actions.php` and `assets/js/ntdst-api.js` violate it).
+
+## INV-5 — Core keeps no table WordPress already keeps
+
+A registry, allow-list or lookup table in core exists only for something
+WordPress has no table for. Known WordPress tables: routes
+(`WP_REST_Server::get_routes()`), allowed origins (`allowed_http_origins`),
+MIME types (`wp_get_mime_types()` + `mime_types`), the template hierarchy
+(`{$type}_template_hierarchy` → `{$type}_template`), rewrite rules
+(`add_rewrite_rule()`), JSON envelopes (`wp_send_json_*`, `WP_Error`).
+
+**Convergence point:** the WordPress function or filter, named in the calling
+code. `docs/philosophy.md` §1 is the rule; the brief's D2b–D2e tables are the
+audit that applied it.
+**Bypass smell:** a `private static array $…` in core that lists things; a class
+that re-implements a lookup WordPress's own function answers; a hand-written
+list of template names; a `{success, data}` array built by hand.
+**Mechanical check:** `grep -rn "private static array\|protected static array" --include=*.php api core admin support services` → each hit is either a WordPress-less concern (rate buckets, template dirs, declared limits) or a bypass.
+**Status:** established by phases 2 and 4 (today: `Rest::$surface`, `Rest::$cors['origins']`, `Response::$mimeTypes`, `Template_Loader::templateInclude()`'s hand-listed hierarchy, the `api*` envelopes).
+
+## INV-6 — One template resolver; page routes are rewrite rules; a template callback returns a path
+
+Every template path resolves through `NTDST_Template_Loader::locate()`. A page
+URL core owns is a WordPress rewrite rule, so WordPress parses it; nothing
+un-404s a request or suppresses `redirect_canonical`. A callback on
+`template_include` / `{$type}_template` returns a path and never exits.
+
+**Convergence point:** `NTDST_Template_Loader::locate()` (its own file after
+phase 4); `NTDST_Pages::path()` → `add_rewrite_rule()` + the `query_vars` filter
++ dispatch on `template_redirect`; data reaches a template only through
+`NTDST_Template_Loader::page()` / `ntdst_page_data()`.
+**Bypass smell:** `include`/`require` of a template outside the loader;
+`locate_template(` outside `locate()`; `$wp_query->is_404 = false`; a
+`redirect_canonical` filter; `exit` inside a template filter callback; a second
+way to pass data to a template (`extract()` over a caller array); a second
+`addPath`.
+**Mechanical check:** `grep -rn "is_404 = false\|redirect_canonical\|locate_template(\|extract(" --include=*.php api core` → only `NTDST_Template_Loader`, and `extract(` nowhere. `grep -rn "function addPath\|function redirect" --include=*.php api core` → one each.
+**Status:** established by phase 4 (today `core/Pages.php` and `api/Response.php` violate every clause).
+
+## INV-7 — Throttling is one primitive, charged from the permission callback
+
+Every rate limit in the package and its consumers counts through
+`NTDST_RateLimiter`, keyed by `NTDST_Rest::bucket()`, and is charged only after
+the permission has passed — a refused caller never makes the site write.
+
+**Convergence point:** `support/RateLimiter.php`; `api/Rest.php` —
+`NTDST_Rest::guard()` (order) and `charge()` (the public spend).
+**Bypass smell:** a transient or option that counts attempts outside
+`RateLimiter`; `attempt()` called before the permission check; a limiter keyed
+on `$_SERVER['REMOTE_ADDR']` instead of `NTDST_ClientIp`.
+**Mechanical check:** `grep -rn "set_transient\|get_transient" --include=*.php api core admin services` → only `support/RateLimiter.php` (and `Mailer`'s own, see exceptions). In `guard()`, `$permission($request)` precedes `RateLimiter::attempt`.
+**Status:** holds today (`f42c732`); baseline's login throttle converges on it (`ntdst-baseline` `51f7e2e`).
+
+---
+
+## Deliberate exceptions
+
+Things core does that WordPress also does, kept on purpose. Each names why.
+
+- **`NTDST_Rest::cors()` replaces `rest_send_cors_headers()`.** WordPress's
+  handler reflects any `Origin` with `Allow-Credentials: true` — a footgun, not
+  a policy. Core's emitter fails closed. The *list* is WordPress's
+  (`allowed_http_origins`, INV-5); only the REST emitter is ours.
+- **`NTDST_Rest` refuses a route with a typo'd option.** WordPress passes unknown
+  keys through silently; a control the author believes is on and isn't is worse
+  than a refused route.
+- **`NTDST_Rest` memoizes the permission per request.** WordPress calls
+  `permission_callback` in dispatch and again in `rest_send_allow_header()`;
+  a capability check twice per request is waste, not a property.
+- **`NTDST_Template_Loader` searches plugin template directories.**
+  `locate_template()` is theme-only; a package that ships templates needs a
+  registry WordPress does not have. The hierarchy *names* stay WordPress's.
+- **`NTDST_Response::downloadHeaders()`.** WordPress has no Content-Disposition
+  helper; the RFC 5987 filename pair and `Content-Length` are the policy one
+  consumer (daan's press kit) got three-quarters right by hand. `nosniff` is
+  `send_nosniff_header()`.
+- **`NTDST_RateLimiter`, `NTDST_ClientIp`.** WordPress has neither.
