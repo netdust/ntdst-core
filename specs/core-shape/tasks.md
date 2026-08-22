@@ -16,19 +16,19 @@ Behaviour: a field declared show_in_rest => true appears on WordPress's own /wp/
 Observable: `curl -s https://daan.ddev.site/wp-json/wp/v2/gigs/<id> | jq '.meta'` lists exactly the declared keys and omits the seeded `daan_internal_promo_budget` probe.
 RED until: tests/Unit/DataRegistersRestMetaTest.php
 
-- [ ] T01 — daan path repo branch and the probe declarations [Tier B]  (files: composer.json, ../daan/composer.json, ../daan/web/app/mu-plugins/daan-core/services/musician/TourService.php)
+- [x] T01 — daan path repo branch and the probe declarations [Tier B]  (files: composer.json, ../daan/composer.json, ../daan/web/app/mu-plugins/daan-core/services/musician/TourService.php)
   Satisfies: FR-14, SC-10
   Test-author: solo — configuration, no code path
   Proven by: machine gate — `ddev composer update netdust/ntdst-core` then `diff -rq`
   Integration test: in CORE, composer.json gains `"extra": {"branch-alias": {"dev-main": "5.0.x-dev"}}`; in DAAN on new branch `chore/core-path-repo` (off master), composer.json gains repository `{"type":"path","url":"/home/ntdst/Sites/ntdst-core","options":{"symlink":false}}` FIRST in `repositories` and `require` pins `"netdust/ntdst-core": "5.0.x-dev"`; `ddev composer update netdust/ntdst-core` succeeds and `diff -rq --exclude=vendor --exclude=.git ~/Sites/ntdst-core web/app/mu-plugins/ntdst-core` prints 0 lines; `git -C ~/Sites/daan show master:composer.lock | grep -A3 '"name": "netdust/ntdst-core"'` still shows the VCS source. On the same DAAN branch, TourService's gig fields `venue_city` and `venue_country` gain `'show_in_rest' => true` (the probe declarations SC-1 reads); `ddev exec wp post list --post_type=gig --format=ids | head -1` names the gig id used by SC-1.
 
-- [ ] T02 — restSchemaFor(): field type to REST schema, sub-fields opt in [Tier A]  (files: api/Data.php, tests/Unit/DataRegistersRestMetaTest.php)
+- [x] T02 — restSchemaFor(): field type to REST schema, sub-fields opt in [Tier A]  (files: api/Data.php, tests/Unit/DataRegistersRestMetaTest.php)
   Satisfies: FR-2, FR-3
   Test-author: split
   Proven by: new test
   Unit test: `restSchemaFor('f')` returns null for an undeclared field; `['type' => 'integer']` for int/signed_int/image/file; `number` for float; `boolean` for bool; `string` for text/textarea/html/wysiwyg/content/select/date, with `format: email` for email and `format: uri` for url; `['type' => 'array', 'items' => ['type' => 'string']]` for array; `['type' => 'array', 'items' => ['type' => 'integer']]` for gallery/relation/post_relation/person; `['type' => 'object', 'additionalProperties' => true]` for json; for a repeater with sub-fields {a: show_in_rest, b: show_in_rest, c: not} → `['type' => 'array', 'items' => ['type' => 'object', 'properties' => [a, b]]]` with exactly 2 properties and `additionalProperties => false`; an unknown type throws InvalidArgumentException (same rule as getDefaultSanitizer). Data.php gains no method other than restSchemaFor() and registerRestMeta() (T03) — assert via ReflectionClass that no public method name contains 'project', 'shape' or 'public'.
 
-- [ ] T03 — register(): every declared field goes to register_post_meta(), custom-fields support added [Tier A]  (files: api/Data.php, tests/Unit/DataRegistersRestMetaTest.php)
+- [x] T03 — register(): every declared field goes to register_post_meta(), custom-fields support added [Tier A]  (files: api/Data.php, tests/Unit/DataRegistersRestMetaTest.php)
   Satisfies: FR-1, SC-1
   Test-author: split
   Proven by: new test
