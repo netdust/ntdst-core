@@ -173,6 +173,26 @@ add_filter('rest_pre_dispatch', function ($result, $server, $request) {
 is gone, and `true` when the route declared no limit — nothing to spend is not
 a refusal.
 
+**`->public()` is the one door to anonymous, and `'public'` is not a permission.**
+
+```php
+ntdst_rest('shop/v1')
+    ->get('/prices', [$c, 'prices'])->public()   // anonymous
+    ->get('/orders', [$c, 'index'])              // internal: 'is_user_logged_in'
+    ->post('/orders', [$c, 'store'], ['permission' => 'edit_shop_orders']);
+```
+
+`['permission' => 'public']` used to reach the same `'__return_true'` that
+`->public()` does. It is REFUSED now: the route does not register, one
+`_doing_it_wrong` names `->public()`, and one `error` reaches the `api` log.
+One decision with two doors is how a route ends up anonymous without anybody
+deciding it — and the second door was a value, so any array built from config,
+a constant or a merge could open a route. Anonymity is a mark on the
+declaration that only `->public()` can make; no option value reaches it.
+`'logged_in'` is unchanged, and every other string is a capability asked
+exactly as written — `'Public'` and `' public '` are capabilities nobody holds,
+not near misses that get normalised back into an opening.
+
 **Asserting your anonymous surface.** `surface()`, `publicSurface()`,
 `opaqueSurface()` and `forgetSurface()` are gone. WordPress already keeps the
 register every route lands in, and a second copy of it can only disagree with
@@ -202,7 +222,7 @@ $unansweredFor = array_keys(array_filter($routes, fn (array $handlers): bool => 
 so both filters read all of them, not the first.
 
 The second list is the honest half. A capability route registers a closure, and
-so does a rate-limited route — `public` or not, because the limiter has to run —
+so does a rate-limited route — `->public()` or not, because the limiter has to run —
 and a closure is opaque: `fn () => true` and a real gate have the same type.
 Never settle a route by the TYPE of its callback. Settle it by reading what the
 route declared.
@@ -216,6 +236,7 @@ author who wrote them when they worked keeps their endpoint.
 
 | Was | Now |
 |---|---|
+| `'permission' => 'public'` | `->public()` on the verb — the string is refused and the route does not register |
 | `'cors' => ['https://a.test']` per route | `ntdst_rest($ns)->cors(['https://a.test'])` once |
 | `'before_dispatch' => fn($r) => …` | your own `rest_pre_dispatch` filter + `->charge()` |
 | `corsFor($route)` | gone — one site policy |

@@ -10,8 +10,9 @@
  *    other verb that names no capability is REFUSED outright — on a site with
  *    open registration "logged in" is "anyone" — and ->public() is the one way
  *    a route reaches anonymous;
- *  - permission shorthands ('public', 'logged_in', a capability name) so the
- *    common cases need no closure;
+ *  - permission shorthands ('logged_in', a capability name) so the common
+ *    cases need no closure. Anonymous is NOT among them: ->public() is the one
+ *    door, and the STRING 'public' is refused (5.0.0);
  *  - namespace-level defaults, so you declare permission once;
  *  - CORS declared here and KEPT BY WORDPRESS: cors() adds to the
  *    allowed_http_origins list WordPress already keeps, and the decision asks
@@ -73,6 +74,21 @@ final class NTDST_Rest
         'already-registered' => 'public:already-registered — this declaration has already been handed to WordPress, so its permission can no longer be changed',
         'stated-permission'  => 'public:stated-permission — the declaration already names its own permission, so public() contradicts it; the named permission stands and the route is NOT published',
     ];
+
+    /**
+     * The string 'public' is not a permission, and this is what an author who
+     * writes it is told.
+     *
+     * It used to resolve to ANONYMOUS, which made ['permission' => 'public'] a
+     * SECOND spelling of ->public(): one decision with two doors, and the
+     * second one reachable from any array built at runtime out of config, a
+     * constant or a merge. Anonymity is now a MARKER on the declaration object
+     * that only public() can set, so no option value can name it at all — and
+     * the word itself refuses its route rather than falling through to the
+     * capability rule, because a route that quietly 403s reads, in production,
+     * exactly like a route that was never declared.
+     */
+    private const PUBLIC_STRING = '"permission" => "public" is not a permission — the string was dropped in 5.0.0 because it was a second spelling of ->public(); chain ->public() onto the verb that declares this route to publish it anonymously';
 
     /** @var array<string, self> */
     private static array $instances = [];
@@ -472,7 +488,11 @@ final class NTDST_Rest
             return $this;
         }
 
-        $this->pending->options['permission'] = 'public';
+        // The MARKER, on the declaration object — deliberately not
+        // $options['permission']. An options array is data a consumer can
+        // build; this property is reachable only from this method, so
+        // ->public() is the only gesture in the language that opens a route.
+        $this->pending->anonymous = true;
 
         // Cleared, so public() reaches exactly one declaration: not the route
         // declared after it, and not the same one a second time.
@@ -521,7 +541,7 @@ final class NTDST_Rest
             return $handle;
         }
 
-        $declaration     = (object) ['options' => $options, 'inherited' => $inherited, 'registered' => false];
+        $declaration     = (object) ['options' => $options, 'inherited' => $inherited, 'registered' => false, 'anonymous' => false];
         $handle->pending = $declaration;
 
         // Mutable, so public() can change the permission between here and the
@@ -537,7 +557,7 @@ final class NTDST_Rest
 
             $declaration->registered = true;
 
-            $this->registerOne($route, $methods, $handler, $declaration->options + $declaration->inherited);
+            $this->registerOne($route, $methods, $handler, $declaration->options + $declaration->inherited, $declaration->anonymous);
         };
 
         add_action('rest_api_init', $register, $timing === 'inside' ? PHP_INT_MAX : 10);
@@ -614,9 +634,16 @@ final class NTDST_Rest
      *
      * absent           → 'is_user_logged_in' — internal is the default
      * 'logged_in'      → 'is_user_logged_in'
-     * 'public'         → '__return_true'
      * any other string → fn(): bool => current_user_can($string)
      * a callable       → as given
+     *
+     * ANONYMOUS HAS NO SPELLING. It is reached only through $anonymous, the
+     * marker ->public() writes on the declaration OBJECT — never through
+     * $permission, which is whatever the options array carried. That is the
+     * whole of the 5.0.0 change: a value a consumer can build cannot resolve
+     * to '__return_true', because the resolution does not read that value. The
+     * word 'public' does not arrive here at all — registerOne() refuses it
+     * before asking.
      *
      * A STRING IS A CAPABILITY, with no is_callable() check in front of it.
      * Capability slugs and function names are the same bytes, and WordPress
@@ -631,8 +658,16 @@ final class NTDST_Rest
      * resolve to core function NAMES, which are of type `callable` only while
      * the function they name happens to be defined.
      */
-    private function permission(mixed $permission): mixed
+    private function permission(mixed $permission, bool $anonymous = false): mixed
     {
+        // The marker wins over everything an options array can say, which is
+        // only ever an INHERITED default here: public() refuses outright when
+        // the declaration stated a permission of its own, so a local capability
+        // is never downgraded by a stray public() a merge left behind.
+        if ($anonymous) {
+            return self::ANONYMOUS;
+        }
+
         // Absent is no longer a mistake; it is the internal default. This one
         // line is the permission default of every route in this package.
         if ($permission === null) {
@@ -641,7 +676,6 @@ final class NTDST_Rest
 
         if (is_string($permission) && $permission !== '') {
             return match ($permission) {
-                'public'    => self::ANONYMOUS,
                 'logged_in' => self::INTERNAL,
                 default     => static fn (): bool => current_user_can($permission),
             };
@@ -655,13 +689,28 @@ final class NTDST_Rest
 
     /**
      * @param array<string, mixed> $options
+     * @param bool $anonymous The marker ->public() set on the declaration —
+     *                        a PROPERTY and never an option, so the one
+     *                        resolution to '__return_true' has one author.
      */
-    private function registerOne(string $route, string $methods, $handler, array $options): void
+    private function registerOne(string $route, string $methods, $handler, array $options, bool $anonymous = false): void
     {
-        $permission = $this->permission($options['permission'] ?? null);
+        // FIRST, before the verb rule below: an unusable VALUE is the fault to
+        // report, and a write verb that also names nothing is the same
+        // declaration broken twice. One declaration earns one report, at the
+        // thing the author actually has to change — two reports for one line
+        // teach a reader to skim, and skimming is how the next refusal is
+        // missed.
+        if (($options['permission'] ?? null) === 'public') {
+            $this->refuse($route, $methods, self::PUBLIC_STRING, true, '5.0.0');
+
+            return;
+        }
+
+        $permission = $this->permission($options['permission'] ?? null, $anonymous);
 
         if ($permission === null) {
-            $this->refuse($route, $methods, '"permission" must be a callable, a capability, "logged_in" or "public"');
+            $this->refuse($route, $methods, '"permission" must be a callable, a capability or "logged_in" — and ->public() is the one way to anonymous');
 
             return;
         }
@@ -673,15 +722,15 @@ final class NTDST_Rest
         // On a site with open registration "logged in" is "anyone", so an
         // unnamed write endpoint is world-writable, and ->public() on one is
         // that threat said out loud. The rule is about the RESOLVED posture, not
-        // the spelling: absent, 'logged_in', 'public', a namespace default and
-        // ->public() all land here. It refuses rather than registering a denying
+        // the spelling: absent, 'logged_in', a namespace default and ->public()
+        // all land here. It refuses rather than registering a denying
         // callback, because a route that was never handed to WordPress cannot be
         // reached by a filter somebody removes later.
         if ($shorthand && array_diff(self::verbs($methods), self::READ) !== []) {
             $this->refuse($route, $methods, sprintf(
                 'only %s may carry a posture — every other verb must name a capability or hand over its own callable, and "%s" is not a gate',
                 implode(', ', self::READ),
-                $permission === self::ANONYMOUS ? 'public' : 'logged_in',
+                $permission === self::ANONYMOUS ? '->public()' : 'logged_in',
             ), true, '5.0.0');
 
             return;
