@@ -73,16 +73,26 @@ final class NTDST_Rest
     private array $defaults = [];
 
     /**
-     * The declaration this wrapper queued most recently and has not registered
-     * yet — the one thing ->public() is allowed to reach back and change.
+     * The ONE declaration this handle carries and has not registered yet — the
+     * only thing ->public() is allowed to reach back and change.
      *
-     * One slot, per wrapper. Per wrapper rather than global because two modules
-     * declare in the same request and one namespace's public() must never
-     * publish another's pending route; one slot rather than a stack because
-     * public() marks the declaration it FOLLOWS and nothing else, so there is
-     * never a second candidate to choose between.
+     * It belongs to the object a VERB returned, never to the cached namespace
+     * facade. ntdst_rest('shop/v1') hands the same object to every module in
+     * the request, so a pending slot living there would let one module's
+     * public() publish a route another module declared, from a line that
+     * module's author never sees. Each verb returns its own clone instead, so
+     * public() can only reach the declaration it was chained onto, and
+     * ntdst_rest('shop/v1')->public() finds nothing and says so.
      */
     private ?object $pending = null;
+
+    /**
+     * The cached namespace facade this handle was declared through, or null on
+     * the facade itself. A clone keeps the link so it can still read the
+     * namespace's defaults() at flush time rather than a copy frozen when the
+     * verb ran.
+     */
+    private ?self $facade = null;
 
     /**
      * Declared limits, so charge() can bill a route without the caller
@@ -106,7 +116,10 @@ final class NTDST_Rest
      */
     public function defaults(array $options): self
     {
-        $this->defaults = $options + $this->defaults;
+        // Written to the FACADE, so it reaches every route in the namespace and
+        // not just the ones declared through the handle this was called on.
+        $facade           = $this->facade();
+        $facade->defaults = $options + $facade->defaults;
 
         return $this;
     }
@@ -197,12 +210,19 @@ final class NTDST_Rest
     /**
      * Publish the declaration this call follows. The ONE way to anonymous.
      *
-     * It marks a PENDING declaration, so it works only before rest_api_init:
-     * once the registration has run, WordPress holds the route and its callback
-     * cannot be swapped behind it. With nothing left to mark, this refuses out
-     * loud rather than returning quietly — the silent version leaves an author
+     * It marks a PENDING declaration, which means before rest_api_init or from
+     * inside it — the idiomatic registration point, and the one did_action()
+     * cannot distinguish from "long after". Only once the hook has FINISHED is
+     * there nothing left to mark: WordPress holds the route and its callback
+     * cannot be swapped behind it. With nothing to mark, this refuses out loud
+     * rather than returning quietly — the silent version leaves an author
      * believing a route is open when it is internal, or the reverse, and only
      * one of those two mistakes is discovered by using the site.
+     *
+     * It reaches the declaration it was CHAINED ONTO and no other. Called on
+     * ntdst_rest('ns') itself it finds nothing, because that object is shared
+     * by every module in the namespace and publishing a stranger's route is the
+     * bug this shape exists to make impossible.
      *
      * A write verb stays unpublishable: registerOne() refuses it, because
      * "anyone may write" is the threat itself and not an exception to it.
@@ -211,11 +231,44 @@ final class NTDST_Rest
      */
     public function public(): self
     {
-        if ($this->pending === null || did_action('rest_api_init')) {
+        // Three causes, three dedup ids, so the first misuse in a process does
+        // not silence a different one on the next line.
+        if ($this->pending === null) {
+            if (did_action('rest_api_init') && !self::doingRestApiInit()) {
+                $this->refuse(
+                    '(public:after-hook)',
+                    '-',
+                    'public() came too late — rest_api_init has finished, WordPress holds the route and its callback cannot be swapped now',
+                    false,
+                    '5.0.0',
+                );
+
+                return $this;
+            }
+
             $this->refuse(
-                '(public)',
+                '(public:nothing-pending)',
                 '-',
-                'public() found no pending route to mark — chain it directly onto the verb it belongs to, before rest_api_init',
+                'public() found no pending declaration — chain it onto the verb whose route it publishes, not onto ntdst_rest(), which every module in the namespace shares',
+                false,
+                '5.0.0',
+            );
+
+            return $this;
+        }
+
+        // A stated permission is a decision, not a suggestion. The two lines
+        // contradict each other and only one direction is safe to guess: taking
+        // public() as the last word would turn a route whose author named a gate
+        // into an anonymous one, which is the open direction and is reachable by
+        // a stray public() a merge left behind. Reported, and the gate stands.
+        if (($this->pending->options['permission'] ?? null) !== null) {
+            $this->refuse(
+                '(public:stated-permission)',
+                '-',
+                'the declaration already names its own permission, so public() contradicts it — the named permission stands and the route is NOT published',
+                false,
+                '5.0.0',
             );
 
             return $this;
@@ -235,50 +288,93 @@ final class NTDST_Rest
      */
     public function route(string $route, string $methods, $handler, array $options = []): self
     {
-        // After rest_api_init the hook never fires again, so the declaration has
-        // to register now — and nothing is left pending for public() to mark.
-        if (did_action('rest_api_init')) {
-            $this->pending = null;
-            $this->registerOne($route, $methods, $handler, $options + $this->defaults);
+        // The handle this returns owns the declaration; the facade never does.
+        // Its defaults copy is emptied so the namespace has exactly one place
+        // to read them from — facade()->defaults — and a clone can never drift
+        // from the namespace it was declared through.
+        $handle           = clone $this;
+        $handle->facade   = $this->facade();
+        $handle->pending  = null;
+        $handle->defaults = [];
 
-            return $this;
+        // THREE states, and did_action() cannot tell the last two apart: the
+        // counter is incremented before the first callback, so it already reads
+        // 1 inside the running hook — the same value it reads an hour after the
+        // hook finished. Only doing_action() separates them.
+        //
+        //   before  0 / false  → pending
+        //   inside  1 / TRUE   → pending, flushed later in the same firing
+        //   after   1 / false  → register now; the hook never fires again
+        if (did_action('rest_api_init') && !self::doingRestApiInit()) {
+            $this->registerOne($route, $methods, $handler, $options + $this->facade()->defaults);
+
+            return $handle;
         }
 
-        // Before it, register_rest_route() is _doing_it_wrong, so the
-        // declaration waits — and it waits as a MUTABLE holder rather than a
-        // closed-over array, because that is the whole mechanism behind
-        // public(): it reaches back into the declaration it follows and changes
-        // its permission before the registration runs.
-        //
-        // $this->defaults is still merged at FLUSH time, so a namespace default
-        // declared after a route still reaches it. The holder's own permission
-        // wins, which is what makes ->public() beat defaults(['permission' =>
-        // 'logged_in']) rather than lose to it.
-        $declaration   = (object) ['options' => $options];
-        $this->pending = $declaration;
+        $declaration     = (object) ['options' => $options];
+        $handle->pending = $declaration;
 
-        add_action('rest_api_init', function () use ($route, $methods, $handler, $declaration): void {
-            $this->registerOne($route, $methods, $handler, $declaration->options + $this->defaults);
-        });
+        // Mutable, so public() can change the permission between here and the
+        // flush; and the namespace defaults are merged at FLUSH time, so a
+        // defaults() call made after this route still reaches it. The
+        // declaration's own permission wins the merge, which is what lets
+        // ->public() beat defaults(['permission' => 'logged_in']).
+        $register = function () use ($route, $methods, $handler, $declaration): void {
+            $this->registerOne($route, $methods, $handler, $declaration->options + $this->facade()->defaults);
+        };
 
-        return $this;
+        // Inside the running hook the flush goes at the LAST priority. WP_Hook
+        // picks up callbacks added while it iterates, but it never walks
+        // backwards — mount at the priority currently firing and the iteration
+        // may already have passed it, and the route then simply never registers.
+        add_action('rest_api_init', $register, self::doingRestApiInit() ? PHP_INT_MAX : 10);
+
+        return $handle;
+    }
+
+    /** This handle's namespace facade — itself, when it IS the facade. */
+    private function facade(): self
+    {
+        return $this->facade ?? $this;
+    }
+
+    /**
+     * True only WHILE rest_api_init's callbacks run.
+     *
+     * function_exists() guarded because a unit harness that stubs did_action()
+     * and not doing_action() must read "not running" rather than fatal.
+     */
+    private static function doingRestApiInit(): bool
+    {
+        return function_exists('doing_action') && (bool) doing_action('rest_api_init');
     }
 
     /**
      * Resolve the 'permission' option to what WordPress will be handed, or null
      * when the option was declared and is unusable.
      *
-     * absent       → 'is_user_logged_in' — internal is the default posture
-     * 'logged_in'  → 'is_user_logged_in'
-     * 'public'     → '__return_true'
-     * a capability → fn(): bool => current_user_can($cap)
-     * a callable   → as given
+     * absent               → 'is_user_logged_in' — internal is the default
+     * 'logged_in'          → 'is_user_logged_in'
+     * 'public'             → '__return_true'
+     * a global function's name → itself, as a callable
+     * any other string     → fn(): bool => current_user_can($string)
+     * a callable           → as given
+     *
+     * That fourth line is a real ambiguity, not an oversight: a capability slug
+     * and a function name are both plain strings, and PHP cannot tell them
+     * apart, so a capability that happens to share a name with a defined global
+     * function is handed to WordPress as that function. Nothing at this layer
+     * can separate them; a site with such a capability must pass a closure.
      *
      * The two shorthands resolve to the core functions as STRINGS (see the
      * INTERNAL/ANONYMOUS constants). A capability is the one case that must be
      * a closure, because core has no function that names it — so a capability
      * route reads as opaque in get_routes(), and a site that wants to answer
      * for it has to read the route's declaration.
+     *
+     * Returns `mixed` rather than `?callable` because a string is only of type
+     * `callable` while the function it names happens to be defined, and the
+     * resolution must not change with load order.
      */
     private function permission(mixed $permission): mixed
     {
@@ -334,7 +430,7 @@ final class NTDST_Rest
             $this->refuse($route, $methods, sprintf(
                 'a write verb must name a capability or hand over its own callable — "%s" is not a gate',
                 $permission === self::ANONYMOUS ? 'public' : 'logged_in',
-            ));
+            ), true, '5.0.0');
 
             return;
         }
@@ -360,7 +456,7 @@ final class NTDST_Rest
         }
 
         foreach (array_intersect(array_keys($options), array_keys(self::RETIRED)) as $name) {
-            $this->refuse($route, $methods, sprintf('"%s" is retired — %s.', $name, self::RETIRED[$name]), false);
+            $this->refuse($route, $methods, sprintf('"%s" is retired — %s.', $name, self::RETIRED[$name]), false, '5.0.0');
             unset($options[$name]);
         }
 
@@ -631,8 +727,19 @@ final class NTDST_Rest
         };
     }
 
-    /** @param bool $fatal False for a retired option: say so, but register. */
-    private function refuse(string $route, string $methods, string $why, bool $fatal = true): void
+    /**
+     * @param bool   $fatal False when the route still registers — a retired
+     *                      option, or a public() the declaration overrules. The
+     *                      message is then used as written, because "Route was
+     *                      not registered" would be a lie.
+     * @param ?string $since The version whose rule this refusal enforces, which
+     *                       is what WordPress prints; it is not always this
+     *                       class's own age. Null takes the floor below, and
+     *                       that floor is written at the _doing_it_wrong() call
+     *                       rather than in this signature because the package's
+     *                       own release-marker audit reads the call.
+     */
+    private function refuse(string $route, string $methods, string $why, bool $fatal = true, ?string $since = null): void
     {
         $id = $this->namespace . '|' . $route . '|' . $methods . '|' . (int) $fatal;
 
@@ -646,7 +753,7 @@ final class NTDST_Rest
         _doing_it_wrong(
             self::class . '::route',
             $fatal ? sprintf('Route was not registered — %s.', $why) : $why,
-            $fatal ? '3.0.0' : '5.0.0',
+            $since ?? '3.0.0',
         );
 
         if (!$fatal) {
