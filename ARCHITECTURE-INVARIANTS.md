@@ -27,31 +27,31 @@ it never shapes a response.
 
 **Convergence point:** `api/Data.php` — `NTDST_Data_Manager::register()` hands every
 declared field to `NTDST_Data_Model::registerRestMeta()`, which is the only caller of
-`register_post_meta()`. The declaration itself has ONE reader:
-`NTDST_Data_Model::declaresRest()` — the strict `show_in_rest === true` test, written
-once. Its callers are `restFields()` (which fields may leave), `schemaFor()` (in what
-shape, asked again at EVERY depth — the recursion is the guard, so one silent
-sub-field makes the whole field unpublishable) behind the public `restSchemaFor()`,
-and `restSubFields()` (the same question one level down, kept because consumers read
-it — FR-3). `registerRestMeta()` never tests the declaration itself; it decides
-entirely through the first two. A further site re-spelling the predicate is a bypass
-even when it agrees, because agreeing today is not the same as converging.
-`registerRestMeta()` is `public` by necessity — `NTDST_Data_Manager::register()` is a
-different class — and it fails closed on anything it cannot publish: a field with no
-schema registers nothing, and a field whose type is foreign to the vocabulary throws
-inside a per-field `try/catch` that unpublishes that one field rather than aborting
-`init` and taking the post type off the site.
+`register_post_meta()`. The declaration has ONE reader, `declaresRest()`, with two
+callers, both private to the class: `restFields()` and `schemaFor()` (reached only
+through `registerRestMeta()`); `restSchemaFor()`/`restSubFields()` were removed in
+5.0.0 and guard.sh + PackageBootIntegrityTest pin them. `schemaFor()` asks the
+question again at EVERY depth — the recursion is the guard, so one silent sub-field
+makes the whole field unpublishable. `registerRestMeta()` never tests the declaration
+itself; it decides entirely through those two. A further site re-spelling the
+predicate is a bypass even when it agrees, because agreeing today is not the same as
+converging. `registerRestMeta()` is `public` by necessity — `NTDST_Data_Manager::register()`
+is a different class — and it fails closed on anything it cannot publish: a field with
+no publishable shape registers nothing and is warned about once per model. A field
+whose type is foreign to the vocabulary never reaches it: the model resolves every
+type name when it is CONSTRUCTED, so a typo is a fatal at `register()` naming the
+field, and `registerRestMeta()` needs no per-field `try/catch`.
 **Bypass smell:** `register_post_meta()` / `register_meta()` called outside
 `api/Data.php`; a route handler returning a row or `getMeta()` bag without
 projecting through `restFields()`; any `public_fields` / `public_shape` /
 `PUBLIC_SHAPE`-style allow-list; a `private`, `hidden` or `exposed` key on a field.
-**Mechanical check:** `grep -rn "register_post_meta\|register_meta(" --include=*.php . | grep -vE "^(\./)?api/Data\.php|(^|/)vendor/|(^|/)tests/"` → empty. (The `-E` form and the optional `./` are load-bearing: GNU grep prints `./api/Data.php` but ugrep prints `api/Data.php`, so an anchored `^./` exclusion silently matched nothing and the check passed for the wrong reason.) Second: `grep -rn "show_in_rest" --include=*.php api/Data.php` → every hit is `declaresRest()` itself, a docblock, or an ARG being written to `register_post_meta()` / `register_taxonomy()`; no second READER of the declaration. `grep -rn "public_fields\|public_shape\|publicRow" --include=*.php . | grep -vE "(^|/)vendor/|(^|/)tests/"` → empty. (`tests/` is excluded for a reason, not for convenience: `tests/Unit/DataDropsExposureTest.php` is the test that ENFORCES this ban, and it has to name the banned vocabulary in order to forbid it. Without the exclusion the check reports its own enforcement as the violation.) The `show_in_rest` check has one hit that is NOT about a field: `NTDST_Data_Manager::register()` reads `$args['show_in_rest']` of the POST TYPE, to warn when a declaration can reach no route. That is a different key on a different thing, not a second reader.
+**Mechanical check:** `grep -rn "register_post_meta\|register_meta(" --include=*.php . | grep -vE "^(\./)?api/Data\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → empty. (The trailing filter drops COMMENT lines: prose may name `register_post_meta()` — `api/FieldTypes.php` says the sanitizer must be idempotent because that function runs it again — and a docblock is not a second caller.) (The `-E` form and the optional `./` are load-bearing: GNU grep prints `./api/Data.php` but ugrep prints `api/Data.php`, so an anchored `^./` exclusion silently matched nothing and the check passed for the wrong reason.) Second: `grep -rn "show_in_rest" --include=*.php api/Data.php` → every hit is `declaresRest()` itself, a docblock, or an ARG being written to `register_post_meta()` / `register_taxonomy()`; no second READER of the declaration. `grep -rn "public_fields\|public_shape\|publicRow" --include=*.php . | grep -vE "(^|/)vendor/|(^|/)tests/"` → empty. (`tests/` is excluded for a reason, not for convenience: `tests/Unit/DataDropsExposureTest.php` is the test that ENFORCES this ban, and it has to name the banned vocabulary in order to forbid it. Without the exclusion the check reports its own enforcement as the violation.) The `show_in_rest` check has one hit that is NOT about a field: `NTDST_Data_Manager::register()` reads `$args['show_in_rest']` of the POST TYPE, to warn when a declaration can reach no route. That is a different key on a different thing, not a second reader.
 **Deliberate exceptions:**
 - A model with no `label` registers no post type and therefore no meta, and warns once per model.
 - A post type that is not itself in REST (`show_in_rest` absent or false) still registers its meta — WordPress emits none of it — and warns once per model.
-- `json`, any partially-declared repeater, and a repeater that has no `sub_fields` are **not publishable at all**, and each warns once per model. Half a repeater is not half published: WordPress validates the stored row against the closed schema, so the value reads back `null`, a write carrying the undeclared key is refused 400, and a legal write drops that key from storage.
+- `json`, `array`, any partially-declared repeater, and a repeater that has no `sub_fields` are **not publishable at all**, and each warns once per model. Half a repeater is not half published: WordPress validates the stored row against the closed schema, so the value reads back `null`, a write carrying the undeclared key is refused 400, and a legal write drops that key from storage.
 - A scalar registers `show_in_rest => true` rather than a schema, so `format` (email, uri) is advisory only. A `format` in the schema would validate stored legacy values and read them back as `null`; the model's sanitizer, not the schema, is what enforces the shape (DD-9).
-**Status:** established by Cluster 1 (T02–T03); code holds at `b52b855`; flips to
+**Status:** established by Cluster 1 (T02–T03); code holds at `42d7090`; flips to
 holds-today at the release commit (FR-16).
 
 ## INV-2 — One HTTP surface: every route registers through `ntdst_rest()`
@@ -131,7 +131,7 @@ audit that applied it.
 **Bypass smell:** a `private static array $…` in core that lists things; a class
 that re-implements a lookup WordPress's own function answers; a hand-written
 list of template names; a `{success, data}` array built by hand.
-**Mechanical check:** `grep -rn "private static array\|protected static array" --include=*.php api core admin support services` → each hit is either a WordPress-less concern (rate buckets, template dirs, declared limits), a named deliberate exception below, or a bypass.
+**Mechanical check:** `grep -rnE '(private|protected) +(static +\??array +\$|const +)[A-Za-z_]+ *= *(\[|null)' --include=*.php api core admin support services` (SINGLE quotes: in double quotes the shell eats `\$` and the variable half of the pattern silently matches nothing) → each hit is either a WordPress-less concern (rate buckets, template dirs, declared limits), a named deliberate exception below, or a bypass. (Broadened from `private static array`: a list hidden as a `const`, or as a `?array` built lazily, is the same second table. `NTDST_FieldTypes::$table` and `NTDST_FieldTypes::RETIRED` are the named exception — the field VOCABULARY is a thing WordPress has no table for, so it is INV-8's convergence point, not an INV-5 bypass.)
 **Status:** `Rest::$surface` and `Rest::$cors['origins']` are gone at `d91e117`
 (Cluster 2, T05–T06): the route register is `WP_REST_Server::get_routes()` and
 the origin list is `allowed_http_origins`. Outstanding, for phase 4:
