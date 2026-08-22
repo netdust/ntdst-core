@@ -46,39 +46,6 @@ final class NTDST_MetaboxGenerator
      */
     private const SAVE_ERROR_TRANSIENT_PREFIX = 'ntdst_metabox_save_error_';
 
-    /**
-     * Field types whose `required` indication is VISUAL + `aria-required`
-     * only, never the native `required` attribute.
-     *
-     * The native attribute is a browser constraint, and a constraint on a
-     * control the browser cannot focus or validate does not fail loudly — it
-     * makes the entire post form permanently unsubmittable, reporting only
-     * "An invalid form control ... is not focusable" to the console. Strictly
-     * worse than the missing indication it would be fixing. Per type:
-     *
-     *   boolean/bool     required on a checkbox means "must be TICKED", which
-     *                    silently rewrites "mandatory" into "must be Yes";
-     *                    the arm also emits a companion hidden input, so the
-     *                    field is never absent from the POST anyway.
-     *   wysiwyg          wp_editor() hides the underlying textarea behind
-     *                    TinyMCE — unfocusable, so the form would never submit.
-     *   relation         the value lives in hidden inputs; the only visible
-     *                    control is an unnamed autocomplete search box that is
-     *                    not the value.
-     *   gallery/repeater composite widgets built from hidden inputs and
-     *   image/file       media-picker buttons; nothing here is validatable.
-     */
-    private const MARKER_ONLY_REQUIRED_TYPES = [
-        'boolean',
-        'bool',
-        'wysiwyg',
-        'relation',
-        'gallery',
-        'repeater',
-        'image',
-        'file',
-    ];
-
     private function __construct()
     {
         add_action('add_meta_boxes', [$this, 'register_metaboxes']);
@@ -777,7 +744,12 @@ final class NTDST_MetaboxGenerator
     }
 
     /**
-     * Render individual field based on type.
+     * Render one declared field: resolve its control, then render it.
+     *
+     * The declaration names a TYPE; NTDST_FieldTypes answers with the CONTROL.
+     * This method never reads the type name itself — an unknown or retired
+     * name fatals in the registry, naming what to write instead, rather than
+     * falling through to a text box that looks like it worked.
      *
      * Defense-in-depth: $name, $field_id, $field_name, and $label all come
      * from CPT-config field keys (developer-controlled, not user input), but
@@ -787,8 +759,7 @@ final class NTDST_MetaboxGenerator
      * $allow_native_required is OFF for the tabbed render path. A `required`
      * control inside a `display:none` panel cannot be focused, so the browser
      * refuses the submit outright with only a console message and the post
-     * never saves. See MARKER_ONLY_REQUIRED_TYPES below for the same rule
-     * applied per field type.
+     * never saves.
      */
     private function render_field(
         string $name,
@@ -802,34 +773,54 @@ final class NTDST_MetaboxGenerator
         $field_id_attr = esc_attr($field_id);
         $field_name_attr = esc_attr($field_name);
 
-        // Ensure value is never null for string contexts
+        // The declaration, always as an array. A bare string is a type and
+        // nothing else; from here down there is ONE shape, so the control arms
+        // read the developer's own words — options, sub_fields, post_type,
+        // button_text — out of one place instead of two.
+        $config = is_array($type) ? $type : ['type' => $type];
+        $type_name = is_string($config['type'] ?? null) ? $config['type'] : 'text';
+        $readonly = !empty($config['readonly']);
+        $required = !empty($config['required']);
         $safe_value = $value ?? '';
 
-        // Handle array types (could be extended)
-        $options = [];
-        $readonly = false;
-        $required = false;
-        if (is_array($type)) {
-            // For relation, gallery, repeater, callback and media fields, use the entire $type as options
-            // For other fields, extract from 'options' key
-            $field_type = $type['type'] ?? 'text';
-            if (in_array($field_type, ['relation', 'gallery', 'repeater', 'callback', 'image', 'file'], true)) {
-                $options = $type;  // Pass entire config
-            } else {
-                $options = $type['options'] ?? [];
+        // A `callback` field renders ITSELF. It is a render directive, not a
+        // vocabulary entry — NTDST_FieldTypes has no `callback` and should not
+        // grow one — so it is answered before the registry is asked.
+        if ($type_name === 'callback') {
+            if (isset($config['callback']) && is_callable($config['callback'])) {
+                global $post;
+                call_user_func($config['callback'], $post, $name, $value);
             }
-            $readonly = $type['readonly'] ?? false;
-            $required = !empty($type['required']);
-            $type = $field_type;
+
+            return;
         }
 
+        $entry = NTDST_FieldTypes::get($type_name);
+        $control = $entry->control;
+
         // Native constraint validation is only safe on a control the browser
-        // can focus AND that actually carries the value. Everything else gets
-        // the visual + aria indication only — see the class constant.
+        // can FOCUS and that actually CARRIES the value — and the registry
+        // entry answers both questions, so there is no second list of type
+        // names here to disagree with the first (INV-8).
+        //
+        //   cell: false   the composite widgets — `html` behind the editor,
+        //                 `relation`/`gallery`/`repeater` built out of hidden
+        //                 inputs. Nothing here is focusable or validatable.
+        //   checkbox      `required` on a checkbox means "must be TICKED",
+        //                 which silently rewrites "mandatory" into "must be
+        //                 Yes"; the arm posts a companion hidden input anyway,
+        //                 so the field is never absent from the POST.
+        //   media         the value is a hidden input behind a picker button.
+        //
+        // The failure this avoids is not a missing hint: a constraint on an
+        // unfocusable control makes the whole post form permanently
+        // unsubmittable, reporting only "An invalid form control ... is not
+        // focusable" to the console.
         $native_required = $required
             && $allow_native_required
             && !$readonly
-            && !in_array($type, self::MARKER_ONLY_REQUIRED_TYPES, true);
+            && $entry->cell
+            && !in_array($control, ['checkbox', 'media'], true);
 
         // Emitted on the control for natively-validatable types, and on the
         // .ntdst-field wrapper otherwise, so the constraint is always exposed
@@ -840,152 +831,211 @@ final class NTDST_MetaboxGenerator
             ? ' <span class="ntdst-required" aria-hidden="true">*</span>'
             : '';
 
-        // Callback fields handle their own rendering entirely
-        if ($type === 'callback') {
-            if (isset($options['callback']) && is_callable($options['callback'])) {
-                global $post;
-                call_user_func($options['callback'], $post, $name, $value);
-            }
-            return;
-        }
-
         echo '<div class="ntdst-field"' . $wrapper_attrs . '>';
         echo '<label for="' . $field_id_attr . '">' . esc_html($label) . $label_marker . '</label>';
 
-        // If readonly and not a select, just display as text
-        if ($readonly && $type !== 'select' && $type !== 'array' && $type !== 'json') {
+        // A readonly field displays as text — except where the control is
+        // already its own readonly display: a disabled `select` keeps its
+        // options, and a `json` area keeps its shape.
+        if ($readonly && $control !== 'select' && $control !== 'json') {
+            // Only `decimal` formats; every other control shows what is stored,
+            // sign and all. absint() on the way in was the FR-5 bug, and a
+            // display that hides the sign is the same bug with no save.
+            $display = $control === 'decimal'
+                ? number_format((float) $safe_value, 2)
+                : $safe_value;
+
             echo '<div class="ntdst-readonly-value" style="padding: 8px 0; font-size: 14px;">';
-            if ($type === 'float' || $type === 'decimal') {
-                echo '<strong>' . esc_html(number_format((float) $safe_value, 2)) . '</strong>';
-            } elseif ($type === 'integer' || $type === 'int') {
-                echo '<strong>' . esc_html($safe_value) . '</strong>';
-            } else {
-                echo '<strong>' . esc_html($safe_value) . '</strong>';
-            }
+            echo '<strong>' . esc_html($display) . '</strong>';
             echo '<input type="hidden" name="' . $field_name_attr . '" value="' . esc_attr($safe_value) . '">';
             echo '<p class="description">This value is automatically calculated and cannot be edited.</p>';
             echo '</div>';
             echo '</div>';
+
             return;
         }
 
-        switch ($type) {
-            case 'select':
-                echo '<select id="' . $field_id_attr . '" name="' . $field_name_attr . '" class="regular-text"' . ($readonly ? ' disabled' : '') . $required_attrs . '>';
-                foreach ($options as $opt_value => $opt_label) {
-                    $selected = ($safe_value == $opt_value) ? ' selected' : '';
-                    echo '<option value="' . esc_attr($opt_value) . '"' . $selected . '>' . esc_html($opt_label) . '</option>';
-                }
-                echo '</select>';
-                // If readonly, add hidden input to preserve value
-                if ($readonly) {
-                    echo '<input type="hidden" name="' . $field_name_attr . '" value="' . esc_attr($safe_value) . '">';
-                }
-                break;
+        $this->render_control($control, $field_id, $field_name, $value, $config, false, $name, $required_attrs);
 
-            case 'text':
-            case 'string':
-                echo '<input type="text" id="' . $field_id_attr . '" name="' . $field_name_attr . '" value="' . esc_attr($safe_value) . '" class="regular-text"' . $required_attrs . '>';
-                break;
+        echo '</div>';
+    }
 
-            case 'email':
-                echo '<input type="email" id="' . $field_id_attr . '" name="' . $field_name_attr . '" value="' . esc_attr($safe_value) . '" class="regular-text"' . $required_attrs . '>';
-                break;
+    /**
+     * THE renderer — one control, keyed by the registry's `control` and by
+     * nothing else (FR-7).
+     *
+     * There used to be two switches over TYPE NAMES: one here and one in the
+     * repeater row. Two switches are two vocabularies, and they had already
+     * drifted apart from the registry's and from each other — the top-level
+     * one still answered the retired name `wysiwyg` and so rendered a declared
+     * `html` field as a plain text input, and the row's knew `number` and
+     * `integer` but not `int`, the name the vocabulary actually uses, so every
+     * declared `int` cell rendered as text. Both bugs are the same bug: a
+     * fallback arm that turns an unrecognised name into a text box, silently.
+     *
+     * So there is no fallback. An unknown control is a LogicException, because
+     * it can only mean the registry grew a control this renderer has not been
+     * taught — a fault to fix, never a text box to ship.
+     *
+     * @param string               $control  The registry entry's `control` — rendering
+     *                                       intent, never a type name.
+     * @param string               $field_id The control's DOM id.
+     * @param string               $name     The submitted name: `ntdst_fields[<field>]`
+     *                                       at top level, `ntdst_fields[<field>][<i>][<sub>]`
+     *                                       inside a repeater row.
+     * @param mixed                $value    The stored value.
+     * @param array<string, mixed> $config   The field's own declaration.
+     * @param bool                 $inCell   TRUE inside a repeater row: the column
+     *                                       header is the label, so the control renders
+     *                                       bare and in the row's own classes.
+     * @param string               $field_key The DECLARED field key. The composite
+     *                                       controls hand it to their JS as
+     *                                       `data-field-name`; it is NOT the submitted
+     *                                       name, which is bracketed.
+     * @param string               $required_attrs Already decided by render_field()
+     *                                       against the registry entry. A row never
+     *                                       carries one.
+     *
+     * @throws LogicException on a control this renderer does not know.
+     */
+    private function render_control(
+        string $control,
+        string $field_id,
+        string $name,
+        mixed $value,
+        array $config,
+        bool $inCell,
+        string $field_key = '',
+        string $required_attrs = '',
+    ): void {
+        $id = esc_attr($field_id);
+        $nm = esc_attr($name);
 
-            case 'integer':
-            case 'int':
-                $int_value = $value !== null && $value !== '' ? esc_attr($value) : '';
-                echo '<input type="number" id="' . $field_id_attr . '" name="' . $field_name_attr . '" value="' . $int_value . '" step="1" class="small-text"' . $required_attrs . '>';
-                break;
+        match ($control) {
+            'text'     => $this->control_input('text', $inCell ? 'ntdst-repeater-input' : 'regular-text', '', $id, $nm, $value, $required_attrs),
+            'email'    => $this->control_input('email', $inCell ? 'ntdst-repeater-input' : 'regular-text', '', $id, $nm, $value, $required_attrs),
+            'url'      => $this->control_input('url', $inCell ? 'ntdst-repeater-input' : 'regular-text', '', $id, $nm, $value, $required_attrs),
+            'date'     => $this->control_input('date', $inCell ? 'ntdst-repeater-date' : '', '', $id, $nm, $value, $required_attrs),
+            'number'   => $this->control_input('number', $inCell ? 'ntdst-repeater-number' : 'small-text', ' step="1"', $id, $nm, $value, $required_attrs),
+            'decimal'  => $this->control_input('number', $inCell ? 'ntdst-repeater-number' : 'small-text', ' step="0.01"', $id, $nm, $value, $required_attrs),
+            'textarea' => $this->control_textarea($id, $nm, $value, $inCell, $required_attrs),
+            'checkbox' => $this->control_checkbox($id, $nm, $value, $inCell),
+            'select'   => $this->control_select($id, $nm, $value, $config, $inCell, $required_attrs),
+            'html'     => $this->control_html($field_id, $name, $value),
+            'json'     => $this->control_json($id, $nm, $value, $inCell, $required_attrs),
+            'media'    => $this->control_media($id, $nm, $value, $config),
+            'relation' => $this->render_relation_field($field_id, $name, $field_key, $value, $config),
+            'gallery'  => $this->render_gallery_field($field_id, $name, $field_key, $value, $config),
+            'repeater' => $this->render_repeater_field($field_id, $name, $field_key, $value, $config),
+            default    => throw new \LogicException("Unknown control '{$control}'."),
+        };
+    }
 
-            case 'float':
-            case 'decimal':
-                $float_value = $value !== null && $value !== '' ? esc_attr($value) : '';
-                echo '<input type="number" id="' . $field_id_attr . '" name="' . $field_name_attr . '" value="' . $float_value . '" step="0.01" class="small-text"' . $required_attrs . '>';
-                break;
+    /** Every single-line input control: only the type, the class and the step differ. */
+    private function control_input(
+        string $input_type,
+        string $class,
+        string $extra,
+        string $id,
+        string $nm,
+        mixed $value,
+        string $required_attrs,
+    ): void {
+        echo '<input type="' . $input_type . '" id="' . $id . '" name="' . $nm . '" value="'
+            . esc_attr($value ?? '') . '"' . ($class !== '' ? ' class="' . $class . '"' : '')
+            . $extra . $required_attrs . '>';
+    }
 
-            case 'boolean':
-            case 'bool':
-                $checked = $value ? ' checked' : '';
-                // Posts the off state. It comes FIRST so the checkbox wins when
-                // ticked; without it an unticked box submits nothing at all and
-                // save_metabox_data() leaves the old value standing (T56).
-                echo '<input type="hidden" name="' . $field_name_attr . '" value="0">';
-                echo '<label><input type="checkbox" id="' . $field_id_attr . '" name="' . $field_name_attr . '" value="1"' . $checked . '> Yes</label>';
-                break;
+    private function control_textarea(string $id, string $nm, mixed $value, bool $inCell, string $required_attrs): void
+    {
+        $rows = $inCell ? '2' : '5';
+        $class = $inCell ? 'ntdst-repeater-textarea' : 'large-text';
 
-            case 'textarea':
-            case 'longtext':
-                echo '<textarea id="' . $field_id_attr . '" name="' . $field_name_attr . '" rows="5" class="large-text"' . $required_attrs . '>' . esc_textarea($safe_value) . '</textarea>';
-                break;
+        echo '<textarea id="' . $id . '" name="' . $nm . '" rows="' . $rows . '" class="' . $class . '"'
+            . $required_attrs . '>' . esc_textarea($value ?? '') . '</textarea>';
+    }
 
-            case 'wysiwyg':
-                // wp_editor() echoes its own markup directly and requires a
-                // unique editor ID that is lowercase alphanumeric/underscores
-                // only (no dashes, no brackets) — $field_id is already
-                // "ntdst_field_{$name}" from a developer-controlled field
-                // key, so sanitize_key() is defence-in-depth, not a fix for
-                // untrusted input here.
-                wp_editor($safe_value, sanitize_key($field_id), [
-                    'textarea_name' => $field_name,
-                    'textarea_rows' => 10,
-                    'media_buttons' => false,
-                    'teeny' => true,
-                ]);
-                break;
+    /**
+     * The hidden companion input comes FIRST so the checkbox wins when ticked.
+     * Without it an unticked box submits nothing at all and save_metabox_data()
+     * leaves the old value standing (T56).
+     *
+     * `required` is never emitted here — see render_field(): on a checkbox it
+     * would mean "must be ticked".
+     */
+    private function control_checkbox(string $id, string $nm, mixed $value, bool $inCell): void
+    {
+        $checked = $value ? ' checked' : '';
 
-            case 'array':
-            case 'json':
-                $json_value = is_array($value) ? json_encode($value, JSON_PRETTY_PRINT) : ($value ?? '');
-                echo '<div class="ntdst-field-array">';
-                echo '<textarea id="' . $field_id_attr . '" name="' . $field_name_attr . '" rows="8" class="large-text code"' . $required_attrs . '>' . esc_textarea($json_value) . '</textarea>';
-                echo '<p class="description">Enter valid JSON array. Example: ["value1", "value2"]</p>';
-                echo '</div>';
-                break;
+        echo '<input type="hidden" name="' . $nm . '" value="0">';
 
-            case 'date':
-                echo '<input type="date" id="' . $field_id_attr . '" name="' . $field_name_attr . '" value="' . esc_attr($safe_value) . '"' . $required_attrs . '>';
-                break;
+        // In a row the column header is the label, so the box renders bare.
+        if ($inCell) {
+            echo '<input type="checkbox" id="' . $id . '" name="' . $nm . '" value="1"' . $checked . '>';
 
-            case 'datetime':
-                echo '<input type="datetime-local" id="' . $field_id_attr . '" name="' . $field_name_attr . '" value="' . esc_attr($safe_value) . '"' . $required_attrs . '>';
-                break;
-
-            case 'url':
-                echo '<input type="url" id="' . $field_id_attr . '" name="' . $field_name_attr . '" value="' . esc_attr($safe_value) . '" class="regular-text"' . $required_attrs . '>';
-                break;
-
-            case 'relation':
-                // Relationship field (autocomplete post selector)
-                $this->render_relation_field($field_id, $field_name, $name, $value, $options);
-                break;
-
-            case 'gallery':
-                // Gallery field (image selector with reordering)
-                $this->render_gallery_field($field_id, $field_name, $name, $value, $options);
-                break;
-
-            case 'repeater':
-                // Repeater field (multi-row data with sub-fields)
-                $this->render_repeater_field($field_id, $field_name, $name, $value, $options);
-                break;
-
-            case 'image':
-            case 'file':
-                // T45's cell, reused verbatim. Storage is deliberately NOT
-                // touched: a top-level image/file field still stores an int (0
-                // for nothing), unlike a repeater cell's empty-string marker —
-                // ProfileService's four fields already hold live values in the
-                // int shape on every ntdst site.
-                $this->render_repeater_media_cell($field_id, $field_name, $safe_value, $type, $options);
-                break;
-
-            default:
-                // Default to text input
-                echo '<input type="text" id="' . $field_id_attr . '" name="' . $field_name_attr . '" value="' . esc_attr($safe_value) . '" class="regular-text"' . $required_attrs . '>';
-                break;
+            return;
         }
 
+        echo '<label><input type="checkbox" id="' . $id . '" name="' . $nm . '" value="1"' . $checked . '> Yes</label>';
+    }
+
+    /** @param array<string, mixed> $config */
+    private function control_select(string $id, string $nm, mixed $value, array $config, bool $inCell, string $required_attrs): void
+    {
+        $options = is_array($config['options'] ?? null) ? $config['options'] : [];
+        $readonly = !empty($config['readonly']);
+        $class = $inCell ? 'ntdst-repeater-select' : 'regular-text';
+        $safe_value = $value ?? '';
+
+        echo '<select id="' . $id . '" name="' . $nm . '" class="' . $class . '"'
+            . ($readonly ? ' disabled' : '') . $required_attrs . '>';
+
+        foreach ($options as $opt_value => $opt_label) {
+            $selected = ($safe_value == $opt_value) ? ' selected' : '';
+            echo '<option value="' . esc_attr($opt_value) . '"' . $selected . '>' . esc_html($opt_label) . '</option>';
+        }
+
+        echo '</select>';
+
+        // A disabled select submits nothing: the hidden input preserves it.
+        if ($readonly) {
+            echo '<input type="hidden" name="' . $nm . '" value="' . esc_attr($safe_value) . '">';
+        }
+    }
+
+    /**
+     * wp_editor() echoes its own markup and requires a unique editor ID that is
+     * lowercase alphanumeric/underscores only (no dashes, no brackets).
+     * $field_id is already "ntdst_field_{$name}" from a developer-controlled
+     * field key, so sanitize_key() is defence-in-depth, not a fix for untrusted
+     * input here. Both arguments are the RAW id and name — the editor escapes
+     * its own output.
+     */
+    private function control_html(string $field_id, string $name, mixed $value): void
+    {
+        wp_editor($value ?? '', sanitize_key($field_id), [
+            'textarea_name' => $name,
+            'textarea_rows' => 10,
+            'media_buttons' => false,
+            'teeny'         => true,
+        ]);
+    }
+
+    private function control_json(string $id, string $nm, mixed $value, bool $inCell, string $required_attrs): void
+    {
+        $json_value = is_array($value) ? json_encode($value, JSON_PRETTY_PRINT) : ($value ?? '');
+
+        if ($inCell) {
+            echo '<textarea id="' . $id . '" name="' . $nm . '" rows="2" class="ntdst-repeater-textarea"'
+                . $required_attrs . '>' . esc_textarea($json_value) . '</textarea>';
+
+            return;
+        }
+
+        echo '<div class="ntdst-field-array">';
+        echo '<textarea id="' . $id . '" name="' . $nm . '" rows="8" class="large-text code"'
+            . $required_attrs . '>' . esc_textarea($json_value) . '</textarea>';
+        echo '<p class="description">Enter valid JSON array. Example: ["value1", "value2"]</p>';
         echo '</div>';
     }
 
@@ -1528,7 +1578,16 @@ final class NTDST_MetaboxGenerator
     }
 
     /**
-     * Render a single repeater row (table row format)
+     * Render a single repeater row (table row format).
+     *
+     * Every cell goes through render_control() — the SAME renderer the
+     * top-level field uses, in cell mode. The row had its own switch over type
+     * names until T06; it knew `number` and `integer`, two names v5.0.0
+     * retired, and not `int`, the name the vocabulary uses, so every declared
+     * `int` cell fell through to a text input.
+     *
+     * @param array<string, mixed> $row_data
+     * @param array<string, mixed> $sub_fields
      */
     private function render_repeater_row(string $field_name, string $name, mixed $row_index, array $row_data, array $sub_fields): void
     {
@@ -1545,65 +1604,25 @@ final class NTDST_MetaboxGenerator
             $sub_field_id = "ntdst_field_{$name}_{$row_index}_{$sub_field_name}";
             $sub_field_full_name = "{$field_name}[{$row_index}][{$sub_field_name}]";
 
-            // Extract type and options
-            $type = is_array($sub_field_type) ? ($sub_field_type['type'] ?? 'text') : $sub_field_type;
-            $options = is_array($sub_field_type) ? ($sub_field_type['options'] ?? []) : [];
+            // The same normalisation render_field() does: a bare string is a
+            // type and nothing else.
+            $config = is_array($sub_field_type) ? $sub_field_type : ['type' => $sub_field_type];
+            $sub_type = is_string($config['type'] ?? null) ? $config['type'] : 'text';
 
             echo '<td>';
 
-            // Render sub-field input (no labels in table cells)
-            switch ($type) {
-                case 'text':
-                case 'string':
-                    echo '<input type="text" id="' . esc_attr($sub_field_id) . '" name="' . esc_attr($sub_field_full_name) . '" value="' . esc_attr($sub_field_value) . '" class="ntdst-repeater-input">';
-                    break;
-
-                case 'textarea':
-                    echo '<textarea id="' . esc_attr($sub_field_id) . '" name="' . esc_attr($sub_field_full_name) . '" rows="2" class="ntdst-repeater-textarea">' . esc_textarea($sub_field_value) . '</textarea>';
-                    break;
-
-                case 'select':
-                    echo '<select id="' . esc_attr($sub_field_id) . '" name="' . esc_attr($sub_field_full_name) . '" class="ntdst-repeater-select">';
-                    foreach ($options as $opt_value => $opt_label) {
-                        $selected = ($sub_field_value == $opt_value) ? 'selected' : '';
-                        echo '<option value="' . esc_attr($opt_value) . '" ' . $selected . '>' . esc_html($opt_label) . '</option>';
-                    }
-                    echo '</select>';
-                    break;
-
-                case 'number':
-                case 'integer':
-                    echo '<input type="number" id="' . esc_attr($sub_field_id) . '" name="' . esc_attr($sub_field_full_name) . '" value="' . esc_attr($sub_field_value) . '" step="1" class="ntdst-repeater-number">';
-                    break;
-
-                case 'float':
-                case 'decimal':
-                    echo '<input type="number" id="' . esc_attr($sub_field_id) . '" name="' . esc_attr($sub_field_full_name) . '" value="' . esc_attr($sub_field_value) . '" step="0.01" class="ntdst-repeater-number">';
-                    break;
-
-                case 'date':
-                    echo '<input type="date" id="' . esc_attr($sub_field_id) . '" name="' . esc_attr($sub_field_full_name) . '" value="' . esc_attr($sub_field_value) . '" class="ntdst-repeater-date">';
-                    break;
-
-                case 'url':
-                    echo '<input type="url" id="' . esc_attr($sub_field_id) . '" name="' . esc_attr($sub_field_full_name) . '" value="' . esc_attr($sub_field_value) . '" class="ntdst-repeater-input">';
-                    break;
-
-                case 'image':
-                case 'file':
-                    $this->render_repeater_media_cell(
-                        $sub_field_id,
-                        $sub_field_full_name,
-                        $sub_field_value,
-                        $type,
-                        is_array($sub_field_type) ? $sub_field_type : [],
-                    );
-                    break;
-
-                default:
-                    echo '<input type="text" id="' . esc_attr($sub_field_id) . '" name="' . esc_attr($sub_field_full_name) . '" value="' . esc_attr($sub_field_value) . '" class="ntdst-repeater-input">';
-                    break;
-            }
+            // No label and no `required`: the column header is the label, and a
+            // constraint inside a row that JavaScript clones would be cloned
+            // with it.
+            $this->render_control(
+                NTDST_FieldTypes::get($sub_type)->control,
+                $sub_field_id,
+                $sub_field_full_name,
+                $sub_field_value,
+                $config,
+                true,
+                $sub_field_name,
+            );
 
             echo '</td>';
         }
@@ -1617,33 +1636,41 @@ final class NTDST_MetaboxGenerator
     }
 
     /**
-     * Render one single-attachment media picker.
+     * The `media` control — one single-attachment picker, row or top level.
      *
      * Same mechanism as render_gallery_field() — wp_enqueue_media() plus a
      * wp.media frame — but single-valued: the field holds ONE attachment, so
-     * there is no ordered set and no drag-and-drop.
+     * there is no ordered set and no drag-and-drop. There is no $inCell branch
+     * because there is nothing to branch on: a picker in a table cell and a
+     * picker under a label are the same widget, and the delegated handlers in
+     * render_media_picker_assets() serve both.
      *
-     * Serves BOTH switches since T47: a repeater cell (render_repeater_row())
-     * and a top-level `image`/`file` field (render_field()). The name is T45's;
-     * one cell, one selector set, one delegated handler pair for both.
+     * `image` versus `file` is the DECLARATION's business, not the control's:
+     * both declare the `media` control and differ only in what the picker
+     * offers and what its button says. The registry has no third answer to
+     * read here, so the declared type is what decides — and the browser JS
+     * reads it back off `data-media-type` to scope the wp.media library.
      *
-     * The submitted value is still the bare attachment id under the same field
-     * name, so storage is unchanged by this render.
+     * Storage is deliberately untouched by this render: a top-level
+     * `image`/`file` field still submits the bare attachment id under the
+     * field's own name, unlike a repeater cell's empty-string marker —
+     * ProfileService's four fields already hold live values in the int shape
+     * on every ntdst site.
      *
      * @param array<string, mixed> $config The field's own declaration.
      */
-    private function render_repeater_media_cell(string $field_id, string $field_name, mixed $value, string $type, array $config): void
+    private function control_media(string $id, string $nm, mixed $value, array $config): void
     {
         wp_enqueue_media();
         $this->render_media_picker_assets();
 
         $attachment_id = absint($value);
-        $is_image = ($type === 'image');
+        $is_image = (($config['type'] ?? '') === 'image');
         $is_attachment = $attachment_id > 0 && get_post_type($attachment_id) === 'attachment';
         $button_text = $config['button_text'] ?? ($is_image ? 'Select Image' : 'Select File');
 
-        echo '<div class="ntdst-repeater-media" data-media-type="' . esc_attr($type) . '">';
-        echo '<input type="hidden" id="' . esc_attr($field_id) . '" name="' . esc_attr($field_name) . '" value="' . esc_attr($is_attachment ? (string) $attachment_id : '') . '" class="ntdst-repeater-media-input">';
+        echo '<div class="ntdst-repeater-media" data-media-type="' . ($is_image ? 'image' : 'file') . '">';
+        echo '<input type="hidden" id="' . $id . '" name="' . $nm . '" value="' . esc_attr($is_attachment ? (string) $attachment_id : '') . '" class="ntdst-repeater-media-input">';
 
         echo '<div class="ntdst-repeater-media-preview">';
         if ($is_attachment) {
