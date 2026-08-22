@@ -214,11 +214,16 @@ class NTDST_Data_Model
      *
      * A registration is a WRITE surface as much as a read one, so both
      * callbacks are real. The write is admitted by `edit_post` ON THE POST
-     * BEING WRITTEN, never by the `$allowed` the filter arrives with — passing
-     * that through would let WordPress's protected-key heuristic, or any
-     * earlier filter, decide who may write this model's meta. And it is cleaned
-     * by the same path a create() write takes, so `/wp/v2` cannot store a value
-     * the model's own API would have refused.
+     * BEING WRITTEN, judged FOR THE USER WORDPRESS NAMED — map_meta_cap() hands
+     * that user id in as the fourth argument exactly because it is not always
+     * the current session. Asking current_user_can() instead answers about
+     * whoever happens to be logged in, so `user_can($other, 'edit_post_meta',
+     * $postId, $key)` from admin or WP-CLI code would be answered by the wrong
+     * person's capabilities. The incoming `$allowed` is ignored just as
+     * deliberately: passing it through would let WordPress's protected-key
+     * heuristic, or any earlier filter, decide who may write this model's meta.
+     * And the value is cleaned by the same path a create() write takes, so
+     * `/wp/v2` cannot store a value the model's own API would have refused.
      *
      * An array or object value travels with its whole schema: register_post_meta()
      * drops one that arrives without a shape, and that schema is the CLOSED one,
@@ -243,10 +248,12 @@ class NTDST_Data_Model
                 'single' => true,
                 'sanitize_callback' => fn($value) => $this->sanitizeField($field, $value),
                 // Untyped and cast on purpose: map_meta_cap() hands $object_id
-                // through from $args[0], which is a numeric string as often as
-                // an int, and a typed parameter would fatal on it.
-                'auth_callback' => static fn($allowed, $meta_key, $post_id): bool
-                    => (bool) current_user_can('edit_post', (int) $post_id),
+                // and $user_id through from its own $args, where either is a
+                // numeric string as often as an int, and a typed parameter
+                // would fatal on one. A cast that lands on 0 denies, which is
+                // the direction to fail in.
+                'auth_callback' => static fn($allowed, $meta_key, $post_id, $user_id): bool
+                    => user_can((int) $user_id, 'edit_post', (int) $post_id),
                 'show_in_rest' => in_array($type, ['array', 'object'], true)
                     ? ['schema' => $schema]
                     : true,
@@ -2032,6 +2039,8 @@ class NTDST_Data_Manager
             $config['scopes'] ?? [],
         );
 
+        $declared = $model->restFields();
+
         if (isset($config['label'])) {
             // PRIVATE BY DEFAULT. Silence is not privacy: this used to merge the
             // caller's config OVER `public => true, has_archive => true`, so a
@@ -2060,7 +2069,7 @@ class NTDST_Data_Manager
             // — a post type that declared nothing must not grow a meta surface.
             // Added at most once, so a caller that already listed it keeps the
             // list it wrote.
-            if ($model->restFields() !== []) {
+            if ($declared !== []) {
                 $supports = is_array($args['supports'] ?? null) ? $args['supports'] : [];
 
                 if (!in_array('custom-fields', $supports, true)) {
@@ -2103,11 +2112,30 @@ class NTDST_Data_Manager
             // register_post_meta() by hand (INV-1). Inside this branch on
             // purpose: meta is registered against a post type, and only the
             // branch that registered one could also give it the `custom-fields`
-            // support WordPress needs before it emits that meta. A model
-            // declared without a `label` therefore registers no meta; it would
-            // be a write surface with no matching read surface, which is the
-            // wrong half to open on its own.
+            // support WordPress needs before it emits that meta.
             $model->registerRestMeta($name);
+        } elseif ($declared !== []) {
+            // No `label`, so no post type, so no meta and no `custom-fields` —
+            // a write surface with no matching read surface is the wrong half
+            // to open, and refusing is right. Refusing SILENTLY is not: the
+            // module asked for `show_in_rest => true` and got nothing back,
+            // with no way to find out short of reading /wp/v2 and guessing.
+            // INV-4 fails closed AND loudly, so say which model was dropped.
+            if (function_exists('ntdst_log')) {
+                ntdst_log('data')->warning(
+                    sprintf(
+                        'Model "%s" declares %d REST field(s) but no `label`, so it registers no '
+                        . 'post type and none of them reach /wp/v2. Give the model a label, or '
+                        . 'drop `show_in_rest` from the fields that cannot be published.',
+                        $name,
+                        count($declared),
+                    ),
+                    [
+                        'model'  => $name,
+                        'fields' => $declared,
+                    ],
+                );
+            }
         }
 
         self::$models[$name] = $model;
