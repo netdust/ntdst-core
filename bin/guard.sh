@@ -31,10 +31,19 @@ fi
 #         ->surface(, $surface) rather than as the bare word: this codebase
 #         writes "the exposure surface" in prose, and a grep for `surface`
 #         would fail on a sentence.
-REMOVED=$(grep -rnE "ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface" \
+# v5.0.0 field-types: the model's own sanitizer table and its six helpers. Each
+#         was a SECOND vocabulary that could disagree with the first (INV-8);
+#         NTDST_FieldTypes::get() is the table now. `signed_int` is a retired
+#         TYPE NAME, not a symbol — shipped code may not declare a field with
+#         it, and api/FieldTypes.php is exempted for that one word because its
+#         RETIRED table has to spell it out in order to answer "use 'int'".
+#         (Same exemption README's `## Versions` section gets in
+#         PackageBootIntegrityTest, which pins these rows per symbol.)
+REMOVED=$(grep -rnE "ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|signed_int" \
     --include='*.php' . \
     | grep -v /vendor/ \
     | grep -vE "^(\./)?tests/|^(\./)?specs/" \
+    | grep -vE "^(\./)?api/FieldTypes\.php:[0-9]+:.*signed_int" \
     | grep -vE ':[0-9]+: *(\*|//|#|/\*)' || true)
 if [ -n "$REMOVED" ]; then
     echo "Shipped code still references a symbol removed in v3.0.0 or v5.0.0:"

@@ -1,10 +1,14 @@
 <?php
 
 /**
- * NTDST Data Layer - Minimal ORM
+ * NTDST Data Layer — a chain API over WP_Query, plus the registration a
+ * declared model owes WordPress: the meta keys, their sanitizers and the REST
+ * shape they publish under.
  *
- * A chain API over WP_Query plus the CPT/field vocabulary the metabox
- * generator reads. Nothing else.
+ * The field VOCABULARY is not here. One table names every type and says what
+ * sanitizes it, what it publishes as and what draws it, and that table lives in
+ * api/FieldTypes.php — this file asks NTDST_FieldTypes::get() for an entry like
+ * every other reader does (INV-8).
  *
  * THE LAYER HOLDS NO PERFORMANCE OPINION (T04). It sets no query flags of its
  * own, primes no caches, and keeps no cache of its own — WordPress already
@@ -302,8 +306,8 @@ class NTDST_Data_Model
      * repeater with no `sub_fields` at all — the last one is the partial case with
      * every key undeclared, and its empty closed object nulls its own stored rows.
      *
-     * The type VOCABULARY stays where it already lives: getDefaultSanitizer() is
-     * asked first and a typo throws there, with its message.
+     * The type VOCABULARY is not this method's: NTDST_FieldTypes::get() is asked
+     * first and a name outside it throws there, with its own message (INV-8).
      *
      * @param array{path: string, why: string}|null $refusal Set when null is returned.
      * @return array<string, mixed>|null
@@ -318,11 +322,11 @@ class NTDST_Data_Model
             return null;
         }
 
-        $type = (string) ($config['type'] ?? 'string');
+        $type = self::declaredType($config);
 
-        // Ask the sanitizer table what this type name means. Only its verdict is
-        // wanted here, not the sanitizer — a typo throws on the way through.
-        $this->getDefaultSanitizer($type);
+        // Ask the vocabulary what this name means. Only its verdict is wanted
+        // here, not the entry — a name outside the 17 throws on the way through.
+        NTDST_FieldTypes::get($type);
 
         if ($type === 'repeater') {
             $sub_fields = is_array($config['sub_fields'] ?? null) ? $config['sub_fields'] : [];
@@ -372,7 +376,7 @@ class NTDST_Data_Model
         }
 
         $schema = match ($type) {
-            'int', 'integer', 'signed_int', 'image', 'file' => ['type' => 'integer'],
+            'int', 'integer', 'image', 'file' => ['type' => 'integer'],
             'float', 'double' => ['type' => 'number'],
             'bool', 'boolean' => ['type' => 'boolean'],
             'text', 'textarea', 'html', 'content', 'wysiwyg', 'select', 'date' => ['type' => 'string'],
@@ -387,13 +391,13 @@ class NTDST_Data_Model
             // ever named and publishing it would hand every stored key out whole.
             'json' => null,
 
-            // The two tables are one vocabulary. getDefaultSanitizer() accepted
-            // this name and the schema table did not, so they have drifted: add
-            // the type here, or take it out of getDefaultSanitizer().
+            // The vocabulary accepted this name and this table did not, so the
+            // two have drifted: give the leaf a shape here, or take the name out
+            // of api/FieldTypes.php.
             default => throw new InvalidArgumentException(
-                "Unknown field type '{$type}': getDefaultSanitizer() knows it and the REST "
-                . "schema table does not. Add it to schemaFor(), or remove it from "
-                . "getDefaultSanitizer() — the two tables are one vocabulary.",
+                "Unknown field type '{$type}': NTDST_FieldTypes::get() knows it and the REST "
+                . "schema table does not. Add it to schemaFor(), or remove it from the "
+                . "vocabulary — the two must name the same set.",
             ),
         };
 
@@ -408,33 +412,143 @@ class NTDST_Data_Model
     }
 
     /**
-     * Setup default sanitizers based on schema types
+     * Bind every declared field to the vocabulary — and refuse a declaration
+     * the vocabulary has no word for.
+     *
+     * This runs at construction, which on a site is register() time: a retired
+     * name, an invention, or a type that cannot render inside a repeater row
+     * fails at `init` naming the field, instead of becoming a text input that
+     * stores whatever the box held (FR-4, threat rows #5 and #7). The whole
+     * declaration is kept as the field's config — the sanitizer reads
+     * `sub_fields`, `min`, `max` and the rest out of it.
      */
     protected function setupSanitizers(): void
     {
-        foreach ($this->schema as $field => $type) {
-            // Extract sanitizer if provided as array ['type' => 'string', 'sanitizer' => 'callback']
-            if (is_array($type)) {
-                $extracted_type = $type['type'] ?? 'string';
+        foreach ($this->schema as $field => $config) {
+            $field = (string) $field;
+            $this->sanitizers[$field] = $this->sanitizerFor($field, $config);
 
-                // T15: a repeater's sub-fields declare types too, and they were
-                // ignored on both sides — sanitizeRepeater() ran
-                // sanitize_text_field() over every value regardless. Bind the
-                // sub-field config here so the declared types actually apply.
-                if ($extracted_type === 'repeater') {
-                    $subFields = $type['sub_fields'] ?? [];
-                    $this->sanitizers[$field] = $type['sanitizer']
-                        ?? fn($v) => is_array($v) ? $this->sanitizeRepeater($v, $subFields) : [];
-                    continue;
-                }
-
-                $this->sanitizers[$field] = $type['sanitizer'] ?? $this->getDefaultSanitizer($extracted_type);
-                // DON'T simplify schema - preserve full config for metadata access
-                // $this->schema[$field] = $extracted_type;  // ← REMOVED: This destroyed field metadata
-            } else {
-                $this->sanitizers[$field] = $this->getDefaultSanitizer($type);
+            if (self::declaredType($config) === 'repeater' && is_array($config)) {
+                $this->assertRowTypes($field, $config['sub_fields'] ?? null, '');
             }
         }
+    }
+
+    /**
+     * The sanitizer for one declared field: the registry's, then the field's own.
+     *
+     * A declared `sanitizer` COMPOSES on top of the registry's output — it never
+     * replaces it (FR-4 revision 3). A consumer, or a `ntdst/{model}/fields`
+     * filter, may tighten how a field is cleaned; it may not switch
+     * wp_kses_post() off on a `html` field and post markup through REST
+     * (threat row #6).
+     */
+    private function sanitizerFor(string $field, mixed $config): \Closure
+    {
+        $settings = is_array($config) ? $config : [];
+        $sanitize = $this->typeFor(self::declaredType($config), "Field '{$field}'")->sanitize;
+        $override = $settings['sanitizer'] ?? null;
+
+        if (!is_callable($override)) {
+            return static fn($value) => $sanitize($value, $settings);
+        }
+
+        return static fn($value) => $override($sanitize($value, $settings));
+    }
+
+    /**
+     * Every sub-field of a repeater, at every depth, against the same table.
+     *
+     * Three refusals, all of them at register(): a name outside the vocabulary,
+     * a `cell = false` type (it cannot be edited in a row, and today it renders
+     * as a text input that stores the escaped soup — threat row #5), and two
+     * names that sanitize_key() to ONE key (a row stores one cell per key, so
+     * the second declaration would silently take the first one's type).
+     *
+     * A repeater INSIDE a repeater is legal — it is cell = false for RENDERING
+     * only — and its own sub-fields are walked the same way.
+     */
+    private function assertRowTypes(string $field, mixed $subFields, string $path): void
+    {
+        if (!is_array($subFields)) {
+            return;
+        }
+
+        $seen = [];
+
+        foreach ($subFields as $name => $config) {
+            $name = (string) $name;
+            $key = self::rowKey($name);
+            $at = $path === '' ? $name : $path . '.' . $name;
+            $where = "Field '{$field}' sub-field '{$at}'";
+
+            if (isset($seen[$key])) {
+                throw new InvalidArgumentException(
+                    "{$where}: '{$seen[$key]}' and '{$name}' both sanitize to the key "
+                    . "'{$key}', and a repeater row holds one cell per key.",
+                );
+            }
+
+            $seen[$key] = $name;
+
+            $type = self::declaredType($config);
+            $entry = $this->typeFor($type, $where);
+
+            if ($type === 'repeater') {
+                $this->assertRowTypes($field, is_array($config) ? ($config['sub_fields'] ?? null) : null, $at);
+
+                continue;
+            }
+
+            if (!$entry->cell) {
+                throw new InvalidArgumentException(
+                    "{$where}: '{$type}' cannot be a repeater sub-field — it has no cell control.",
+                );
+            }
+        }
+    }
+
+    /**
+     * The vocabulary's entry for a name, with the declaration that asked for it.
+     *
+     * The registry's message says what to write instead; this says WHERE, and
+     * on a site that fatal is the whole bug report (threat row #7).
+     */
+    private function typeFor(string $type, string $where): NTDST_FieldType
+    {
+        try {
+            return NTDST_FieldTypes::get($type);
+        } catch (InvalidArgumentException $e) {
+            throw new InvalidArgumentException($where . ': ' . $e->getMessage(), 0, $e);
+        }
+    }
+
+    /**
+     * The type a declaration names. A bare string IS the type; an array says so
+     * under `type`; a declaration with neither is text — a label-only field is
+     * the commonest declaration on the fleet and it must not fatal at init.
+     */
+    private static function declaredType(mixed $config): string
+    {
+        if (is_array($config)) {
+            $type = $config['type'] ?? 'text';
+
+            return is_string($type) && $type !== '' ? $type : 'text';
+        }
+
+        return is_string($config) && $config !== '' ? $config : 'text';
+    }
+
+    /**
+     * The key a repeater cell is stored under: sanitize_key() of its name.
+     *
+     * A name already inside sanitize_key()'s own character set IS its own key,
+     * so the common declaration answers without calling WordPress at all —
+     * which also keeps a model constructible before WordPress is loaded.
+     */
+    private static function rowKey(string $name): string
+    {
+        return preg_match('/^[a-z0-9_\-]*$/', $name) === 1 ? $name : sanitize_key($name);
     }
 
     /**
@@ -455,112 +569,6 @@ class NTDST_Data_Model
     }
 
     /**
-     * Get default sanitizer for a field type
-     */
-    protected function getDefaultSanitizer(string $type): callable
-    {
-        return match ($type) {
-            'int', 'integer' => 'absint',
-            // signed_int: an int that may be negative (e.g. a price discount in cents).
-            // absint() was the original bug — it strips the sign (Stride 744b5b05).
-            'signed_int' => fn($v) => is_array($v) ? 0 : (int) $v,
-            'float', 'double' => 'floatval',
-            'bool', 'boolean' => fn($v) => $this->sanitizeBoolean($v),
-            'email' => 'sanitize_email',
-            'url' => 'esc_url_raw',
-            'text' => 'sanitize_text_field',
-            'textarea' => 'sanitize_textarea_field',
-            'html', 'content' => fn($v) => wp_kses_post($v),
-            'array' => fn($v) => is_array($v) ? $this->sanitizeNestedArray($v) : [],
-            'json' => fn($v) => $this->sanitizeJson($v),
-            'relation' => fn($v) => is_array($v) ? array_map('absint', array_filter($v)) : (!empty($v) ? [absint($v)] : []),
-            'gallery' => fn($v) => is_array($v) ? array_map('absint', array_filter($v)) : [],
-            'repeater' => fn($v) => is_array($v) ? $this->sanitizeRepeater($v) : [],
-
-            // Types this helper has always ADVERTISED but never sanitised —
-            // they fell through to sanitize_text_field, silently. daan alone
-            // declares these in 20 places. A CPT helper that accepts a type
-            // name and then ignores it is lying about its own vocabulary.
-            'select'        => fn($v) => sanitize_text_field((string) $v),
-            'date'          => fn($v) => $this->sanitizeDate($v),
-            'wysiwyg'       => fn($v) => wp_kses_post($v),
-            'image', 'file' => fn($v) => $this->sanitizeAttachmentId($v),
-            'person', 'post_relation' => fn($v) => is_array($v)
-                ? array_map('absint', array_filter($v))
-                : (!empty($v) ? [absint($v)] : []),
-
-            // An unknown type is a typo, and a typo that silently becomes
-            // sanitize_text_field is how a `wysiwig` field loses its markup
-            // with nothing failing. Fail loudly at registration instead.
-            default => throw new InvalidArgumentException(
-                "Unknown field type '{$type}'. Supported: int, signed_int, float, bool, email, url, "
-                . "text, textarea, html, array, json, relation, gallery, repeater, "
-                . "select, date, wysiwyg, image, file, person, post_relation.",
-            ),
-        };
-    }
-
-    /**
-     * Sanitize boolean values without treating non-empty strings like "false" as true.
-     */
-    protected function sanitizeBoolean($value): bool
-    {
-        if (function_exists('wp_validate_boolean')) {
-            return wp_validate_boolean($value);
-        }
-
-        if (is_string($value)) {
-            $normalized = strtolower(trim($value));
-            if (in_array($normalized, ['false', '0', 'no', 'off', ''], true)) {
-                return false;
-            }
-            if (in_array($normalized, ['true', '1', 'yes', 'on'], true)) {
-                return true;
-            }
-        }
-
-        return (bool) $value;
-    }
-
-    /**
-     * Sanitize JSON-like values to an array and reject invalid JSON strings.
-     */
-    protected function sanitizeJson($value): array
-    {
-        if (is_array($value)) {
-            return $this->sanitizeNestedArray($value);
-        }
-
-        if (!is_string($value) || trim($value) === '') {
-            return [];
-        }
-
-        $decoded = json_decode($value, true);
-        return is_array($decoded) ? $this->sanitizeNestedArray($decoded) : [];
-    }
-
-    /**
-     * Recursively sanitize scalar values in a nested array while preserving structure.
-     */
-    protected function sanitizeNestedArray(array $value): array
-    {
-        $sanitized = [];
-
-        foreach ($value as $key => $item) {
-            $sanitized_key = is_string($key) ? sanitize_key($key) : $key;
-            if (is_array($item)) {
-                $sanitized[$sanitized_key] = $this->sanitizeNestedArray($item);
-            } elseif (is_bool($item) || is_int($item) || is_float($item) || $item === null) {
-                $sanitized[$sanitized_key] = $item;
-            } else {
-                $sanitized[$sanitized_key] = sanitize_text_field($item);
-            }
-        }
-
-        return $sanitized;
-    }
-
-    /**
      * Sanitize field value based on schema
      */
     protected function sanitizeField(string $field, $value)
@@ -576,94 +584,6 @@ class NTDST_Data_Model
         }
 
         return $value;
-    }
-
-    /**
-     * Sanitize repeater field data
-     *
-     * @param array $rows Array of repeater rows
-     * @return array Sanitized repeater data
-     */
-    /**
-     * A date field holds a date. Junk is rejected rather than stored as text.
-     */
-    protected function sanitizeDate($value): string
-    {
-        $raw = trim((string) $value);
-        if ($raw === '') {
-            return '';
-        }
-        $ts = strtotime($raw);
-
-        return $ts === false ? '' : gmdate('Y-m-d', $ts);
-    }
-
-    /**
-     * An image/file field holds an attachment ID — and one that exists.
-     *
-     * absint() alone would happily store 999999, or the ID of a blog post,
-     * and the field would read back as a number that resolves to nothing.
-     */
-    protected function sanitizeAttachmentId($value): int
-    {
-        $id = absint($value);
-
-        return ($id > 0 && get_post_type($id) === 'attachment') ? $id : 0;
-    }
-
-    /**
-     * @param array $subFields The repeater's declared sub-field config, so each
-     *                         sub-value is sanitised as ITS type rather than as
-     *                         text. Empty config falls back to text, which is
-     *                         what every repeater got before T15.
-     */
-    protected function sanitizeRepeater(array $rows, array $subFields = []): array
-    {
-        if (empty($rows) || !is_array($rows)) {
-            return [];
-        }
-
-        $sanitized_rows = [];
-
-        foreach ($rows as $row) {
-            if (!is_array($row)) {
-                continue;
-            }
-
-            $sanitized_row = [];
-            foreach ($row as $sub_field => $value) {
-                $config = $subFields[$sub_field] ?? null;
-                $subType = is_array($config) ? ($config['type'] ?? null) : $config;
-
-                if ($subType === 'image' || $subType === 'file') {
-                    // sanitizeAttachmentId() returns 0 for "nothing selected",
-                    // and 0 reads as a real id to every consumer that absint()s
-                    // the cell. An empty media cell stores what an empty text
-                    // cell stores. Scoped to the repeater path deliberately —
-                    // a top-level image/file field keeps returning int.
-                    $id = $this->sanitizeAttachmentId($value);
-                    $sanitized_row[$sub_field] = $id > 0 ? $id : '';
-                    continue;
-                }
-
-                if (is_string($subType) && $subType !== '') {
-                    // The declared type does what it says — an `image`
-                    // sub-field stores a verified attachment id, a `wysiwyg`
-                    // sub-field keeps its markup.
-                    $sanitized_row[$sub_field] = ($this->getDefaultSanitizer($subType))($value);
-                    continue;
-                }
-
-                $sanitized_row[$sub_field] = sanitize_text_field($value);
-            }
-
-            // Only add row if it has data
-            if (!empty(array_filter($sanitized_row))) {
-                $sanitized_rows[] = $sanitized_row;
-            }
-        }
-
-        return $sanitized_rows;
     }
 
     /**
@@ -1178,14 +1098,12 @@ class NTDST_Data_Model
             return new WP_Error('not_found', 'Post not found', ['status' => 404]);
         }
 
-        // Sanitize value based on this model's field schema.
+        // Sanitize value based on this model's field schema — the same bound
+        // closure create()/update() use, so one write path cannot clean a field
+        // differently from another.
         $fieldSchema = $this->schema[$key] ?? null;
         if ($fieldSchema && is_array($fieldSchema)) {
-            $fieldType = $fieldSchema['type'] ?? 'text';
-            $sanitizer = $this->getDefaultSanitizer($fieldType);
-            if (is_callable($sanitizer)) {
-                $value = $sanitizer($value);
-            }
+            $value = ($this->sanitizerFor($key, $fieldSchema))($value);
         }
 
         $metaKey = $this->prefixMetaKey($key);
@@ -1220,11 +1138,7 @@ class NTDST_Data_Model
             // Get field schema for sanitization (schema IS the fields array)
             $fieldSchema = $this->schema[$key] ?? null;
             if ($fieldSchema && is_array($fieldSchema)) {
-                $fieldType = $fieldSchema['type'] ?? 'text';
-                $sanitizer = $this->getDefaultSanitizer($fieldType);
-                if (is_callable($sanitizer)) {
-                    $value = $sanitizer($value);
-                }
+                $value = ($this->sanitizerFor((string) $key, $fieldSchema))($value);
             }
 
             $metaKey = $this->prefixMetaKey($key);
@@ -1308,7 +1222,7 @@ class NTDST_Data_Model
      * before the global registry, so a model can shadow a global of the same
      * name with a stricter local rule.
      *
-     * An unknown name FAILS LOUDLY (like getDefaultSanitizer()'s throw on an
+     * An unknown name FAILS LOUDLY (like NTDST_FieldTypes::get()'s throw on an
      * unknown type): a silent no-op would let a typo'd scope name drop the very
      * constraint it was meant to add — a fail-open a public read cannot afford.
      */
@@ -1964,7 +1878,17 @@ class NTDST_Data_Model
     }
 
     /**
-     * Format meta according to schema with sanitization
+     * Format meta according to schema — through the SAME vocabulary the write
+     * side asks, so a field reads back as the type it was declared as.
+     *
+     * Every sanitizer is idempotent by constraint, so applying it to a stored
+     * value is safe: a `bool` stored as "1" reads back true, an `int` stored as
+     * "-3" reads back -3, and neither answer is a second type table's.
+     *
+     * Two shapes are storage, not value, and are decoded before the type is
+     * asked: a list kept as a JSON STRING (`json`/`relation`/`gallery` — the
+     * metabox has written that shape for years), and a repeater, whose rows may
+     * also be legacy-serialized.
      *
      * Handles meta_prefix: looks up prefixed keys in raw meta,
      * returns unprefixed keys in formatted result.
@@ -1988,38 +1912,25 @@ class NTDST_Data_Model
             // Look up the prefixed key in meta, return unprefixed field name
             $metaKey = $this->meta_prefix . $field;
             $value = $meta[$metaKey] ?? $meta[$field] ?? null;
+            $type = self::declaredType($type_config);
 
-            // Extract type string from config array if needed
-            $type = is_array($type_config) ? ($type_config['type'] ?? 'text') : $type_config;
+            if ($type === 'repeater') {
+                $formatted[$field] = $this->formatRepeaterField($value);
 
-            // Type cast (with null safety for json_decode in PHP 8.1+)
-            $formatted[$field] = match ($type) {
-                'int', 'integer' => (int) $value,
-                'signed_int' => (int) $value,
-                'float', 'double' => (float) $value,
-                'bool', 'boolean' => $this->sanitizeBoolean($value),
-                'array' => is_array($value) ? $value : [],
-                'json' => $this->decodeArrayField($value),
-                'relation' => array_map('intval', $this->decodeArrayField($value)),
-                'gallery' => array_map('intval', $this->decodeArrayField($value)),
-                'repeater' => $this->formatRepeaterField($value),
-
-                // T14: the read side needs the same arms the write side gained,
-                // or a field sanitised as an int reads back as a string and the
-                // declared type is still decorative — just one layer further on.
-                'image', 'file' => (int) $value,
-                'person', 'post_relation' => array_map('intval', $this->decodeArrayField($value)),
-
-                // select, date and wysiwyg are strings on the way out; the
-                // default arm below already handles them correctly.
-                default => is_array($value) ? json_encode($value) : (string) ($value ?? ''),
-            };
-
-            // Additional sanitization for simple arrays only (not JSON/nested structures)
-            if ($type === 'array' && is_array($formatted[$field])) {
-                $formatted[$field] = $this->sanitizeNestedArray($formatted[$field]);
+                continue;
             }
-            // JSON fields are already sanitized when saved, don't re-sanitize on output
+
+            // A list kept as a JSON string is a storage format: decode it, then
+            // let the type answer. Asked raw, `relation` would read the whole
+            // string as one id.
+            if (in_array($type, ['json', 'relation', 'gallery'], true)) {
+                $value = $this->decodeArrayField($value);
+            }
+
+            $formatted[$field] = (NTDST_FieldTypes::get($type)->sanitize)(
+                $value,
+                is_array($type_config) ? $type_config : [],
+            );
         }
 
         return $formatted;
