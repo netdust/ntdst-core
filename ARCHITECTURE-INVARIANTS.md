@@ -71,22 +71,33 @@ is decided somewhere other than its registration.
 ## INV-3 — Anonymous reach is named; internal is the default; a write names its capability
 
 A route is reachable without login only through `->public()`. A route that says
-nothing is `is_user_logged_in`. A write verb (`POST`/`PUT`/`PATCH`/`DELETE`) that
-names no capability does not register.
+nothing is `is_user_logged_in`. Only a READ verb (`GET`, `HEAD`, `OPTIONS`) may
+carry that posture: any other verb — the four writes and every custom one, since
+`PURGE` empties a cache and a proxy will route it — does not register unless it
+names a capability or hands over its own callable. A string permission is a
+CAPABILITY, never a function name.
 
 This governs the routes CORE REGISTERS. The anonymous reach of declared DATA over
 WordPress's own `/wp/v2` is not decided here — it is INV-1's decision, taken by the
 field description, and `/wp/v2` is anonymous-readable by WordPress's design.
 
-**Convergence point:** `api/Rest.php` — `NTDST_Rest::permission()` resolves the
-three states to WordPress's own callables (`__return_true`,
-`'is_user_logged_in'`, `current_user_can`) and `registerOne()` refuses the
-unnamed write.
+**Convergence point:** `api/Rest.php` — `NTDST_Rest::permission()` is the ONE
+resolver: it maps every declared shape to WordPress's own callables
+(`'__return_true'`, `'is_user_logged_in'`, `current_user_can`), and
+`registerOne()` refuses on the RESOLVED POSTURE rather than on the spelling, so
+absent, `'logged_in'`, `'public'`, a namespace default and `->public()` all
+reach the same rule. The two postures register as LITERAL STRINGS, so
+`get_routes()` can be read back — except on a rate-limited route, where the
+limiter has to run and `guard()`'s closure registers instead. `->public()`
+marks the ONE pending declaration it was chained onto, and nothing else.
 **Bypass smell:** `'permission' => '__return_true'` or a closure that returns
 `true` unconditionally; `->public()` on a write; a capability check inside a
-handler body instead of on the route; a second permission registry.
-**Mechanical check:** `grep -rn "__return_true\|=> 'public'\|->public()" --include=*.php . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/"` → every hit is a `GET`. A site asserts its anonymous surface with `rest_get_server()->get_routes($ns)` filtered on `permission_callback === '__return_true'` — WordPress's registry, not ours.
-**Status:** established by phase 2 (today: no default — unnamed routes are refused — and `publicSurface()` keeps a second registry).
+handler body instead of on the route; a second permission registry; a
+`public_actions`-style list of names that may go without a gate.
+**Mechanical check:** `grep -rn "__return_true\|=> 'public'\|->public()\|public_actions" --include=*.php . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/"` → every route hit is a `GET`. Today the hits are: `services/Mailer.php:574`, a DOCBLOCK IDIOM (`add_filter('ntdst_wrap_all_emails', '__return_true')` — a filter switch, not a route permission), and `api/Actions.php`'s `$public_actions` + its `ntdst/api/public_actions` filter, which is the second permission registry this invariant forbids and which leaves with `Actions.php` in phase 3. A site asserts its anonymous surface with `rest_get_server()->get_routes($ns)` filtered on `permission_callback === '__return_true'` — WordPress's registry, not ours.
+**Status:** established by Cluster 2 (T04–T06); code holds at `088d414` for
+routes through `ntdst_rest()`; `Actions.php:132,147` + `$public_actions` register
+their own routes outside it until phase 3; flips to holds-today at FR-16.
 
 ## INV-4 — CSRF and nonces are WordPress's; core mints nothing
 
@@ -120,8 +131,12 @@ audit that applied it.
 **Bypass smell:** a `private static array $…` in core that lists things; a class
 that re-implements a lookup WordPress's own function answers; a hand-written
 list of template names; a `{success, data}` array built by hand.
-**Mechanical check:** `grep -rn "private static array\|protected static array" --include=*.php api core admin support services` → each hit is either a WordPress-less concern (rate buckets, template dirs, declared limits) or a bypass.
-**Status:** established by phases 2 and 4 (today: `Rest::$surface`, `Rest::$cors['origins']`, `Response::$mimeTypes`, `Template_Loader::templateInclude()`'s hand-listed hierarchy, the `api*` envelopes).
+**Mechanical check:** `grep -rn "private static array\|protected static array" --include=*.php api core admin support services` → each hit is either a WordPress-less concern (rate buckets, template dirs, declared limits), a named deliberate exception below, or a bypass.
+**Status:** `Rest::$surface` and `Rest::$cors['origins']` are gone at `088d414`
+(Cluster 2, T05–T06): the route register is `WP_REST_Server::get_routes()` and
+the origin list is `allowed_http_origins`. Outstanding, for phase 4:
+`Response::$mimeTypes`, `Template_Loader::templateInclude()`'s hand-listed
+hierarchy, the `api*` envelopes.
 
 ## INV-6 — One template resolver; page routes are rewrite rules; a template callback returns a path
 
@@ -169,9 +184,26 @@ Things core does that WordPress also does, kept on purpose. Each names why.
 - **`NTDST_Rest` refuses a route with a typo'd option.** WordPress passes unknown
   keys through silently; a control the author believes is on and isn't is worse
   than a refused route.
+- **`NTDST_Rest::$corsOrigins` / `$corsResolvers` are not an allow-list.** They
+  are the INPUT to WordPress's own filters — `allowed_http_origins` and
+  `allowed_http_origin` — with exactly one reader each
+  (`filterAllowedOrigins()`, `filterAllowedOrigin()`), and nothing ever asks
+  them whether an origin is allowed: that question has one address,
+  `is_allowed_http_origin()`. They exist because a filter callback must be a
+  NAMED static to de-duplicate, and a named static has nowhere to close over.
+  `$corsOrigins` maps origin → the credentials the declaration that named it
+  asked for, so one module's grant does not reach another module's origin.
+- **`NTDST_Rest::$defaults`.** Per-namespace option defaults; WordPress has no
+  namespace-level route defaults to converge on.
 - **`NTDST_Rest` memoizes the permission per request.** WordPress calls
   `permission_callback` in dispatch and again in `rest_send_allow_header()`;
-  a capability check twice per request is waste, not a property.
+  a capability check twice per request is waste, not a property. The two
+  SHORTHANDS are exempt from it on purpose: they register as bare core function
+  names (`'is_user_logged_in'`, `'__return_true'`) rather than memoized
+  closures, because a core function has no side effect worth memoizing and a
+  literal string is the only thing `get_routes()` can be read back for (INV-3).
+  A rate-limited route is the exception to the exception — a budget still has to
+  be spent, so it registers `guard()`'s closure and trades that readability.
 - **`NTDST_Template_Loader` searches plugin template directories.**
   `locate_template()` is theme-only; a package that ships templates needs a
   registry WordPress does not have. The hierarchy *names* stay WordPress's.

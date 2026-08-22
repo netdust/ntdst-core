@@ -120,11 +120,31 @@ ntdst_rest('shop/v1')->cors(['https://app.example.com']);
 ```
 
 There is no `'cors' => [...]` route option, no per-route policy table, and no
-`corsFor()`. One allow-list, merged across namespaces.
+`corsFor()`. There is no allow-list of ours at all: the origins are ADDED to
+WordPress's own `allowed_http_origins`, and every allowed/not-allowed question
+is put to `is_allowed_http_origin()`. Two lists is one too many — the one
+WordPress reads would drift from the one we check.
+
+**A declared origin applies to REST requests only.** That list is site-wide:
+`admin-ajax.php`, `admin-post.php` and the customizer all read it through
+`send_origin_headers()`, which grants `Access-Control-Allow-Credentials: true`
+to every allowed origin **unconditionally** — whatever you passed for
+`$credentials` here. An origin declared for your REST API would otherwise be
+able to fetch `admin-ajax.php?action=rest-nonce` with a logged-in visitor's
+cookies, read the answer cross-origin, and hold that visitor's `wp_rest` nonce.
+So the declaration is scoped to `wp_is_serving_rest_request()`; those three
+surfaces keep WordPress's defaults. A resolver is not consulted there either.
+
+Credentials belong to the declaration that NAMED the origin, not to the site: a
+module that asks for them does not grant them to another module's origin, and a
+resolver — which names no origin — never grants them at all. `max_age` is shared
+and takes the highest asked for; it is a cache hint, not a permission.
 
 **The decision is a pure function again.** `corsDecision(?string $origin, array
 $policy): array` and `corsDecisionFor(?string $origin): ?array` return
 `['set' => [...], 'remove' => [...]]`; `sendCors()` is a thin emitter over them.
+`$policy` carries no origins — only `credentials` and `max_age`; allowed-ness is
+asked of WordPress, so a stale local list cannot grant or refuse anything.
 `header()` is invisible to a unit test, so a policy observable only over a
 socket is a policy nobody can unit-test — that seam is why this is not a
 behaviour you have to take on trust.
@@ -157,21 +177,33 @@ register every route lands in, and a second copy of it can only disagree with
 the original. Ask the server instead:
 
 ```php
-$routes    = rest_get_server()->get_routes('my/v1');
-$anonymous = array_filter($routes, fn ($h) => in_array('__return_true', array_column($h, 'permission_callback'), true));
-// assert $anonymous === [] in a test
+$routes = rest_get_server()->get_routes('my/v1');
+
+// The routes that named themselves anonymous.
+$anonymous = array_keys(array_filter(
+    $routes,
+    fn (array $handlers): bool => in_array('__return_true', array_column($handlers, 'permission_callback'), true),
+));
+
+// And the ones this snippet CANNOT answer for: every handler whose
+// permission_callback is not one of the two literal strings.
+$unansweredFor = array_keys(array_filter($routes, fn (array $handlers): bool => (bool) array_filter(
+    array_column($handlers, 'permission_callback'),
+    fn ($callback): bool => $callback !== 'is_user_logged_in' && $callback !== '__return_true',
+)));
+
+// assert $anonymous === [the routes you called ->public() on] in a test,
+// and settle every $unansweredFor route by reading what it declared.
 ```
 
 `get_routes()` maps each route to a LIST of handlers — one per method group —
-so the filter reads all of them, not the first. A capability route registers a
-closure and reads as opaque there; this finds the routes that named themselves
-anonymous, which is the property worth pinning.
+so both filters read all of them, not the first.
 
-A rate-limited route registers a closure too — `public` or not — because the
-limiter has to run, so the snippet above will not see it. Treat EVERY closure as
-unanswered-for: list the routes whose `permission_callback` is not one of the two
-literal strings, and settle those by reading what the route declared, never by
-the type of the callback.
+The second list is the honest half. A capability route registers a closure, and
+so does a rate-limited route — `public` or not, because the limiter has to run —
+and a closure is opaque: `fn () => true` and a real gate have the same type.
+Never settle a route by the TYPE of its callback. Settle it by reading what the
+route declared.
 
 **Retired options no longer take your endpoint away.** An option that never
 existed still refuses the route. `cors` and `before_dispatch` are *ignored*,
