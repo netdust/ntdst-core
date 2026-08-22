@@ -1,7 +1,6 @@
 # field-types — ntdst-core 5.0.0: one vocabulary, one table, WordPress reads it
 
-**Status:** spec, revision 0 — written 2026-08-22 from the brainstorm of the same
-evening (Stefan present throughout). Awaiting Stefan's review, then `writing-plans`.
+**Status:** spec, revision 1 — planning ground-truth 2026-08-22 (Stefan present): FR-8/SC-6 consumer gates run on each site's pinned core (Stefan: "Rename + own gate"); josworld already pins the `5.0.0` tag (`3cc96b7`, pre-core-shape) and lays out as `app/content/themes/josworld/...`; stride pins `v3.0.0` on `staging`; todai declares no ntdst fields. Revision 0 written 2026-08-22 from the brainstorm of the same evening.
 **Target release:** v5.0.0 (breaking, unreleased — same major as `core-shape`).
 **Relation to `core-shape`:** lands between core-shape Cluster 2 and Cluster 3 —
 it rewrites the Cluster 1 code (`restSchemaFor()`, `schemaFor()`,
@@ -110,7 +109,7 @@ true.
 
 ### Phase 4 — consumers, docs, invariants
 
-- **FR-8:** daan, josworld and stride each get one commit on their current branch that renames retired types in every `fields`/`sub_fields` declaration to the canonical (the 44 hits measured 2026-08-22), and josworld's `SchemaMapper::TYPE_MAP` key `boolean` becomes `bool`. todai declares no ntdst fields today; its `composer gate` is run to prove nothing else broke. No consumer code is changed beyond the rename.
+- **FR-8:** daan, josworld and stride each get one commit on their current branch that renames retired types in every `fields`/`sub_fields` declaration to the canonical (counted per site by the plan's ground-truth task — the first count, 44, predates stride's 61 `integer` + 16 `boolean`), and josworld's `SchemaMapper::TYPE_MAP` (`app/content/themes/josworld/services/yootheme/SchemaMapper.php`) key `boolean` becomes `bool`. Revision 1: each site's gate runs on the core it pins today (stride `v3.0.0`, josworld the `5.0.0` tag) — both accept the canonical names — and only daan proves the `5.0.x-dev` path repo; moving stride/josworld onto 5.0.x-dev is the fleet-migration spec. todai declares no ntdst fields today; its `composer gate` is run to prove nothing else broke. No consumer code is changed beyond the rename.
   Source: D5, D6 — Stefan 2026-08-22 "we need to adapt consumers", "only daan, josworld, todai, stride matter now"
 - **FR-9:** README's 5.0.0 section gains a "Field types" migration table (retired name → canonical, one row each, 13 rows), states the `int` sign change (FR-5) and the cell rule (which types cannot be sub-fields), and documents `NTDST_FieldTypes::get()` as the public read for bridges. `docs/philosophy.md` §1's citation of `Data.php`'s first line is updated to the new first line. `ARCHITECTURE-INVARIANTS.md` gains INV-8 — *"The field vocabulary has one table; every reader of a type name asks `NTDST_FieldTypes::get()`"* — with a mechanical check (`grep -rn "case 'text'\|'int', 'integer'\|=> 'absint'" api admin` = 0 hits outside `api/FieldTypes.php`) and a bypass smell (a `match`/`switch` over type names anywhere else). INV-1's text drops its mention of `restSubFields()`.
   Source: D2 — Stefan 2026-08-22 "logical and easy to understand for agents"; core-shape FR-13/FR-16 pattern
@@ -124,7 +123,7 @@ true.
 - **SC-3:** Under Brain Monkey, a model declared with `'price' => ['type' => 'int']` stores `-250` from `update()` as `-250` (1 assertion); a model declared with `'n' => 'integer'` throws at construction with a message containing `Use 'int'` (1 assertion); a repeater whose `sub_fields` contains `['type' => 'html']` throws at construction naming the field and the sub-field (1 assertion).
 - **SC-4:** Under Brain Monkey, `MetaboxGeneratorSaveTest`: a metabox save of a Data model reaches `update()` with the posted value unchanged except for `wp_unslash` and `update()`'s sanitizer is invoked exactly 1 time per field; a save on a non-Data post type reaches `update_post_meta()` with the registry-sanitized value (`"false"` → `false` for `bool`); 2 test methods minimum.
 - **SC-5:** `ReflectionClass(NTDST_Data_Model)` public methods, minus the query chain and CRUD, are exactly `getSchema`, `getMetaPrefix`, `restFields`, `registerRestMeta` — 4 names (pinned by the existing `DataRegistersRestMetaTest` surface assertion, re-pointed).
-- **SC-6:** `composer gate` exits 0 in core, and in daan, josworld, stride and todai against the path repo after FR-8 — 5 green gates; each consumer's rename commit touches 0 files outside its `fields` declarations and josworld's `SchemaMapper.php`.
+- **SC-6:** `composer gate` exits 0 in core; in daan against the `5.0.x-dev` path repo; in josworld, stride and todai on the core each pins today (revision 1) — 5 green gates; each consumer's rename commit touches 0 files outside its `fields` declarations and josworld's `SchemaMapper.php`.
 - **SC-7:** On daan's DDEV, `GET /wp-json/wp/v2/gigs/{id}` anonymous returns the same declared `meta` keys as before this spec (core-shape SC-1 re-run, 0 keys added or lost), and the gig edit screen renders every declared field with its FR-2 control — 1 screenshot per field group, a `html` top-level field shows the editor.
 - **SC-8:** `ARCHITECTURE-INVARIANTS.md` INV-8's mechanical check returns 0 hits at the merge commit; README's "Field types" table has 13 rows.
 
