@@ -111,7 +111,7 @@ Expected: the suite green; `["int",{"type":"integer"},"number",true]` then
 - **ntdst-core is THE base** — the vocabulary moves *into* core's one table; nothing moves into a site (consumers only rename).
 - **Wrap, never replace** — every sanitizer is a WordPress function; the registry names them, `Data` and the metabox ask the registry.
 - **One name per concept** (D3) — 17 names, 0 aliases, 8 tables → 1.
-- **Simplicity** — net line count negative: `Data` −~260 (seven helpers + the type match + two readers), `MetaboxGenerator` −~150 (`sanitize_field()` + nested switch, one render switch folded into the other), `FieldTypes.php` +~230.
+- **Simplicity** — net line count about zero after the Cluster A gate's measurement: `FieldTypes.php` landed at 428 (258 code), `Data` −~280 (seven helpers + the type match + formatMeta()'s match + two readers), `MetaboxGenerator` −~150. Eight tables → one is the win; T09 restates the numbers at the merge commit.
 - **`register()` unchanged** (D7); `Data` stays the ORM (D1).
 
 ## Phases & review clusters
@@ -167,17 +167,17 @@ final class NTDST_FieldTypes
 }
 // FR-2 entries (name → sanitize · schema · control · cell):
 //  int      (int) cast, arrays → 0, signed                 · ['type'=>'integer']                    · number   · true
-//  float    floatval                                        · ['type'=>'number']                     · number   · true
+//  float    floatval, arrays → 0.0                          · ['type'=>'number']                     · decimal  · true   (rev 2)
 //  bool     wp_validate_boolean                             · ['type'=>'boolean']                    · checkbox · true
 //  text     sanitize_text_field                             · ['type'=>'string']                     · text     · true
 //  textarea sanitize_textarea_field                         · ['type'=>'string']                     · textarea · true
 //  html     wp_kses_post                                    · ['type'=>'string']                     · html     · false
 //  email    sanitize_email                                  · ['type'=>'string','format'=>'email']   · email    · true
 //  url      esc_url_raw                                     · ['type'=>'string','format'=>'uri']     · url      · true
-//  date     today's sanitizeDate (Y-m-d or '')              · ['type'=>'string']                     · date     · true
+//  date     today's sanitizeDate, strtotime()+date()        · ['type'=>'string']                     · date     · true   (rev 2)
 //  select   sanitize_text_field((string) $v)                · ['type'=>'string']                     · select   · true
-//  array    today's sanitizeNestedArray (JSON string ok)    · ['type'=>'array','items'=>['type'=>'string']] · textarea · true
-//  json     today's sanitizeJson                            · null                                    · textarea · true
+//  array    today's sanitizeNestedArray (JSON string ok)    · ['type'=>'array','items'=>['type'=>'string']] · json     · true   (rev 2: JSON-encoded code textarea)
+//  json     today's sanitizeJson                            · null                                    · json     · true
 //  relation list of absint ids                              · ['type'=>'array','items'=>['type'=>'integer']] · relation · false
 //  gallery  list of absint ids                              · ['type'=>'array','items'=>['type'=>'integer']] · gallery  · false
 //  image    today's sanitizeAttachmentId (int; '' in a row) · ['type'=>'integer']                    · media    · true
@@ -191,6 +191,7 @@ final class NTDST_Data_Model {
     //   InvalidArgumentException "Field 'n': Unknown field type 'integer'. Use 'int'." (the registry's message, prefixed with the field)
     // setupSanitizers(): $this->sanitizers[$field] = $config['sanitizer'] ?? fn($v) => (NTDST_FieldTypes::get($type)->sanitize)($v, $config)
     // schemaFor(mixed $config, ?array &$refusal = null): ?array — structural rule only; leaf shape = NTDST_FieldTypes::get($type)->schema
+    // formatMeta() (~:1996) is a THIRD type table (read-side casts; calls sanitizeBoolean()/sanitizeNestedArray()) — T03 routes its read-side normalisation through NTDST_FieldTypes::get($type)->sanitize (idempotent by constraint, so applying it on read is safe) and deletes its match (T01 review I-1)
     // REMOVED: getDefaultSanitizer(), sanitizeBoolean(), sanitizeJson(), sanitizeNestedArray(), sanitizeDate(), sanitizeAttachmentId(), sanitizeRepeater(), restSubFields(), restSchemaFor()
     // KEPT public: chain + CRUD, getSchema(), getMetaPrefix(), restFields(), registerRestMeta()
 }
@@ -201,8 +202,9 @@ final class NTDST_MetaboxGenerator {
     //                      non-Data post type → (NTDST_FieldTypes::get($type)->sanitize)($value, $config) per field (sub-fields included) before update_post_meta();
     //                      relation/gallery "not submitted means cleared" stays.
     // REMOVED: sanitize_field() and its nested repeater switch
-    private function render_control(string $control, string $field_id, string $field_name, mixed $value, array $config, bool $inCell): void;
-    //   every case keyed by NTDST_FieldType::$control; unknown control → LogicException; $inCell = no label wrapper, row naming scheme
+    private function render_control(NTDST_FieldType $type, string $field_id, string $field_name, mixed $value, array $config, bool $inCell): void;
+    //   every case keyed by $type->control (never $type->name or $config['type'] — INV-8's bypass smell); unknown control → LogicException; $inCell = no label wrapper, row naming scheme
+    //   controls: number (int) · decimal (float, step 0.01) · checkbox · text · textarea · html · email · url · date · select · json (array/json: JSON-encoded code textarea) · media · relation · gallery · repeater
     // REMOVED: the switch in render_field() and the switch in render_repeater_row() (both call render_control())
 }
 ```
