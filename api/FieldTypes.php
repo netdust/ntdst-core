@@ -248,11 +248,16 @@ final class NTDST_FieldTypes
      * A date field holds a date. Junk is refused rather than stored as text —
      * a date column that sometimes holds "not a date" cannot be sorted.
      *
-     * date(), never gmdate(): strtotime() reads the posted string in the site's
-     * timezone, so the answer is written in it too. A year outside 0000-9999 is
-     * refused because date() writes five digits there, which the next pass
-     * re-parses as a different date — and register_post_meta() runs the
-     * sanitizer again on every REST write.
+     * date(), never gmdate(): both halves must read the same clock. strtotime()
+     * parses in the process timezone, so the answer is written in it too.
+     * WordPress forces that clock to UTC (wp-settings.php:73), which is why the
+     * pairing only shows itself once something moves it — a plugin, a WP-CLI
+     * command, a consumer calling date_default_timezone_set(). Then gmdate()
+     * would lose a day east of UTC on every save.
+     *
+     * A year outside 0000-9999 is refused because date() writes five digits
+     * there, which the next pass re-parses as a different date — and
+     * register_post_meta() runs the sanitizer again on every REST write.
      */
     private static function date(mixed $value): string
     {
@@ -356,9 +361,11 @@ final class NTDST_FieldTypes
      * undeclared key is still stored, as text, and its key is sanitized the way
      * nested() sanitizes one: the metabox echoes that key back as an input name.
      *
-     * A row is kept when any POSTED cell is not '' and not null. The rule reads
-     * what the editor typed, not what came out — `int ''` sanitizes to 0, and a
-     * quantity of "0" is an answer, not a blank.
+     * A row is kept when any POSTED cell is not '' / null AND any SANITIZED
+     * cell is not '' / null. The posted half keeps the answers that only look
+     * falsy — `int '0'` is 0, `bool 'false'` is false. The sanitized half drops
+     * the row whose only content was refused: `url 'javascript:x'` is '', and a
+     * row kept on pass 1 but dropped on pass 2 is one the REST re-save deletes.
      *
      * @param  array<string, mixed> $config the repeater's own declaration
      * @return list<array<array-key, mixed>>
@@ -369,15 +376,11 @@ final class NTDST_FieldTypes
             return [];
         }
 
-        $subFields = is_array($config['sub_fields'] ?? null) ? $config['sub_fields'] : [];
+        $subFields = self::declarations($config['sub_fields'] ?? null);
         $sanitized = [];
 
         foreach ($rows as $row) {
-            $posted = is_array($row)
-                ? array_filter($row, static fn(mixed $cell): bool => $cell !== '' && $cell !== null)
-                : [];
-
-            if ($posted === []) {
+            if (!is_array($row) || !self::filled($row)) {
                 continue;
             }
 
@@ -402,9 +405,45 @@ final class NTDST_FieldTypes
                     : sanitize_text_field(self::scalar($value));
             }
 
-            $sanitized[] = $cells;
+            if (self::filled($cells)) {
+                $sanitized[] = $cells;
+            }
         }
 
         return $sanitized;
+    }
+
+    /**
+     * The sub-field declarations, keyed by sanitize_key() of the DECLARED name:
+     * a cell is stored under its sanitized key, so the re-save arrives with that
+     * key and `subTitle` must stay reachable from `subtitle` — otherwise the
+     * cell loses its type on every REST write and an int becomes text.
+     *
+     * @return array<array-key, mixed>
+     */
+    private static function declarations(mixed $subFields): array
+    {
+        if (!is_array($subFields)) {
+            return [];
+        }
+
+        $keyed = [];
+        foreach ($subFields as $name => $declaration) {
+            $keyed[is_string($name) ? sanitize_key($name) : $name] = $declaration;
+        }
+
+        return $keyed;
+    }
+
+    /** Has this row an answer in it at all — any cell that is not '' or null? */
+    private static function filled(array $row): bool
+    {
+        foreach ($row as $cell) {
+            if ($cell !== '' && $cell !== null) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }
