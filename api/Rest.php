@@ -158,10 +158,11 @@ final class NTDST_Rest
             $this->refuse(
                 '(defaults)',
                 '-',
-                'defaults:opening — a namespace default may narrow the posture ("logged_in", a capability) but never open it, so the "permission" default was dropped (called at ' . self::callSite() . ')',
+                'defaults:opening — a namespace default may narrow the posture ("logged_in", a capability) but never open it, so the "permission" default was dropped',
                 false,
                 '5.0.0',
                 'defaults',
+                true,
             );
 
             unset($options['permission']);
@@ -265,18 +266,14 @@ final class NTDST_Rest
         add_filter('allowed_http_origins', [self::class, 'filterAllowedOrigins'], 10, 1);
         add_filter('allowed_http_origin', [self::class, 'filterAllowedOrigin'], 10, 2);
 
-        // The swap is SCHEDULED for priority 15 whenever 15 is still ahead:
-        // before the hook, and inside it at any priority below 15 — WP_Hook
-        // picks up a callback added at a priority it has not reached yet.
-        //
-        // Swapping EARLIER than 15 would be a no-op, because WordPress does not
-        // mount rest_send_cors_headers() before the request either: it is added
-        // by rest_api_default_filters(), itself a rest_api_init callback at
-        // priority 10 (wp-includes/rest-api.php). A cors() called at priority 5
-        // — an ordinary place for a consumer to declare — would remove a
-        // handler that is not on the bus yet, and core would mount it five
-        // priorities later: the reflect-any-origin emitter running for the whole
-        // request, over an allow-list this same call has already widened.
+        // SCHEDULED for priority 15 whenever 15 is still ahead — WP_Hook picks
+        // up a callback added at a priority it has not reached yet. Swapping
+        // earlier is a no-op: core does not mount rest_send_cors_headers()
+        // before the request either, it is added by rest_api_default_filters()
+        // at rest_api_init:10 (wp-includes/rest-api.php). A cors() at priority
+        // 5 would remove a handler that is not on the bus yet, and core would
+        // mount it five priorities later — reflect-any-origin for the whole
+        // request, over a list this same call has already widened.
         $timing   = self::timing();
         $priority = self::hookPriority();
 
@@ -286,9 +283,8 @@ final class NTDST_Rest
             return $this;
         }
 
-        // Inside the hook at 15 or later, or after it has finished: 15 is behind
-        // us and WP_Hook never walks backwards, so nothing scheduled there would
-        // run. Core has mounted its emitter by now, so the swap happens here.
+        // At 15 or later, or after the hook: 15 is behind us, WP_Hook never
+        // walks backwards, and core has mounted its emitter. Swap here.
         self::mountCors();
 
         return $this;
@@ -444,8 +440,9 @@ final class NTDST_Rest
      * open when it is internal, or the reverse, and only one of those two
      * mistakes is discovered by using the site.
      *
-     * A write verb stays unpublishable: registerOne() refuses it, because
-     * "anyone may write" is the threat itself and not an exception to it.
+     * A verb outside GET, HEAD and OPTIONS stays unpublishable: registerOne()
+     * refuses it, because "anyone may write" is the threat itself and not an
+     * exception to it.
      *
      * Returns $this even when it refuses, so a consumer's chain cannot fatal.
      */
@@ -459,16 +456,17 @@ final class NTDST_Rest
         };
 
         if ($cause !== null) {
-            // The CALL SITE is part of the message, and so part of the dedup id:
-            // two misuses in one namespace are two things to fix, and a
-            // namespace-keyed report tells the author about the first one only.
+            // Reported PER CALL SITE (the last argument): two misuses in one
+            // namespace are two things to fix, and a namespace-keyed report
+            // tells the author about the first one only.
             $this->refuse(
                 '(public)',
                 '-',
-                self::PUBLIC_REFUSALS[$cause] . ' (called at ' . self::callSite() . ')',
+                self::PUBLIC_REFUSALS[$cause],
                 false,
                 '5.0.0',
                 'public',
+                true,
             );
 
             return $this;
@@ -569,7 +567,14 @@ final class NTDST_Rest
         return function_exists('did_action') && did_action('rest_api_init') ? 'after' : 'before';
     }
 
-    /** The priority rest_api_init is firing at, when WordPress can say. */
+    /**
+     * The priority rest_api_init is firing at, when WordPress can say.
+     *
+     * `null` — no WP_Hook, or `current_priority()` answering `false`
+     * off-iteration (class-wp-hook.php:404) — reads as "assume 15 is behind
+     * us": cors() swaps now instead of scheduling into a priority that may
+     * have passed, and route() reports no collision it cannot prove.
+     */
     private static function hookPriority(): ?int
     {
         $hook = $GLOBALS['wp_filter']['rest_api_init'] ?? null;
@@ -586,10 +591,15 @@ final class NTDST_Rest
     /**
      * The consumer line that reached us — in the message, so an author reading
      * one refusal knows which of their calls made it, and in the dedup id.
+     *
+     * Four frames is the whole distance — this call, refuse(), the consumer's
+     * public()/defaults() — and refuse() reaches it only once a refusal is a
+     * candidate. Unbounded, it walked the whole WordPress stack to find a
+     * frame it already knew was three up.
      */
     private static function callSite(): string
     {
-        foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS) as $frame) {
+        foreach (debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 4) as $frame) {
             if (isset($frame['file']) && $frame['file'] !== __FILE__) {
                 return basename((string) $frame['file']) . ':' . ($frame['line'] ?? 0);
             }
@@ -1001,11 +1011,9 @@ final class NTDST_Rest
     /**
      * Say it once, and say it where it can be read.
      *
-     * The dedup id carries the REASON as well as the route: registerOne() runs
-     * on every REST request, so a repeated refusal would flood the log, but a
-     * route-only key also swallows the SECOND, different fault on that route —
-     * the author fixes the one they were told about and the route still does
-     * not exist, now silently.
+     * The dedup id carries the REASON as well as the route: a route-only key
+     * swallows the SECOND, different fault on that route, and the author fixes
+     * the one they were told about while the route still does not exist.
      *
      * Both channels, because neither is enough alone: _doing_it_wrong() is
      * SUPPRESSED inside a REST request (core's doing_it_wrong_trigger_error is
@@ -1021,6 +1029,12 @@ final class NTDST_Rest
      *                       class's own age.
      * @param string  $from  The method that refused, so the report names the
      *                       call the author has to look at.
+     * @param bool $perCallSite True for public() and defaults(): a consumer
+     *                       writes those twice in one namespace from two files
+     *                       that never met, and the second misuse is the one in
+     *                       the file its author is editing, so the caller's line
+     *                       joins the id. Everything else is settled by the
+     *                       cheap id and never pays for a backtrace.
      */
     private function refuse(
         string $route,
@@ -1028,12 +1042,27 @@ final class NTDST_Rest
         string $why,
         bool $fatal = true,
         ?string $since = null,
-        string $from = 'route'
+        string $from = 'route',
+        bool $perCallSite = false
     ): void {
         $id = implode('|', [$this->namespace, $route, $methods, (int) $fatal, $why]);
 
+        // The cheap test FIRST, and for most refusals the only one.
         if (isset(self::$reported[$id])) {
             return;
+        }
+
+        if ($perCallSite) {
+            // The site-less id is deliberately never RECORDED for these: a
+            // second call from a different line must still report, and a third
+            // from the first line is settled by the refined id below.
+            $at   = self::callSite();
+            $id  .= '|' . $at;
+            $why .= ' (called at ' . $at . ')';
+
+            if (isset(self::$reported[$id])) {
+                return;
+            }
         }
 
         self::$reported[$id] = true;
