@@ -106,6 +106,12 @@ class NTDST_Data_Model
      * The one reading of the declaration: WordPress's key with WordPress's default,
      * OPT IN and strictly `=== true`, so `'yes'`, `1` and a bare type string all
      * leave the field private. It lives alone because the exposure rule rests on it.
+     *
+     * Two readers, both inside this class: `restFields()` (which fields may leave)
+     * and `schemaFor()` (in what shape, asked again at EVERY depth), the second
+     * reached only through `registerRestMeta()`. Nothing public asks either
+     * question a second time — a second way to ask is a second exposure a
+     * consumer can assemble beside the convergence point (INV-1).
      */
     private function declaresRest(mixed $config): bool
     {
@@ -136,57 +142,6 @@ class NTDST_Data_Model
         }
 
         return $fields;
-    }
-
-    /**
-     * The same declaration one level down, for the kinds that nest.
-     *
-     * A flat list cannot say "this repeater may leave but the sale price inside
-     * it may not", which is exactly where a sensitive value hides. Sub-fields
-     * carry the same key and are read the same way; a parent nobody named takes
-     * its children with it.
-     *
-     * @return array<string, list<string>>
-     */
-    public function restSubFields(): array
-    {
-        $fields = [];
-
-        foreach ($this->schema as $field => $config) {
-            if (!$this->declaresRest($config)) {
-                continue;
-            }
-
-            if (!is_array($config['sub_fields'] ?? null)) {
-                continue;
-            }
-
-            $kept = [];
-
-            foreach ($config['sub_fields'] as $sub => $subConfig) {
-                if ($this->declaresRest($subConfig)) {
-                    $kept[] = (string) $sub;
-                }
-            }
-
-            $fields[(string) $field] = $kept;
-        }
-
-        return $fields;
-    }
-
-    /**
-     * The REST schema for one declared field, or null if it may not leave.
-     *
-     * A permission alone is not enough to register a field: `register_post_meta()`
-     * refuses an array or object value that arrives without a shape. One place
-     * decides that shape, so a field cannot be published as two things — note that
-     * the shape is not the sanitiser's: `array` sanitises nested but publishes a
-     * flat list of strings, and `json` publishes nothing at all.
-     */
-    public function restSchemaFor(string $field): ?array
-    {
-        return $this->schemaFor($this->schema[$field] ?? null);
     }
 
     /**
@@ -281,7 +236,8 @@ class NTDST_Data_Model
             sprintf(
                 'Model "%s" declares REST field(s) that have no publishable shape, so they '
                 . 'reach no /wp/v2 response: %s. Give a repeater sub_fields and declare every '
-                . 'one of them, or drop `show_in_rest` from the field.',
+                . 'one of them, declare a keyed value as a repeater instead, or drop '
+                . '`show_in_rest` from the field.',
                 $this->post_type,
                 implode('; ', $refused),
             ),
@@ -301,13 +257,17 @@ class NTDST_Data_Model
      * and drops it on a write that does not. Half a repeater is not half published;
      * it is broken.
      *
-     * Three declarations therefore have NO publishable shape: `json` (a blob names
-     * no sub-fields), a repeater with any undeclared sub-field at any depth, and a
+     * The STRUCTURAL rule is all this method holds. Each leaf's shape is the
+     * vocabulary's — `NTDST_FieldTypes::get($type)->schema`, one table, asked
+     * here and nowhere else (INV-8) — and a `null` there means the type is not
+     * publishable at all: `json` (a blob names no sub-fields) and `array` (a
+     * keyed map of typed values, whose stored rows read back null against any
+     * leaf a closed schema could give them).
+     *
+     * Unpublishable therefore has three shapes: a leaf the vocabulary gives no
+     * schema, a repeater with any undeclared sub-field at any depth, and a
      * repeater with no `sub_fields` at all — the last one is the partial case with
      * every key undeclared, and its empty closed object nulls its own stored rows.
-     *
-     * The type VOCABULARY is not this method's: NTDST_FieldTypes::get() is asked
-     * first and a name outside it throws there, with its own message (INV-8).
      *
      * @param array{path: string, why: string}|null $refusal Set when null is returned.
      * @return array<string, mixed>|null
@@ -324,9 +284,9 @@ class NTDST_Data_Model
 
         $type = self::declaredType($config);
 
-        // Ask the vocabulary what this name means. Only its verdict is wanted
-        // here, not the entry — a name outside the 17 throws on the way through.
-        NTDST_FieldTypes::get($type);
+        // Ask the vocabulary what this name means. A name outside the 17 throws
+        // on the way through, with the registry's own message.
+        $entry = NTDST_FieldTypes::get($type);
 
         if ($type === 'repeater') {
             $sub_fields = is_array($config['sub_fields'] ?? null) ? $config['sub_fields'] : [];
@@ -375,40 +335,24 @@ class NTDST_Data_Model
             ];
         }
 
-        $schema = match ($type) {
-            'int', 'integer', 'image', 'file' => ['type' => 'integer'],
-            'float', 'double' => ['type' => 'number'],
-            'bool', 'boolean' => ['type' => 'boolean'],
-            'text', 'textarea', 'html', 'content', 'wysiwyg', 'select', 'date' => ['type' => 'string'],
-            'email' => ['type' => 'string', 'format' => 'email'],
-            'url' => ['type' => 'string', 'format' => 'uri'],
-            'array' => ['type' => 'array', 'items' => ['type' => 'string']],
-            'gallery', 'relation', 'post_relation', 'person' => [
-                'type' => 'array',
-                'items' => ['type' => 'integer'],
-            ],
-            // A blob carries no sub-field vocabulary, so nothing inside one was
-            // ever named and publishing it would hand every stored key out whole.
-            'json' => null,
-
-            // The vocabulary accepted this name and this table did not, so the
-            // two have drifted: give the leaf a shape here, or take the name out
-            // of api/FieldTypes.php.
-            default => throw new InvalidArgumentException(
-                "Unknown field type '{$type}': NTDST_FieldTypes::get() knows it and the REST "
-                . "schema table does not. Add it to schemaFor(), or remove it from the "
-                . "vocabulary — the two must name the same set.",
-            ),
-        };
-
-        if ($schema === null) {
+        // The leaf shape is the vocabulary's, never a second table's. `null`
+        // there is a verdict, not a gap: nothing inside such a value was ever
+        // named, so WordPress would measure every stored row against a leaf that
+        // does not admit it and read it back as null. Refused instead, out loud.
+        if ($entry->schema === null) {
             $refusal = [
                 'path' => '',
-                'why'  => 'a `json` blob names no sub-fields, so nothing inside it ever opted in',
+                'why'  => sprintf(
+                    '`%s` has no publishable leaf shape — it holds keyed, typed values that no '
+                    . 'closed schema names, so every stored value would read back null',
+                    $type,
+                ),
             ];
+
+            return null;
         }
 
-        return $schema;
+        return $entry->schema;
     }
 
     /**

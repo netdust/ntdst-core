@@ -39,7 +39,13 @@ fi
 #         RETIRED table has to spell it out in order to answer "use 'int'".
 #         (Same exemption README's `## Versions` section gets in
 #         PackageBootIntegrityTest, which pins these rows per symbol.)
-REMOVED=$(grep -rnE "ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|signed_int" \
+# v5.0.0 field-types: restSubFields() and restSchemaFor() — the two PUBLIC
+#         reads of the field description, 0 shipped readers. What a field
+#         publishes is asked once, by registerRestMeta() through the private
+#         schemaFor(); a second public way to ask it is a second exposure a
+#         consumer can assemble beside the convergence point (INV-1). Neither
+#         name is part of any other word, so both are pinned bare.
+REMOVED=$(grep -rnE "ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|restSubFields|restSchemaFor|signed_int" \
     --include='*.php' . \
     | grep -v /vendor/ \
     | grep -vE "^(\./)?tests/|^(\./)?specs/" \
