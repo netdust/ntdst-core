@@ -1,6 +1,6 @@
 # core-shape — ntdst-core 5.0.0: declare in Data, route through Rest, WordPress does the rest
 
-**Status:** spec, revision 1 (2026-08-23 09:40 — ground-truth amendments to FR-2, FR-9, FR-14, SC-10, two assumptions) — written 2026-08-23 from the rulings in
+**Status:** spec, revision 2 (2026-08-22 — Cluster 1 gate rulings approved by Stefan: FR-1 attribution, FR-2 json and repeater rows, FR-3 readers, SC-1 path, assumption on `additionalProperties`; revision 1 2026-08-23 09:40 — ground-truth amendments to FR-2, FR-9, FR-14, SC-10, two assumptions) — written 2026-08-23 from the rulings in
 `docs/plans/2026-08-23-core-shape-brief.md`, confirmed in brainstorming the same
 morning. Awaiting Stefan's review, then `writing-plans`.
 **Target release:** v5.0.0 (breaking, unreleased — the 5.0.0 `Rest` rewrite is
@@ -66,11 +66,11 @@ they do not inform the design (D5).
 
 ### Phase 1 — Data declares, WordPress reads
 
-- **FR-1:** A field description may say `show_in_rest => true`, with WordPress's meaning: opt in. `NTDST_Data_Model::register()` calls `register_post_meta($type, <prefixed key>, [...])` for every such field and adds `custom-fields` to the CPT's `supports` when at least one field is declared. An undeclared field is never registered with WordPress and never appears on `/wp/v2/<type>`. Establishes INV-1.
+- **FR-1:** A field description may say `show_in_rest => true`, with WordPress's meaning: opt in. `NTDST_Data_Manager::register()` calls `$model->registerRestMeta($type)`, which calls `register_post_meta($type, <prefixed key>, [...])` for every such publishable field (revision 2) and adds `custom-fields` to the CPT's `supports` when at least one field is declared. An undeclared field is never registered with WordPress and never appears on `/wp/v2/<type>`. Establishes INV-1.
   Source: D1 + D1a — Stefan 2026-08-22 01:40 "with show_in_rest we prove it"; 2026-08-23 "Core adds it automatically"
-- **FR-2:** The registration carries a REST schema derived from the field type: `int`/`signed_int`/`image`/`file` → `integer`; `float` → `number`; `bool` → `boolean`; `text`/`textarea`/`html`/`wysiwyg`/`content`/`select`/`date`/`email`/`url` → `string` (`email` → `format: email`, `url` → `format: uri`); `array` → `array` of `string`; `gallery`/`relation`/`post_relation`/`person` → `array` of `integer` (their sanitizers store a list of IDs — ground-truthed 2026-08-23 against `api/Data.php:231–244`); `json` → `object`; `repeater` → `array` of `object` whose `properties` are exactly the sub-fields that themselves say `show_in_rest => true`. `single => true`; `sanitize_callback` is the model's sanitizer for the type; `auth_callback` requires `edit_post` on the post.
+- **FR-2:** The registration carries a REST schema derived from the field type: `int`/`signed_int`/`image`/`file` → `integer`; `float` → `number`; `bool` → `boolean`; `text`/`textarea`/`html`/`wysiwyg`/`content`/`select`/`date`/`email`/`url` → `string` (`email` → `format: email`, `url` → `format: uri`); `array` → `array` of `string`; `gallery`/`relation`/`post_relation`/`person` → `array` of `integer` (their sanitizers store a list of IDs — ground-truthed 2026-08-23 against `api/Data.php:231–244`); `json` → **not publishable** (a blob has no sub-field vocabulary to name — revision 2); `repeater` → `array` of `object` closed over its sub-fields, **publishable only when it has sub-fields and every one of them says `show_in_rest => true`** — WordPress validates the stored row against the closed schema, so a partial declaration would null the read and a legal write would wipe the undeclared keys (revision 2, proven on daan gig 297050). A declared field that is not publishable registers nothing and warns once per model. `single => true`; `sanitize_callback` is the model's sanitizer for the type; `auth_callback` requires `edit_post` on the post for the user WordPress asks about (`user_can($userId, 'edit_post', $postId)` — revision 2).
   Source: invented — approved 2026-08-23 (design §2, brainstorm); storage shapes ground-truthed 2026-08-23 (spec revision 1)
-- **FR-3:** `restFields()` and `restSubFields()` remain the only readers of the declaration inside `Data`, for routes that filter themselves. `Data` gains no other exposure helper — no projector, no shape, no allow-list. Establishes INV-1.
+- **FR-3:** One private predicate (`declaresRest()`) is the only reader of the declaration inside `Data`; `restFields()`, `restSubFields()` and `restSchemaFor()` read through it, for routes that filter themselves (revision 2). `Data` gains no other exposure helper — no projector, no shape, no allow-list. Establishes INV-1.
   Source: Stefan 2026-08-21 22:14 "data is for quering. we would add a public/private to fields description"; A1/A2 in `docs/session-2026-08-21-actions-to-rest.md`
 
 ### Phase 2 — Rest is the one surface, internal by default
@@ -115,7 +115,7 @@ they do not inform the design (D5).
 
 ## Success criteria
 
-- **SC-1:** On daan's DDEV with the path repo installed, `GET /wp-json/wp/v2/gig/{id}` as an anonymous caller returns exactly the fields the gig model declares `show_in_rest => true` under `meta`, and 0 undeclared keys — proven with 1 seeded undeclared meta key (the `daan_internal_promo_budget` probe pattern) that must be absent.
+- **SC-1:** On daan's DDEV with the path repo installed, `GET /wp-json/wp/v2/gigs/{id}` (daan's `rest_base` — revision 2) as an anonymous caller returns exactly the fields the gig model declares `show_in_rest => true` under `meta`, and 0 undeclared keys — proven with 1 seeded undeclared meta key (the `daan_internal_promo_budget` probe pattern) that must be absent.
 - **SC-2:** Under Brain Monkey: `ntdst_rest('x/v1')->post('/t', $h)` with no capability leaves `/x/v1/t` absent from the captured `register_rest_route()` calls (0 registrations); `->get('/t', $h)` registers with `permission_callback === 'is_user_logged_in'`; `->get('/t', $h)->public()` registers with `'__return_true'`. 3 assertions, 1 test file.
 - **SC-3:** `grep -rn "register_rest_route(\|wp_ajax_\|ntdst/api_data\|ntdst_actions\|get_nonce\|ntdstAPI" --include=*.php --include=*.js . | grep -v "^./api/Rest.php\|/vendor/\|/tests/\|README"` returns 0 lines; `assets/js/ntdst-api.js` and `api/Actions.php` do not exist.
 - **SC-4:** On daan's DDEV, `GET /wp-json/ntdst/v1/relation/search?search=a&post_type=release` answers 401 anonymous, 403 as an Author (holds `edit_posts`, not `edit_others_posts`), 200 with a `results` array as Administrator. 3 probes.
@@ -133,7 +133,7 @@ they do not inform the design (D5).
 The plan owes a `## Threat model`.
 
 - [x] **Authorization** — the route default changes from "refused" to "logged in"; the write-verb refusal is the load-bearing mitigation and is tested as absence (SC-2). Every account on a site with open registration reaches every unnamed GET route; that is WordPress's own posture and is stated in README.
-- [x] **Anonymous reach of post meta** — `register_post_meta(show_in_rest)` publishes declared fields on `/wp/v2/<type>` to anyone once `custom-fields` support is on. Opt-in is the mitigation; sub-field opt-in guards the repeater case (a public provenance with a private sale price). A field declared by mistake is a disclosure — README says so in the field's own docs.
+- [x] **Anonymous reach of post meta** — `register_post_meta(show_in_rest)` publishes declared fields on `/wp/v2/<type>` to anyone once `custom-fields` support is on. Opt-in is the mitigation. Revision 2: a repeater is publishable only when every sub-field is declared — the public-provenance-with-private-sale-price shape is NOT supported by declaration (it would need read-projection inside Data, an INV-1 exception, deliberately not taken). A field declared by mistake is a disclosure — README says so in the field's own docs.
 - [x] **CSRF / session** — core stops minting nonces; cookie-authenticated REST relies on `rest_cookie_check_errors()`. Removing `verifyOrigin()` is recorded as guarding nothing the nonce rule does not (brief D2).
 - [x] **Untrusted parsing** — relation-search params (`search`, `post_type[]`); rewrite-rule `:param` values reaching `get_query_var()`; both sanitized as today.
 - [x] **Rate limiting** — unchanged primitive (INV-7); the relation-search route declares a `rate_limit`.
@@ -156,7 +156,7 @@ One line each; visible at the review gate.
 
 - Meta is stored one value per key (`single => true`); the repeater is one serialized array under its key. Ground-truthed in the plan (FR-2).
 - `image` and `file` store one attachment ID (`sanitizeAttachmentId`); `relation`, `post_relation`, `person`, `gallery` store a list of IDs. Verified 2026-08-23 (`api/Data.php:231–244`).
-- WordPress honours a partial `properties` list on a nested `object` schema: `WP_REST_Meta_Fields::default_additional_properties_to_false()` (`class-wp-rest-meta-fields.php:606`) makes un-named sub-fields drop on read and write. Verified 2026-08-23.
+- ~~WordPress honours a partial `properties` list on a nested `object` schema … makes un-named sub-fields drop on read and write.~~ **Refuted at the Cluster 1 gate (revision 2):** `WP_REST_Meta_Fields::prepare_value()` (`class-wp-rest-meta-fields.php:556`) validates the STORED value against the schema and returns `null` on any error; `update_value()` validates before it sanitizes (400). Hence FR-2's all-or-nothing repeater rule.
 - daan's DDEV is available and its integration suite's known reds (8) are the baseline; this spec adds no daan migration.
 - Core's suite stays Brain Monkey unit-only; every "on daan's DDEV" criterion is the shake-out's, not the unit suite's.
 - 5.0.0 is unreleased, so no shim, alias or deprecation path is owed to anyone.
