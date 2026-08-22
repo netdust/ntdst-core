@@ -200,18 +200,82 @@ final class NtdstRestTest extends TestCase
 
     public function testFacadeReturnsOneChainableWrapperPerNamespace(): void
     {
-        // WHY: the memo in T04 is per wrapper, and every route in a namespace
-        // must share one wrapper — two wrappers for one namespace would mean
-        // two registration paths for the same surface. Chainability is the
-        // declared shape in FR-3: ntdst_rest('ns')->get(...)->post(...).
+        // WHY: FR-3 declares the shape ntdst_rest('ns')->get(...)->post(...),
+        // and every route in a namespace must go through ONE registration path
+        // — two wrappers for one namespace would mean two surfaces claiming the
+        // same prefix, with the per-namespace defaults() applying to only one.
+        //
+        // AMENDED (T04 fix round, by the independent test-author). This case
+        // used to assert assertSame($wrapper, $wrapper->get(...)) — object
+        // identity between the facade and what a verb returns. That was an
+        // implementation detail, not the promise, and it contradicts the ruling
+        // its own sibling file now pins: the PENDING declaration that ->public()
+        // marks belongs to the DECLARATION, not to the namespace
+        // (NtdstRestDefaultsTest::testAHeldDeclarationMarksItsOwnRouteAfterASiblingWasDeclared,
+        // ...::testPublicOnTheCachedFacadeFindsNothingPendingAndRefuses). A
+        // cached facade that returned itself from every verb would hand module
+        // B's ->public() module A's route. So the property asserted here is the
+        // one the comment above always named, stated behaviourally:
+        //
+        //   - ntdst_rest('ns') is CACHED — one wrapper per namespace;
+        //   - a verb returns something you can keep chaining;
+        //   - a verb chained off that returned handle declares into the SAME
+        //     namespace, so there is still one registration path;
+        //   - the namespace defaults() reach a route declared through it.
+        //
+        // Nothing was relaxed: no assertion about which routes exist, which
+        // permission they carry, or the memo was touched. This case no longer
+        // REQUIRES facade identity — it does not forbid it either; it stopped
+        // pinning an internal that the framework is free to choose.
         $this->assertTrue(function_exists('ntdst_rest'), 'ntdst_rest() is the v3 resource-routing facade (FR-1).');
 
-        $wrapper = ntdst_rest('x/v1');
-        $this->assertSame($wrapper, ntdst_rest('x/v1'), 'one cached wrapper per namespace.');
-        $this->assertNotSame($wrapper, ntdst_rest('y/v1'), 'a different namespace gets its own wrapper.');
+        $wrapper = ntdst_rest('chain/v1');
+        $this->assertSame($wrapper, ntdst_rest('chain/v1'), 'one cached wrapper per namespace.');
+        $this->assertNotSame($wrapper, ntdst_rest('chainb/v1'), 'a different namespace gets its own wrapper.');
 
-        $chained = $wrapper->get('/thing', fn() => [], ['permission' => fn() => true]);
-        $this->assertSame($wrapper, $chained, 'verb methods return $this so declarations chain.');
+        $handle = $wrapper->get('/thing', fn() => [], ['permission' => fn() => true]);
+        $this->assertInstanceOf(NTDST_Rest::class, $handle, 'a verb returns a wrapper you can keep chaining.');
+
+        // The second verb is chained off what the FIRST verb returned. If that
+        // handle had lost its namespace, this route would land somewhere else —
+        // or nowhere.
+        $handle->post('/written', fn() => [], ['permission' => 'manage_options']);
+
+        $keys = $this->routeKeys();
+        $this->assertContains('/chain/v1/thing', $keys, 'the route declared on the facade registers.');
+        $this->assertContains(
+            '/chain/v1/written',
+            $keys,
+            'a verb chained off the returned handle declares into the SAME namespace — one registration path.',
+        );
+    }
+
+    public function testNamespaceDefaultsReachARouteDeclaredThroughTheReturnedHandle(): void
+    {
+        // WHY: the other half of "one namespace, one registration path", and the
+        // tripwire for the T04 fix round. defaults() is declared on the cached
+        // facade; a handle a verb returns must still carry it. The proof is a
+        // WRITE verb: an unnamed POST is NEVER handed to register_rest_route()
+        // (FR-4, threat model item 4), so its presence in the route table can
+        // only mean the namespace capability reached the route — including the
+        // one declared through the previous verb's return value.
+        $defaulted = ntdst_rest('chaindef/v1')->defaults(['permission' => 'manage_options']);
+
+        $defaulted->post('/first', fn() => ['written' => true])
+                  ->post('/second', fn() => ['written' => true]);
+
+        $keys = $this->routeKeys();
+
+        $this->assertContains('/chaindef/v1/first', $keys, 'the namespace default names a capability, so the write registers.');
+        $this->assertContains(
+            '/chaindef/v1/second',
+            $keys,
+            'defaults() still reach a route declared through the object the previous verb returned.',
+        );
+        $this->assertIsCallable(
+            $this->registeredArgs('/chaindef/v1/second')['permission_callback'] ?? null,
+            'the inherited capability registers a real permission_callback.',
+        );
     }
 
     public function testRouteWithCallablePermissionIsRegistered(): void
