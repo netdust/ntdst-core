@@ -183,9 +183,56 @@ class NTDST_Data_Model
         return $this->schemaForType((string) ($config['type'] ?? 'string'), $config);
     }
 
-    /** Register every declared field as post meta on $postType (T03). */
+    /**
+     * Hand every declared field to WordPress's own meta registry.
+     *
+     * restFields() says WHICH fields may leave and restSchemaFor() says in what
+     * SHAPE; this is where those two answers become the registration WordPress
+     * reads when it builds `/wp/v2/<type>`. The loop asks those same two
+     * methods, so no second opt-in test exists here to fall out of step with
+     * them — and this file stays the only caller of register_post_meta()
+     * (INV-1), which is what keeps the exposure decision in one place.
+     *
+     * A registration is a WRITE surface as much as a read one, so both
+     * callbacks are real. The write is admitted by `edit_post` ON THE POST
+     * BEING WRITTEN, never by the `$allowed` the filter arrives with — passing
+     * that through would let WordPress's protected-key heuristic, or any
+     * earlier filter, decide who may write this model's meta. And it is cleaned
+     * by the same path a create() write takes, so `/wp/v2` cannot store a value
+     * the model's own API would have refused.
+     *
+     * An array or object value travels with its whole schema: register_post_meta()
+     * drops one that arrives without a shape, and that schema is the CLOSED one,
+     * so a sub-field that stayed silent cannot ride out inside a parent that
+     * did not.
+     */
     public function registerRestMeta(string $postType): void
     {
+        foreach ($this->restFields() as $field) {
+            $schema = $this->restSchemaFor($field);
+
+            // Both read the same declaration, so restFields() cannot name a
+            // field restSchemaFor() then refuses. The guard is for the reader.
+            if ($schema === null) {
+                continue;
+            }
+
+            $type = (string) $schema['type'];
+
+            register_post_meta($postType, $this->prefixMetaKey($field), [
+                'type' => $type,
+                'single' => true,
+                'sanitize_callback' => fn($value) => $this->sanitizeField($field, $value),
+                // Untyped and cast on purpose: map_meta_cap() hands $object_id
+                // through from $args[0], which is a numeric string as often as
+                // an int, and a typed parameter would fatal on it.
+                'auth_callback' => static fn($allowed, $meta_key, $post_id): bool
+                    => (bool) current_user_can('edit_post', (int) $post_id),
+                'show_in_rest' => in_array($type, ['array', 'object'], true)
+                    ? ['schema' => $schema]
+                    : true,
+            ]);
+        }
     }
 
     /**
@@ -1955,6 +2002,17 @@ class NTDST_Data_Manager
         $config['fields'] = apply_filters("ntdst/{$name}/fields", $config['fields'] ?? []);
         $config['field_groups'] = apply_filters("ntdst/{$name}/field_groups", $config['field_groups'] ?? []);
 
+        // The model is built BEFORE the post type now, because `supports` has to
+        // know whether anything opted in and restFields() is the one place that
+        // question is answered. Nothing is stored yet — a register_post_type()
+        // failure below still returns without leaving a model behind.
+        $model = new NTDST_Data_Model(
+            $name,
+            $config['fields'] ?? [],
+            $config['meta_prefix'] ?? '',
+            $config['scopes'] ?? [],
+        );
+
         if (isset($config['label'])) {
             // PRIVATE BY DEFAULT. Silence is not privacy: this used to merge the
             // caller's config OVER `public => true, has_archive => true`, so a
@@ -1962,7 +2020,7 @@ class NTDST_Data_Manager
             // and queryable. That default is why every non-public CPT on this
             // codebase had to state six denials by hand, and why forgetting one
             // was a disclosure. Opt IN to public; never opt out of it.
-            $registered = register_post_type($name, array_merge([
+            $args = array_merge([
                 'public'       => false,
                 'has_archive'  => false,
                 'supports'     => ['title', 'editor', 'thumbnail'],
@@ -1973,7 +2031,27 @@ class NTDST_Data_Manager
                 'auto_metabox',
                 'scopes',
                 'taxonomies',
-            ]))));
+            ])));
+
+            // `custom-fields` is the switch that makes WordPress emit `meta` at
+            // all (class-wp-rest-posts-controller.php checks
+            // post_type_supports() before it adds the field), so the support
+            // follows the declaration rather than being asked for by hand: on
+            // when a field opted in, absent when none did. Absent is the point
+            // — a post type that declared nothing must not grow a meta surface.
+            // Added at most once, so a caller that already listed it keeps the
+            // list it wrote.
+            if ($model->restFields() !== []) {
+                $supports = is_array($args['supports'] ?? null) ? $args['supports'] : [];
+
+                if (!in_array('custom-fields', $supports, true)) {
+                    $supports[] = 'custom-fields';
+                }
+
+                $args['supports'] = $supports;
+            }
+
+            $registered = register_post_type($name, $args);
 
             // Never swallow the failure. register_post_type() returns WP_Error
             // for an invalid name or a reserved key; the old code discarded it
@@ -2001,14 +2079,17 @@ class NTDST_Data_Manager
                     return $taxResult;
                 }
             }
-        }
 
-        $model = new NTDST_Data_Model(
-            $name,
-            $config['fields'] ?? [],
-            $config['meta_prefix'] ?? '',
-            $config['scopes'] ?? [],
-        );
+            // Declaring a field on a model is the whole act — nobody calls
+            // register_post_meta() by hand (INV-1). Inside this branch on
+            // purpose: meta is registered against a post type, and only the
+            // branch that registered one could also give it the `custom-fields`
+            // support WordPress needs before it emits that meta. A model
+            // declared without a `label` therefore registers no meta; it would
+            // be a write surface with no matching read surface, which is the
+            // wrong half to open on its own.
+            $model->registerRestMeta($name);
+        }
 
         self::$models[$name] = $model;
 
