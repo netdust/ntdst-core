@@ -25,14 +25,6 @@ final class DataRestFieldsTest extends TestCase
         foreach (['sanitize_text_field', 'sanitize_textarea_field', 'esc_url_raw', 'sanitize_email', 'wp_kses_post'] as $fn) {
             Functions\when($fn)->returnArg(1);
         }
-
-        // Real-equivalent, no tag: WordPress's own algorithm. The repeater
-        // sanitizer reaches NTDST_FieldTypes' declarations(), which keys every
-        // declared sub-field by sanitize_key() of its name (T03), so a model
-        // carrying a repeater cannot be exercised without it.
-        Functions\when('sanitize_key')->alias(
-            static fn($value) => (string) preg_replace('/[^a-z0-9_\-]/', '', strtolower((string) $value)),
-        );
     }
 
     protected function tearDown(): void

@@ -38,7 +38,6 @@ final class NtdstActionsTest extends TestCase
     {
         parent::setUp();
         Monkey\setUp();
-        Functions\when('sanitize_key')->alias(static fn($k) => strtolower(preg_replace('/[^a-z0-9_\-]/i', '', (string) $k)));
         Functions\when('__')->returnArg(1);
     }
 

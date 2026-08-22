@@ -11,6 +11,12 @@
 // every other name — a retired alias or an invention — is refused loudly,
 // naming the canonical or the known set.
 //
+// The entry also owns the READ: `read` is the storage decode (null = the
+// sanitizer is already the cast), so how a value is written and how it is read
+// are one row of one table. A read is a cast or a decode — never a second
+// sanitization, never a lookup — and the stubs below FAIL the test if a read
+// calls wp_kses_post() or get_post_type().
+//
 // HOW THE WORDPRESS FUNCTIONS ARE STUBBED
 // Every stub is TAGGED, the way DataRegistersRestMetaTest tags them: the value
 // carries the name of the function that produced it, so "the entry called
@@ -22,7 +28,8 @@
 // reproduces WordPress's rule rather than a tag:
 //   - wp_validate_boolean  — copied from wp-includes/functions.php:7739, so
 //                            "false" => false is WordPress's answer, not ours;
-//   - absint / sanitize_key — real-equivalent;
+//   - absint                — real-equivalent (sanitize_key() is a REAL
+//                            function from tests/bootstrap.php);
 //   - sanitize_email        — strips the characters WordPress strips, so
 //                            "a@b.c<script>" => "a@b.cscript" is WordPress's;
 //   - wp_kses_post          — strips TAGS ONLY and keeps their content, which
@@ -154,10 +161,10 @@ final class FieldTypesTest extends TestCase
             return stripos($raw, 'javascript:') === 0 ? '' : $url($value);
         });
 
-        // Real-equivalents — WordPress's own algorithm, no tag.
-        Functions\when('sanitize_key')->alias(
-            static fn($value) => (string) preg_replace('/[^a-z0-9_\-]/', '', strtolower((string) $value)),
-        );
+        // Real-equivalents — WordPress's own algorithm, no tag. sanitize_key()
+        // is one of these and lives in tests/bootstrap.php as a real function:
+        // it is the key rule every stored cell already went through, not a
+        // question this file asks.
         Functions\when('absint')->alias(static fn($value) => abs((int) $value));
 
         // wp-includes/functions.php:7739, verbatim. Only the exact string
@@ -283,10 +290,43 @@ final class FieldTypesTest extends TestCase
         );
         sort($public);
 
-        $this->assertSame(['get', 'names'], $public);
+        $this->assertSame(['get', 'names', 'rowKey'], $public);
         $this->assertTrue($class->isFinal(), 'NTDST_FieldTypes must be final.');
         $this->assertTrue($class->getMethod('get')->isStatic());
         $this->assertTrue($class->getMethod('names')->isStatic());
+        $this->assertTrue($class->getMethod('rowKey')->isStatic());
+    }
+
+    /**
+     * The key rule is the vocabulary's, and there is one of it.
+     *
+     * A repeater cell is STORED under this answer, so whoever declares a cell,
+     * whoever sanitizes a row, and whoever refuses two names that collide must
+     * all be asking the same question. While each of them carries its own copy,
+     * a cell can be declared under one key and stored under another — and then
+     * the re-save loses the cell's type (an int comes back as text) or, worse,
+     * two declarations quietly become one.
+     */
+    public function testTheKeyRuleIsTheVocabularysAndAnswersOnceForEveryName(): void
+    {
+        $this->assertTrue(
+            method_exists(NTDST_FieldTypes::class, 'rowKey'),
+            'NTDST_FieldTypes::rowKey() must be the one key rule: the declaration walk, the row '
+            . 'sanitizer and the collision check all ask it, so a cell cannot be declared under '
+            . 'one key and stored under another.',
+        );
+
+        $this->assertSame('subtitle', NTDST_FieldTypes::rowKey('SubTitle'));
+        $this->assertSame('already_clean', NTDST_FieldTypes::rowKey('already_clean'));
+        $this->assertSame('bevil', NTDST_FieldTypes::rowKey('<b>evil'));
+        $this->assertSame('', NTDST_FieldTypes::rowKey(''));
+
+        // Idempotent, because the re-save arrives with the key the first pass
+        // produced: rowKey(rowKey(x)) === rowKey(x).
+        foreach (['SubTitle', 'already_clean', '<b>evil'] as $name) {
+            $once = NTDST_FieldTypes::rowKey($name);
+            $this->assertSame($once, NTDST_FieldTypes::rowKey($once), "rowKey() is not idempotent on '{$name}'.");
+        }
     }
 
     /** Threat row #6 — an entry handed out cannot be edited in place. */
@@ -295,12 +335,22 @@ final class FieldTypesTest extends TestCase
         $class = new ReflectionClass(NTDST_FieldType::class);
         $this->assertTrue($class->isFinal(), 'NTDST_FieldType must be final.');
 
-        foreach (['name', 'sanitize', 'schema', 'control', 'cell'] as $property) {
+        foreach (['name', 'sanitize', 'schema', 'control', 'cell', 'read'] as $property) {
+            $this->assertTrue(
+                $class->hasProperty($property),
+                "NTDST_FieldType::\${$property} is missing — an entry says how it is written AND how it is read.",
+            );
             $this->assertTrue(
                 $class->getProperty($property)->isReadOnly(),
                 "NTDST_FieldType::\${$property} must be readonly.",
             );
         }
+
+        $this->assertCount(
+            6,
+            $class->getProperties(),
+            'An entry is six facets: name, sanitize, schema, control, cell, read.',
+        );
 
         $type = new NTDST_FieldType('probe', static fn($v, $c) => $v, null, 'text', true);
 
@@ -517,6 +567,255 @@ final class FieldTypesTest extends TestCase
                 'hostileAnswer' => [['title' => 'text:x', 'pic' => '']],
                 'empty' => '', 'emptyAnswer' => [],
                 'schema' => null, 'control' => 'repeater', 'cell' => false,
+            ]],
+        ];
+    }
+
+    // ----------------------------------------------------------- the read
+
+    /**
+     * The read answer for one stored value: the entry's own `read` closure, or
+     * the entry's sanitizer when it declares none — an `int`'s sanitizer IS the
+     * cast a read owes, so `int`, `float` and `bool` need no second closure.
+     *
+     * This is the WHOLE of Data::readValue()'s rule, asked of the registry
+     * directly. A type owns how it is written and how it is read, in one row of
+     * one table; the model may not carry a second copy of the read side.
+     *
+     * @param array<string, mixed> $config
+     */
+    private function read(string $name, mixed $stored, array $config = []): mixed
+    {
+        $this->assertTrue(
+            (new ReflectionClass(NTDST_FieldType::class))->hasProperty('read'),
+            'NTDST_FieldType must carry a `read` closure — fn(mixed $stored, array $config): mixed, '
+            . 'null meaning "the sanitizer is the cast". Without it the read side lives outside the '
+            . 'vocabulary and can disagree with it.',
+        );
+
+        $entry = NTDST_FieldTypes::get($name);
+
+        return ($entry->read ?? $entry->sanitize)($stored, $config);
+    }
+
+    /**
+     * `read` is the sixth facet of an entry, and it is OPTIONAL: an entry whose
+     * sanitizer already casts declares none. Asserted through reflection rather
+     * than by construction, so a missing parameter reads as a failing assertion
+     * instead of an ArgumentCountError with no sentence in it.
+     */
+    public function testAnEntryDeclaresItsReadAsAnOptionalSixthParameter(): void
+    {
+        $parameters = (new ReflectionClass(NTDST_FieldType::class))->getConstructor()->getParameters();
+
+        $this->assertCount(
+            6,
+            $parameters,
+            'NTDST_FieldType::__construct() must take six facets; the sixth is `read`.',
+        );
+
+        $read = $parameters[5];
+
+        $this->assertSame('read', $read->getName(), 'The sixth parameter is named `read` — entries pass it by name.');
+        $this->assertTrue($read->isOptional(), 'An entry whose sanitizer casts declares no read.');
+        $this->assertNull($read->getDefaultValue(), 'The default is null: "the sanitizer is the cast".');
+        $this->assertSame('?Closure', (string) $read->getType());
+    }
+
+    /**
+     * WHAT A STORED VALUE READS BACK AS — one row per type (reviewer IMP-3,
+     * simplicity I2).
+     *
+     * A read is a CAST or a DECODE, never a second sanitization and never a
+     * lookup. Three reasons, all of them load-bearing:
+     *
+     *   1. A value stored outside this model — by an importer, by WP-CLI, by the
+     *      site's previous plugin — is not this model's to rewrite. Re-cleaning
+     *      it on the way out means the value the database holds and the value the
+     *      template prints are different strings, and nobody can tell which one
+     *      is on the page.
+     *   2. The write side already ran. `wp_kses_post()` per html field per row is
+     *      paid on every list screen and every REST list response, for an answer
+     *      that cannot change.
+     *   3. A lookup per field per row is a query per field per row. `image` reads
+     *      back the id it stored; whether that attachment still exists is the
+     *      write side's question (and the template's), not the reader's.
+     *
+     * The stub for `wp_kses_post()` and `get_post_type()` FAILS the test if it is
+     * called, so "does not re-sanitize" and "does not look up" are observations
+     * rather than beliefs.
+     *
+     * @dataProvider readProvider
+     * @param array<string, mixed> $t
+     */
+    public function testEachTypeReadsItsStoredValueBack(array $t): void
+    {
+        Functions\when('wp_kses_post')->alias(
+            fn() => $this->fail("read('{$t['name']}') called wp_kses_post(): a read never re-sanitizes."),
+        );
+        Functions\when('get_post_type')->alias(
+            fn() => $this->fail("read('{$t['name']}') called get_post_type(): a read never looks anything up."),
+        );
+
+        foreach ($t['reads'] as $index => [$stored, $expected]) {
+            $this->assertSame(
+                $expected,
+                $this->read($t['name'], $stored, $t['config']),
+                "{$t['name']}: stored value #{$index} did not read back as itself.",
+            );
+        }
+    }
+
+    /**
+     * The empty state and the shape nobody expected. A meta key that was never
+     * written arrives as null, and a key WordPress hands back as something else
+     * entirely (an object out of a serialized row, an array where a scalar was
+     * declared) must not become a TypeError on a page load — it reads as the
+     * type's empty answer, the same one an unwritten key gives.
+     *
+     * @dataProvider readProvider
+     * @param array<string, mixed> $t
+     */
+    public function testAnUnexpectedStoredValueReadsAsTheTypesEmptyAnswer(array $t): void
+    {
+        foreach ([null, new stdClass(), ['a' => 'b']] as $stored) {
+            if ($stored === ['a' => 'b'] && in_array($t['name'], ['array', 'json', 'repeater'], true)) {
+                continue; // an array IS the stored shape for these three
+            }
+
+            $this->assertSame(
+                $t['emptyRead'],
+                $this->read($t['name'], $stored, $t['config']),
+                "{$t['name']}: an unexpected stored value must read as the type's empty answer.",
+            );
+        }
+    }
+
+    /**
+     * One labelled row per type: stored value → what a consumer reads back.
+     *
+     * Every stored value here is one the WRITE side would have produced, or one
+     * that was written around it — the tagged stubs make the difference visible,
+     * because a read that re-sanitized would return 'text:…' instead of what was
+     * stored.
+     *
+     * @return array<string, array{0: array<string, mixed>}>
+     */
+    public static function readProvider(): array
+    {
+        return [
+            // The three whose sanitizer IS the cast: no read closure needed.
+            'int' => [[
+                'name' => 'int', 'config' => [], 'emptyRead' => 0,
+                'reads' => [['-3', -3], ['42', 42]],
+            ]],
+            'float' => [[
+                'name' => 'float', 'config' => [], 'emptyRead' => 0.0,
+                'reads' => [['1.5', 1.5], ['-2.25', -2.25]],
+            ]],
+            'bool' => [[
+                'name' => 'bool', 'config' => [], 'emptyRead' => false,
+                'reads' => [['1', true], ['false', false], ['', false]],
+            ]],
+            // The string family: read back byte for byte. The stored text below
+            // is daan's, from gig 297050 — a newline and a percent-encoded
+            // slash, both of which sanitize_text_field() would rewrite.
+            'text' => [[
+                'name' => 'text', 'config' => [], 'emptyRead' => '',
+                'reads' => [["a\nb 100%2F50", "a\nb 100%2F50"]],
+            ]],
+            'textarea' => [[
+                'name' => 'textarea', 'config' => [], 'emptyRead' => '',
+                'reads' => [["line1\nline2  <b>x</b>", "line1\nline2  <b>x</b>"]],
+            ]],
+            // wp_kses_post() ran on the way in. Running it again on the way out
+            // is a per-row cost for an answer that cannot change — and the stub
+            // fails the test if it is called.
+            'html' => [[
+                'name' => 'html', 'config' => [], 'emptyRead' => '',
+                'reads' => [['<p>a</p><script>x</script>', '<p>a</p><script>x</script>']],
+            ]],
+            'email' => [[
+                'name' => 'email', 'config' => [], 'emptyRead' => '',
+                'reads' => [['a@b.c<script>', 'a@b.c<script>']],
+            ]],
+            'url' => [[
+                'name' => 'url', 'config' => [], 'emptyRead' => '',
+                'reads' => [['https://netdust.be/x?a=1&b=2', 'https://netdust.be/x?a=1&b=2']],
+            ]],
+            // Re-parsing a date on every read is strtotime() per field per row,
+            // and the write side already refused a non-date. A legacy datetime
+            // reads back as the string that is stored, not as today's format.
+            'date' => [[
+                'name' => 'date', 'config' => [], 'emptyRead' => '',
+                'reads' => [['2026-08-22', '2026-08-22'], ['2026-08-22 14:00', '2026-08-22 14:00']],
+            ]],
+            'select' => [[
+                'name' => 'select', 'config' => [], 'emptyRead' => '',
+                'reads' => [['option-a <b>', 'option-a <b>']],
+            ]],
+            // Decode only. The keys were sanitized on the way in; re-running
+            // sanitize_key() on a read can only rename what is stored.
+            'array' => [[
+                'name' => 'array', 'config' => [], 'emptyRead' => [],
+                'reads' => [
+                    ['{"a":"<b>x"}', ['a' => '<b>x']],
+                    [['a' => '<b>x'], ['a' => '<b>x']],
+                    ['not json', []],
+                ],
+            ]],
+            'json' => [[
+                'name' => 'json', 'config' => [], 'emptyRead' => [],
+                'reads' => [
+                    ['{"a":"<b>x"}', ['a' => '<b>x']],
+                    [['a' => '<b>x'], ['a' => '<b>x']],
+                    ['"scalar"', []],
+                ],
+            ]],
+            // A list of ids reads by the SAME rule that wrote it — a non-scalar
+            // never becomes an id (absint(['a']) is 1, a real post on every
+            // site), a 0 is not an id, and the answer is a re-indexed list so it
+            // does not serialize as a JSON object.
+            'relation' => [[
+                'name' => 'relation', 'config' => [], 'emptyRead' => [],
+                'reads' => [
+                    ['["1","2"]', [1, 2]],
+                    [['1', '2'], [1, 2]],
+                    ['["1", 0, "x", {"b":1}]', [1]],
+                ],
+            ]],
+            'gallery' => [[
+                'name' => 'gallery', 'config' => [], 'emptyRead' => [],
+                'reads' => [
+                    ['["1","2"]', [1, 2]],
+                    [['1', '2'], [1, 2]],
+                    ['["1", 0, "x", {"b":1}]', [1]],
+                ],
+            ]],
+            // The id that is stored, with no lookup — 1000 is a post id the
+            // write side would have refused, and a read that "fixed" it would
+            // buy a query per field per row to do it.
+            'image' => [[
+                'name' => 'image', 'config' => [], 'emptyRead' => 0,
+                'reads' => [['7', 7], ['1000', 1000]],
+            ]],
+            'file' => [[
+                'name' => 'file', 'config' => [], 'emptyRead' => 0,
+                'reads' => [['7', 7], ['1000', 1000]],
+            ]],
+            // Rows, and nothing else. No cell is re-sanitized (the cells were
+            // cleaned by their declared types on the way in) and NOTHING is
+            // unserialized: WordPress's own maybe_unserialize() already ran
+            // before the value reached the model, so a string that is still
+            // serialized here is not a value this model wrote.
+            'repeater' => [[
+                'name' => 'repeater', 'config' => self::REPEATER, 'emptyRead' => [],
+                'reads' => [
+                    ['[{"t":"a"},"junk",{"t":"b"}]', [['t' => 'a'], ['t' => 'b']]],
+                    [[['t' => 'a'], 'junk'], [['t' => 'a']]],
+                    ['[{"t":"<b>x"}]', [['t' => '<b>x']]],
+                    ['a:1:{i:0;a:1:{s:1:"t";s:1:"a";}}', []],
+                ],
             ]],
         ];
     }

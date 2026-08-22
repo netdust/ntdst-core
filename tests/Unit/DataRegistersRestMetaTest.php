@@ -68,14 +68,6 @@ final class DataRegistersRestMetaTest extends TestCase
             Functions\when($fn)->alias(static fn($v) => $tag . ':' . trim((string) $v));
         }
 
-        // Real-equivalent, no tag: WordPress's own algorithm. The repeater
-        // sanitizer reaches NTDST_FieldTypes' declarations(), which keys every
-        // declared sub-field by sanitize_key() of its name (T03), so a model
-        // carrying a repeater cannot be exercised without it.
-        Functions\when('sanitize_key')->alias(
-            static fn($value) => (string) preg_replace('/[^a-z0-9_\-]/', '', strtolower((string) $value)),
-        );
-
         // The model names absint() by string ('int' => 'absint'); nothing in
         // this process defines it.
         Functions\when('absint')->alias(static fn($v) => abs((int) $v));
@@ -365,6 +357,43 @@ final class DataRegistersRestMetaTest extends TestCase
     }
 
     /**
+     * THE PUBLISHED SCHEMA IS KEYED THE WAY STORAGE IS KEYED (reviewer IMP-1).
+     *
+     * A repeater cell is stored under NTDST_FieldTypes::rowKey() of its declared
+     * name, so `salePrice` is stored as `saleprice`. If the published object
+     * names the property `salePrice`, WordPress measures the stored row against
+     * a schema that names a key the row does not have, and closes the object
+     * behind it: the stored `saleprice` is an additional property the schema
+     * forbids. Every row of that field reads back as null through /wp/v2, and a
+     * write is refused — the partial-repeater failure, caused by a capital
+     * letter in a declaration.
+     *
+     * Two names, one rule, and this is the case that proves they are the same
+     * rule rather than two functions that agree today.
+     */
+    public function testAPublishedRepeaterKeysItsSchemaOnTheStoredCellKey(): void
+    {
+        $schema = $this->publishedRepeaterSchema([
+            'salePrice' => ['type' => 'int', 'show_in_rest' => true],
+            'title'     => ['type' => 'text', 'show_in_rest' => true],
+        ]);
+
+        $this->assertIsArray($schema, 'Every sub-field opted in, so this repeater publishes.');
+        $this->assertSame(
+            ['saleprice', 'title'],
+            array_keys($schema['items']['properties']),
+            'The published property is the key the cell is STORED under, or the closed object '
+            . 'nulls every row of the field it describes.',
+        );
+        $this->assertSame(
+            NTDST_FieldTypes::get('int')->schema,
+            $schema['items']['properties']['saleprice'],
+            'And it still carries the registry shape for the type it was declared as.',
+        );
+        $this->assertFalse($schema['items']['additionalProperties']);
+    }
+
+    /**
      * The strict `=== true` rule applies one level down, and its consequence is
      * the parent's: a typo inside a repeater does not quietly drop one column,
      * it makes the repeater unpublishable.
@@ -537,10 +566,11 @@ final class DataRegistersRestMetaTest extends TestCase
     // -- SC-5: what the Data layer is allowed to be asked ---------------------
 
     /**
-     * The chain and CRUD, spelled out, so the surface assertion below can say
-     * something about the FOUR names that are not them. Written from the class
-     * as core-shape left it: a method that disappears from this list is caught
-     * too, because the list is asserted present.
+     * A DENY-LIST, not an inventory: the names the surface assertion below
+     * subtracts so it can say something about the four that are left. Nothing
+     * here is asserted PRESENT — specs/core-trim deletes five of these methods
+     * on purpose, and a list that pinned them would fail that spec for doing
+     * what it says. What must not grow is the REMAINDER.
      */
     private const CHAIN_AND_CRUD = [
         '__construct',
@@ -591,12 +621,6 @@ final class DataRegistersRestMetaTest extends TestCase
         );
         sort($methods);
 
-        $this->assertSame(
-            [],
-            array_values(array_diff(self::CHAIN_AND_CRUD, $methods)),
-            'The query chain and CRUD are not what this spec removes.',
-        );
-
         $readers = array_values(array_diff($methods, self::CHAIN_AND_CRUD));
         sort($readers);
 
@@ -605,45 +629,6 @@ final class DataRegistersRestMetaTest extends TestCase
             $readers,
             'Besides the chain and CRUD, NTDST_Data_Model answers exactly these four.',
         );
-    }
-
-    /**
-     * The two the spec deletes, named. restSchemaFor() and restSubFields() were
-     * public reads of the field description with zero shipped readers; while
-     * either exists it is a second way to ask what a field publishes, which is
-     * exactly what INV-1 says there must not be.
-     */
-    public function testTheDataModelKeepsNoPublicRestSchemaHelpers(): void
-    {
-        foreach (['restSchemaFor', 'restSubFields'] as $gone) {
-            $this->assertFalse(
-                method_exists(NTDST_Data_Model::class, $gone),
-                "NTDST_Data_Model::{$gone}() still exists; FR-4 deletes it — the shape a field "
-                . 'publishes is asked once, by registerRestMeta().',
-            );
-        }
-    }
-
-    /**
-     * The layer registers and it reports — nothing that models a project, a
-     * shape, or a public view. Those live elsewhere.
-     */
-    public function testDataModelGrowsNoProjectShapeOrPublicVocabulary(): void
-    {
-        $methods = array_map(
-            static fn(ReflectionMethod $m): string => $m->getName(),
-            (new ReflectionClass(NTDST_Data_Model::class))->getMethods(ReflectionMethod::IS_PUBLIC),
-        );
-
-        foreach ($methods as $name) {
-            foreach (['project', 'shape', 'public'] as $forbidden) {
-                $this->assertStringNotContainsStringIgnoringCase(
-                    $forbidden,
-                    $name,
-                    "NTDST_Data_Model::{$name}() smuggles '{$forbidden}' vocabulary into the Data layer.",
-                );
-            }
-        }
     }
 
     // ---------------------------------------------------------------- T03 --

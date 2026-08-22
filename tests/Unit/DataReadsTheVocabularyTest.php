@@ -122,9 +122,7 @@ final class DataReadsTheVocabularyTest extends TestCase
         });
 
         // ---- real-equivalents: WordPress's own algorithm, no tag ----
-        Functions\when('sanitize_key')->alias(
-            static fn($value) => (string) preg_replace('/[^a-z0-9_\-]/', '', strtolower((string) $value)),
-        );
+        // sanitize_key() is a REAL function from tests/bootstrap.php.
         Functions\when('sanitize_title')->alias(
             static fn($value) => (string) preg_replace('/[^a-z0-9_\-]/', '', strtolower((string) $value)),
         );
@@ -234,6 +232,30 @@ final class DataReadsTheVocabularyTest extends TestCase
         return $rows;
     }
 
+    /**
+     * Every warning the real ntdst_log() recorder took on the `data` channel.
+     * tests/bootstrap.php stores [channel, level, message, context] — the
+     * context matters here, because "Unregistered key(s) passed to …" puts the
+     * operation in the message and the KEYS in the context.
+     *
+     * @return list<array{message: string, context: array<string, mixed>}>
+     */
+    private function warnings(): array
+    {
+        $entries = array_filter(
+            $GLOBALS['_ntdst_test_log'] ?? [],
+            static fn(array $entry): bool => ($entry[0] ?? '') === 'data' && ($entry[1] ?? '') === 'warning',
+        );
+
+        return array_values(array_map(
+            static fn(array $entry): array => [
+                'message' => (string) ($entry[2] ?? ''),
+                'context' => (array) ($entry[3] ?? []),
+            ],
+            $entries,
+        ));
+    }
+
     // ------------------------------------------- 1. refusal at registration
 
     /**
@@ -249,7 +271,7 @@ final class DataReadsTheVocabularyTest extends TestCase
             $this->fail("Expected InvalidArgumentException for the retired type 'integer'.");
         } catch (InvalidArgumentException $e) {
             $this->assertStringContainsString("Field 'n'", $e->getMessage(), 'The fatal must name the field.');
-            $this->assertStringContainsString("Use 'int'.", $e->getMessage(), 'The fatal must name the canonical.');
+            $this->assertStringContainsString("Use 'int'", $e->getMessage(), 'The fatal must name the canonical.');
         }
     }
 
@@ -260,19 +282,7 @@ final class DataReadsTheVocabularyTest extends TestCase
             $this->fail("Expected InvalidArgumentException for the retired type 'integer'.");
         } catch (InvalidArgumentException $e) {
             $this->assertStringContainsString("Field 'n'", $e->getMessage());
-            $this->assertStringContainsString("Use 'int'.", $e->getMessage());
-        }
-    }
-
-    /** FR-5: `signed_int` is not a name. The one field on stride that used it renames. */
-    public function testSignedIntIsNoLongerAName(): void
-    {
-        try {
-            $this->model(['n' => ['type' => 'signed_int']]);
-            $this->fail("Expected InvalidArgumentException for 'signed_int'.");
-        } catch (InvalidArgumentException $e) {
-            $this->assertStringContainsString("Field 'n'", $e->getMessage());
-            $this->assertStringContainsString("Use 'int'.", $e->getMessage());
+            $this->assertStringContainsString("Use 'int'", $e->getMessage());
         }
     }
 
@@ -299,18 +309,6 @@ final class DataReadsTheVocabularyTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
 
         $this->model(['n' => ['type' => 'gubbins', 'sanitizer' => static fn($v) => $v]]);
-    }
-
-    /** The two `'string'` defaults become `'text'`; `'string'` itself is retired. */
-    public function testStringIsARetiredNameThatPointsAtText(): void
-    {
-        try {
-            $this->model(['n' => ['type' => 'string']]);
-            $this->fail("Expected InvalidArgumentException for the retired type 'string'.");
-        } catch (InvalidArgumentException $e) {
-            $this->assertStringContainsString("Field 'n'", $e->getMessage());
-            $this->assertStringContainsString("Use 'text'.", $e->getMessage());
-        }
     }
 
     /**
@@ -401,7 +399,7 @@ final class DataReadsTheVocabularyTest extends TestCase
         } catch (InvalidArgumentException $e) {
             $this->assertStringContainsString('provenance', $e->getMessage(), 'Name the field.');
             $this->assertStringContainsString('notes', $e->getMessage(), 'Name the sub-field.');
-            $this->assertStringContainsString("Use 'html'.", $e->getMessage(), 'Name the canonical.');
+            $this->assertStringContainsString("Use 'html'", $e->getMessage(), 'Name the canonical.');
         }
     }
 
@@ -457,6 +455,37 @@ final class DataReadsTheVocabularyTest extends TestCase
         }
     }
 
+    /**
+     * A SUB-FIELD CANNOT BRING ITS OWN SANITIZER (security review, Cluster B).
+     *
+     * A top-level field's `sanitizer` composes after the registry's and can only
+     * tighten. A sub-field's is not wired to anything at all: the row walk
+     * sanitizes each cell by its declared type and never looks for a callable,
+     * so a declaration that carries one has been silently ignored — the author
+     * believes a cell is being tightened, and it is not. It is refused at
+     * register() instead, naming the field and the sub-field, because "quietly
+     * does nothing" is the worst answer a security declaration can get.
+     */
+    public function testASubFieldCannotDeclareItsOwnSanitizer(): void
+    {
+        try {
+            $this->model([
+                'rows' => [
+                    'type'       => 'repeater',
+                    'sub_fields' => [
+                        'title' => ['type' => 'text', 'sanitizer' => static fn($v) => $v],
+                    ],
+                ],
+            ]);
+            $this->fail('Expected InvalidArgumentException for a sub-field that declares a sanitizer.');
+        } catch (InvalidArgumentException $e) {
+            $this->assertSame(
+                "Field 'rows' sub-field 'title': a sub-field cannot declare a 'sanitizer'.",
+                $e->getMessage(),
+            );
+        }
+    }
+
     // ------------------------------------------------- 2. int keeps its sign
 
     /** SC-3 / FR-5, the update() path — absint() was the bug. */
@@ -499,29 +528,7 @@ final class DataReadsTheVocabularyTest extends TestCase
         $this->assertSame(-3, $this->storedValue('price'));
     }
 
-    /** The boundary either side of the sign: junk and a non-scalar are still 0. */
-    public function testAnIntFieldStillRefusesJunkAndNonScalarsToZero(): void
-    {
-        $model = $this->model(['price' => ['type' => 'int']]);
-
-        $model->update(1, ['price' => 'abc']);
-        $this->assertSame(0, $this->storedValue('price'));
-
-        $model->update(1, ['price' => ['x']]);
-        $this->assertSame(0, $this->storedValue('price'), 'A posted array is not a number.');
-    }
-
     // ------------------------------------------ 3. the bound sanitizer is the registry's
-
-    /** FR-2: bool is wp_validate_boolean(), so the exact string "false" is false. */
-    public function testTheBoundSanitizerForBoolIsWordPressOwnAnswer(): void
-    {
-        $model = $this->model(['flag' => ['type' => 'bool']]);
-
-        $model->update(1, ['flag' => 'false']);
-
-        $this->assertSame(false, $this->storedValue('flag'));
-    }
 
     /** The tag names which WordPress function ran: text, not textarea, not kses. */
     public function testTheBoundSanitizerForTextIsTheRegistrysText(): void
@@ -534,33 +541,67 @@ final class DataReadsTheVocabularyTest extends TestCase
     }
 
     /**
-     * A declared repeater's rows follow the registry's row rule: each cell is
-     * sanitized by its DECLARED sub-field type (an int cell keeps its sign), an
-     * empty media pick stores '' and not 0 (0 reads as a real attachment id),
-     * and a row with nothing in it is dropped.
+     * THE UNDECLARED KEY, through the two meta paths (reviewer S-5).
+     *
+     * `updateMeta()` and `updateMetaBatch()` take a key by name, so a typo — or
+     * a module writing a key this model never declared — arrives here and not at
+     * create()/update(). Those two answer it already: they WARN, naming the key,
+     * and store it through sanitize_text_field(). The meta paths give the same
+     * answer, because the alternative is the one that bites: a key this model
+     * does not declare going into the database exactly as it was posted, while
+     * the same key through create() is cleaned. One model, two answers, and the
+     * safe one depending on which method a caller happened to reach for.
+     *
+     * @dataProvider undeclaredMetaPathProvider
      */
-    public function testARepeaterRowFollowsTheRegistrysRowRule(): void
+    public function testAnUndeclaredKeyThroughAMetaPathIsWarnedAndStoredAsText(string $path): void
     {
-        $model = $this->model([
-            'provenance' => [
-                'type'       => 'repeater',
-                'sub_fields' => [
-                    'qty'   => ['type' => 'int'],
-                    'pic'   => ['type' => 'image'],
-                    'title' => ['type' => 'text'],
-                ],
-            ],
-        ]);
+        $model = $this->model(['headline' => ['type' => 'text']]);
 
-        $model->update(1, ['provenance' => [
-            ['qty' => '-3', 'pic' => '', 'title' => ' <b>t</b> '],
-            ['qty' => '', 'pic' => '', 'title' => ''],
-        ]]);
+        $path === 'updateMeta'
+            ? $model->updateMeta(1, 'undeclared', '  <b>x</b>  ')
+            : $model->updateMetaBatch(1, ['undeclared' => '  <b>x</b>  ']);
 
         $this->assertSame(
-            [['qty' => -3, 'pic' => '', 'title' => 'text:t']],
-            $this->storedValue('provenance'),
+            'text:x',
+            $this->storedValue('undeclared'),
+            "{$path}(): a key this model does not declare is still not stored raw — "
+            . 'create() and update() clean it with sanitize_text_field(), and so does this path.',
         );
+
+        $warnings = $this->warnings();
+        $this->assertCount(1, $warnings, "{$path}(): an unregistered key warns exactly once.");
+        $this->assertStringContainsString(
+            'Unregistered key',
+            $warnings[0]['message'],
+            "{$path}(): the warning must say what went wrong.",
+        );
+        $this->assertStringContainsString(
+            'undeclared',
+            $warnings[0]['message'] . ' ' . (string) json_encode($warnings[0]['context']),
+            "{$path}(): the warning must name the key, or nobody can find the typo.",
+        );
+    }
+
+    /** @return array<string, array{0: string}> */
+    public static function undeclaredMetaPathProvider(): array
+    {
+        return [
+            'updateMeta'      => ['updateMeta'],
+            'updateMetaBatch' => ['updateMetaBatch'],
+        ];
+    }
+
+    /** A DECLARED key through the same paths is still the field's own sanitizer, and silent. */
+    public function testADeclaredKeyThroughAMetaPathIsNotWarnedAbout(): void
+    {
+        $model = $this->model(['headline' => ['type' => 'text']]);
+
+        $model->updateMeta(1, 'headline', '  <b>x</b>  ');
+        $model->updateMetaBatch(1, ['headline' => '  <b>y</b>  ']);
+
+        $this->assertSame('text:y', $this->storedValue('headline'));
+        $this->assertSame([], $this->warnings(), 'A declared key is not a typo.');
     }
 
     // ------------------------------------------------- 4. the override composes
@@ -702,36 +743,143 @@ final class DataReadsTheVocabularyTest extends TestCase
         $this->assertSame('', $post->fields['headline']);
     }
 
-    // ------------------------------------------------- 6. the helpers are gone
+    /**
+     * THE READ DOES NOT REWRITE WHAT IS STORED (reviewer IMP-3).
+     *
+     * The value seeded here is one this model's own sanitizer would never have
+     * produced: a newline and a percent-encoded slash, from a gig imported into
+     * daan before ntdst declared the field. A read that re-sanitized would
+     * silently show a DIFFERENT string on the page from the one the database
+     * holds — and the editor who fixes the page would be fixing a value that was
+     * never wrong.
+     *
+     * The stub makes it an observation: sanitize_text_field() fails the test if
+     * the read calls it at all.
+     */
+    public function testAValueStoredOutsideThisModelIsNotRewrittenOnRead(): void
+    {
+        $model = $this->model(['headline' => ['type' => 'text']]);
+
+        $stored = "a\nb 100%2F50";
+        $this->stored['_p_headline'] = $stored;
+
+        Functions\when('sanitize_text_field')->alias(
+            fn($value) => $this->fail('A read must not re-sanitize: sanitize_text_field() was called on find().'),
+        );
+
+        $this->assertSame($stored, $this->readBack($model, 'headline'));
+    }
 
     /**
-     * FR-4: the model's private type tables leave with the vocabulary. A
-     * surviving helper is a second table that can disagree with the registry
-     * (INV-8), and getDefaultSanitizer() is the one the whole spec exists to
-     * delete.
-     *
-     * @dataProvider removedHelperProvider
+     * A repeater whose rows were stored as the JSON string the metabox posts
+     * reads back as ROWS — and a value in the list that is not a row is not a
+     * row on the way out either. Nothing in the list is re-sanitized: the cells
+     * were cleaned by their declared types on the way in.
      */
-    public function testTheModelHasNoSanitizerHelperOfItsOwn(string $method): void
+    public function testAStoredRepeaterJsonStringReadsBackAsRowsOnly(): void
+    {
+        $model = $this->model([
+            'provenance' => [
+                'type'       => 'repeater',
+                'sub_fields' => ['t' => ['type' => 'text']],
+            ],
+        ]);
+
+        $this->stored['_p_provenance'] = '[{"t":"a"},"junk",{"t":"b"}]';
+
+        $this->assertSame(
+            [['t' => 'a'], ['t' => 'b']],
+            $this->readBack($model, 'provenance'),
+        );
+    }
+
+    // ------------------------------- 6. the model decodes nothing of its own
+
+    /**
+     * The read side lives in the vocabulary, so the model keeps no decoder and
+     * no key rule of its own (simplicity I2, auditor R1/R2). Each of these was a
+     * second answer that could disagree with the registry's: `rowKey()` decided
+     * what a cell is stored under while NTDST_FieldTypes::declarations() decided
+     * the same thing, and the two decoders below decided what a stored value
+     * means while the entry that wrote it was right there.
+     *
+     * @dataProvider removedReadHelperProvider
+     */
+    public function testTheModelKeepsNoReaderOrKeyRuleOfItsOwn(string $method): void
     {
         $this->assertFalse(
             (new ReflectionClass(NTDST_Data_Model::class))->hasMethod($method),
-            "NTDST_Data_Model::{$method}() is a second type table; the registry is the only one.",
+            "NTDST_Data_Model::{$method}() is a second answer to a question the vocabulary already "
+            . 'answers; the registry is the only one.',
         );
     }
 
     /** @return array<string, array{string}> */
-    public static function removedHelperProvider(): array
+    public static function removedReadHelperProvider(): array
     {
         return [
-            'getDefaultSanitizer'  => ['getDefaultSanitizer'],
-            'sanitizeBoolean'      => ['sanitizeBoolean'],
-            'sanitizeJson'         => ['sanitizeJson'],
-            'sanitizeNestedArray'  => ['sanitizeNestedArray'],
-            'sanitizeDate'         => ['sanitizeDate'],
-            'sanitizeAttachmentId' => ['sanitizeAttachmentId'],
-            'sanitizeRepeater'     => ['sanitizeRepeater'],
+            'rowKey'              => ['rowKey'],
+            'formatRepeaterField' => ['formatRepeaterField'],
+            'decodeArrayField'    => ['decodeArrayField'],
         ];
+    }
+
+    /**
+     * NOTHING ON THE READ PATH UNSERIALIZES.
+     *
+     * WordPress's own maybe_unserialize() has already run by the time a meta
+     * value reaches this model, so a string that is STILL serialized here is not
+     * a value this model wrote — it is a value some other writer put in the row,
+     * and unserialize() on it is object instantiation from stored bytes. The
+     * legacy `@unserialize()` in the repeater reader is the shape this pins
+     * away; `maybe_unserialize()` (WordPress's, which refuses objects) is not
+     * the same call and is not what this refuses.
+     *
+     * @dataProvider unserializeFreeFileProvider
+     */
+    public function testNoFileOnTheReadPathUnserializesAStoredValue(string $relativePath): void
+    {
+        $path = dirname(__DIR__, 2) . '/' . $relativePath;
+        $hits = [];
+
+        foreach (file($path) as $number => $line) {
+            $code = trim($line);
+            if ($code === '' || str_starts_with($code, '*') || str_starts_with($code, '//') || str_starts_with($code, '/*')) {
+                continue; // a comment may discuss it; a call may not
+            }
+            if (preg_match('/(?<!maybe_)unserialize\s*\(/', $line) === 1) {
+                $hits[] = $relativePath . ':' . ($number + 1) . ' → ' . $code;
+            }
+        }
+
+        $this->assertSame([], $hits, "A stored value is never unserialized:\n" . implode("\n", $hits));
+    }
+
+    /** @return array<string, array{0: string}> */
+    public static function unserializeFreeFileProvider(): array
+    {
+        return [
+            'api/FieldTypes.php' => ['api/FieldTypes.php'],
+            'api/Data.php'       => ['api/Data.php'],
+        ];
+    }
+
+    /**
+     * A stored PHP-serialized string is not a repeater. It reads back as
+     * nothing — the empty state — rather than as the rows those bytes describe.
+     */
+    public function testAStoredSerializedStringIsNotDecodedIntoRows(): void
+    {
+        $model = $this->model([
+            'provenance' => [
+                'type'       => 'repeater',
+                'sub_fields' => ['t' => ['type' => 'text']],
+            ],
+        ]);
+
+        $this->stored['_p_provenance'] = 'a:1:{i:0;a:1:{s:1:"t";s:1:"a";}}';
+
+        $this->assertSame([], $this->readBack($model, 'provenance'));
     }
 
     // -------------------------------------- 7. the REST write goes through it too

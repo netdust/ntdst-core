@@ -43,9 +43,31 @@ if (!function_exists('ntdst_log')) {
 
             public function __call(string $level, array $args): void
             {
-                $GLOBALS['_ntdst_test_log'][] = [$this->channel, $level, $args[0] ?? ''];
+                // [channel, level, message, context]. The context is kept
+                // because the warnings this package emits put the ACTIONABLE
+                // half there — "Unregistered key(s) passed to …" names the
+                // operation in the message and the keys in the context, so a
+                // recorder that dropped it could not tell whether the caller
+                // was told WHICH key it got wrong.
+                $GLOBALS['_ntdst_test_log'][] = [$this->channel, $level, $args[0] ?? '', $args[1] ?? []];
             }
         };
+    }
+}
+
+// sanitize_key() is a REAL function for the whole suite, for a third reason on
+// top of the two above: it is not a question any test asks, it is the KEY RULE
+// every stored repeater cell already went through, and six test files each kept
+// their own copy of WordPress's algorithm. Six copies drift — one of them wrote
+// the strip and the lowercase in the other order — and the file that drifts is
+// the one whose model then agrees with itself and with nothing else. This is
+// wp-includes/formatting.php's own algorithm for the input this suite uses
+// (WordPress also strips %-encoded octets; nothing here posts one). Do not
+// Monkey-patch it: defined here, Patchwork cannot redefine it.
+if (!function_exists('sanitize_key')) {
+    function sanitize_key($key)
+    {
+        return (string) preg_replace('/[^a-z0-9_\-]/', '', strtolower((string) $key));
     }
 }
 

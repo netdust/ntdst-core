@@ -34,13 +34,20 @@ final class PackageBootIntegrityTest extends TestCase
      * removed method is pinned as the three ways PHP can reach it — a static
      * call, an instance call, and the property.
      *
-     * A third element EXEMPTS one path. Exactly one row needs it: the field
+     * A third and fourth element EXEMPT one LINE — a path AND a pattern that
+     * line must match, both or neither. Exactly one row needs it: the field
      * vocabulary's own table of retired names (api/FieldTypes.php) has to spell
      * `signed_int` out in order to answer "use 'int' instead" — naming a retired
      * type in the message that retires it is the same exemption README's
      * `## Versions` section already gets.
      *
-     * @return array<string, array{0: string, 1: string, 2?: string}>
+     * The pattern is what keeps that exemption honest. A whole-FILE exemption
+     * would let api/FieldTypes.php grow `new NTDST_FieldType('signed_int', …)`
+     * — the retired name back in the vocabulary, in the one file this test
+     * agreed not to look at. The retirement row may say it; nothing else in
+     * that file may.
+     *
+     * @return array<string, array{0: string, 1: string, 2?: string, 3?: string}>
      */
     public static function removedSymbolProvider(): array
     {
@@ -81,7 +88,7 @@ final class PackageBootIntegrityTest extends TestCase
             // The retired type NAME (D4: it folded into a signed `int`). Shipped
             // code may not declare a field with it; the vocabulary's own
             // retirement table is the one place that still says the word.
-            'signed_int' => ['signed_int', '5.0.0', 'api/FieldTypes.php'],
+            'signed_int' => ['signed_int', '5.0.0', 'api/FieldTypes.php', "/^\\s*'signed_int'\\s*=>\\s*'int',\\s*$/"],
             // v5.0.0 field-types — the two 0-reader REST reads of the field
             // description. What shape a field publishes is asked once, by
             // registerRestMeta(); a second PUBLIC way to ask it is a second
@@ -96,9 +103,58 @@ final class PackageBootIntegrityTest extends TestCase
     /**
      * @dataProvider removedSymbolProvider
      */
-    public function testNoShippedFileReferencesARemovedSymbol(string $symbol, string $removedIn, string $exceptPath = ''): void
+    public function testNoShippedFileReferencesARemovedSymbol(string $symbol, string $removedIn, string $exceptPath = '', string $exceptLine = ''): void
     {
-        $root = dirname(__DIR__, 2);
+        $hits = $this->sweep(dirname(__DIR__, 2), $symbol, $exceptPath, $exceptLine);
+
+        $this->assertSame(
+            [],
+            $hits,
+            "{$symbol} was removed in v{$removedIn} but is still referenced in shipped code:\n"
+                . implode("\n", $hits),
+        );
+    }
+
+    /**
+     * A retired name may be spelled by the ONE line that retires it, and by no
+     * other line in that file.
+     *
+     * The sweep is driven over a throwaway tree here, because the promise is
+     * about a file api/FieldTypes.php could grow, not about the file it is
+     * today: a whole-file exemption passes this and a line exemption does not.
+     */
+    public function testTheRetirementLineIsExemptAndNothingElseInThatFileIs(): void
+    {
+        $root = sys_get_temp_dir() . '/ntdst-sweep-' . getmypid() . '-' . uniqid();
+        mkdir($root . '/api', 0777, true);
+        file_put_contents($root . '/api/FieldTypes.php', implode("\n", [
+            '<?php',
+            "        'signed_int'    => 'int',",
+            "            new NTDST_FieldType('signed_int', \$cast, ['type' => 'integer'], 'number', true),",
+            '',
+        ]));
+
+        try {
+            $hits = $this->sweep($root, 'signed_int', 'api/FieldTypes.php', "/^\s*'signed_int'\s*=>\s*'int',\s*$/");
+
+            $this->assertCount(1, $hits, "Exactly one line is a hit — the retirement row is exempt:\n" . implode("\n", $hits));
+            $this->assertStringContainsString('api/FieldTypes.php:3', $hits[0]);
+            $this->assertStringContainsString('new NTDST_FieldType', $hits[0], 'The vocabulary may not grow the retired name back.');
+        } finally {
+            unlink($root . '/api/FieldTypes.php');
+            rmdir($root . '/api');
+            rmdir($root);
+        }
+    }
+
+    /**
+     * Every shipped line under $root that spells $symbol, except a line that
+     * matches BOTH $exceptPath and $exceptLine.
+     *
+     * @return list<string>
+     */
+    private function sweep(string $root, string $symbol, string $exceptPath = '', string $exceptLine = ''): array
+    {
         $hits = [];
 
         $it = new RecursiveIteratorIterator(new RecursiveDirectoryIterator($root, FilesystemIterator::SKIP_DOTS));
@@ -118,10 +174,9 @@ final class PackageBootIntegrityTest extends TestCase
             if (str_contains($path, '/vendor/') || str_contains($path, '/tests/') || str_contains($path, '/specs/')) {
                 continue;
             }
-            // The one file a row may exempt (see the provider).
-            if ($exceptPath !== '' && str_contains($path, $exceptPath)) {
-                continue;
-            }
+            // The one file whose retirement LINE a row may exempt (see the
+            // provider). The file itself is swept like any other.
+            $exempt = $exceptPath !== '' && $exceptLine !== '' && str_contains($path, $exceptPath);
 
             foreach (file($path) as $n => $line) {
                 if (str_starts_with($line, '## ')) {
@@ -136,18 +191,16 @@ final class PackageBootIntegrityTest extends TestCase
                 if ($code === '' || str_starts_with($code, '*') || str_starts_with($code, '//') || str_starts_with($code, '#') || str_starts_with($code, '/*')) {
                     continue;
                 }
+                if ($exempt && preg_match($exceptLine, $line) === 1) {
+                    continue;
+                }
                 if (str_contains($line, $symbol)) {
                     $hits[] = str_replace($root . '/', '', $path) . ':' . ($n + 1) . ' → ' . trim($line);
                 }
             }
         }
 
-        $this->assertSame(
-            [],
-            $hits,
-            "{$symbol} was removed in v{$removedIn} but is still referenced in shipped code:\n"
-                . implode("\n", $hits),
-        );
+        return $hits;
     }
 
     public function testThePackageNeverClaimsToBeOlderThanWhatItShips(): void
