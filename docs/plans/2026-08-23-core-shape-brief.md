@@ -210,6 +210,40 @@ This is the real size of D2: not a delete, a migration of core's own admin
 surface onto `Rest`. It also answers the direction's §2 ("RelationField uses the
 action system") — it will use the REST system, same property.
 
+**"Every internal ajax becomes a public REST anyone can call."** Stefan's concern,
+2026-08-22 01:05. The premise is the thing to correct: `Actions.php` *was* public
+REST — one door, `POST /wp-json/ntdst/v1/action`, registered with
+`register_rest_route()`, callable by anyone with `{"action": …}`. Nothing becomes
+more reachable on `Rest`. "Internal" never meant unreachable in WordPress
+(`admin-ajax.php?action=x` is the same); it means authenticated, CSRF-checked,
+permission-gated. Each gate Actions had, checked against **WordPress 7.0.4
+source** (`~/Sites/daan/web/wp`) — we do not invent what WordPress provides:
+
+| property | Actions had | WordPress provides | `Rest` |
+|---|---|---|---|
+| only permitted actors pass | `capability` floor | `permission_callback`, mandatory since 5.5 | `permission =>` required; a route without one does not register |
+| a forged cross-site request cannot ride the victim's cookie | bespoke nonce from `/get_nonce`, for everyone | `rest_cookie_check_errors()` (`rest-api.php:1138–1157`): a cookie-authenticated request with no valid `wp_rest` nonce is **treated as anonymous**. CSRF is in the server. | inherited — nothing to add |
+| a stale nonce on a long-open page | `/get_nonce` re-mints | `admin-ajax.php?action=rest-nonce` (`ajax-actions.php:5545`) + `wp.apiFetch` nonce middleware, which **refetches on `rest_cookie_invalid_nonce`** (`script-loader.php:368–375`). Logged-in only — no `nopriv` handler, which is A5 exactly. | `/get_nonce` is a reinvention; delete |
+| a JS client | `assets/js/ntdst-api.js` | `@wordpress/api-fetch` (`wp-api-fetch` handle): nonce, root URL, refresh | `ntdst-api.js` is a reinvention; delete. RelationField's emitted JS uses `wp.apiFetch` |
+| throttle | per-action bucket | nothing | `rate_limit` / `charge()` — legitimately core's |
+| which routes are anonymous | `public_actions` list | nothing in one place | `publicSurface()` — legitimately core's |
+| hidden from `/wp-json/` index | one opaque door | `show_in_index => false` (`class-wp-rest-server.php:1636`) | passed through untouched |
+| same-origin only, even when authenticated | `verifyOrigin()` (Origin/Referer must match) | **no option.** Core's `rest_send_cors_headers()` reflects any origin; the nonce rule above is WordPress's same-origin control — a cross-origin browser request cannot present a valid `wp_rest` nonce | `cors()` already replaces the reflect-any default with an allow-list that fails closed |
+
+So the one property Actions has that `Rest` lacks — `verifyOrigin()` — guards
+nothing the nonce rule does not already guard for authenticated callers, and a
+script sets any `Origin` it likes, so it never stopped non-browsers. Proposal for
+tomorrow: drop it, say so in README, and if a belt is wanted it is a site's own
+`rest_pre_dispatch` filter, not a core option. **No `internal => true` shorthand** —
+`permission` + `show_in_index => false` + `rate_limit` are three existing words,
+and `defaults()` already sets them once per namespace.
+
+Verdict on Actions: not wrong when written (2.x had no `Rest`; it beat
+`admin-ajax` and solved the cached-nonce problem before `rest-nonce` +
+`apiFetch` did). Obsolete by replacement: a second dispatcher with its own
+permission model and its own CSRF scheme beside the one WordPress ships — two
+doors for one job, which `docs/philosophy.md` §1 forbids.
+
 **D3 — Same major, or a 6.0.0?** 5.0.0 is unreleased; nobody has taken it. Two
 majors in one week is worse than one larger one. Recommendation: all of this is
 5.0.0.
