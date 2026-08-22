@@ -359,11 +359,39 @@ Two alignments that follow: `'logged_in'` resolves to the string
 origin, core defaults to off — keep strict (one line in the spec, recommendation:
 strict).
 
-**`Response.php` (755 lines) — not audited tonight.** Same check tomorrow. Two
-suspects by name only, unverified: `apiSuccess()` / `apiError()` /
-`apiSuccessResponse()` / `apiErrorResponse()` beside `WP_REST_Response` /
-`WP_Error`; `getMimeType()` / `registerMimeType()` beside `wp_check_filetype()`
-/ `get_allowed_mime_types()` / the `mime_types` filter.
+**D2c — `Response.php` (755 lines: `NTDST_Response` + `NTDST_Template_Loader`)
+audited against WordPress 7.0.4 (02:30).** Consumers counted on the
+current-core sites (daan, josworld, todai-client, netdust); stride and rossi are
+on old core and were not counted.
+
+| feature | WordPress has | consumers | verdict |
+|---|---|---|---|
+| `json()` → `{success, data}` / `{success:false, error: string}`, `http_response_code()`, exit | `wp_send_json_success()` / `wp_send_json_error()` (`functions.php:4587, 4614`): same envelope, status arg, Content-Type, nocache, exit | none found on current-core sites | **reinvention**, and its error shape differs from WP's `{success:false, data}` — **against**. Delete; `wp_send_json_*` is the word |
+| `apiSuccess()` / `apiError()` / `apiSuccessResponse()` / `apiErrorResponse()` — `{success, data:{message, code}}` for Actions + `ntdst-api.js` | REST: return data bare, refuse with `WP_Error` + `status` → WP emits `{code, message, data}` | `Actions.php:641,646`; `daan-core.php`, `stride-core.php` | **reinvention**; its consumers leave with Actions (D2). Delete |
+| `error()` → `renderError()` / `getErrorHtml()` (inline red div, optional `error` template) | `wp_die($msg, $title, ['response' => $status])` — themed, status-aware, and context-aware (`wp_die_ajax_handler`, `wp_die_json_handler`, … `functions.php:3799–3848`); `wp_die_handler` filter for a custom page | `->error(` ~17 hits, mostly stride/rossi (old core); daan 0 | **reinvention** → `wp_die`. A site's custom error page is the `wp_die_handler` filter |
+| `render()` — `extract()` + `include` + exit | `load_template($file, false, $args)` (`template.php:782`; `$args` in scope since 5.5) | via `Pages` | **reinvention of the include** — keep the method, body becomes `status_header()` + `load_template()` + exit |
+| `html()` — `ob_start` + `extract` + `include` | `ob_start(); load_template($file, false, $args); ob_get_clean()` | daan / josworld / netdust `helpers/templates.php`; `CardService` | same: keep, body becomes WP's |
+| `commitRenderStatus()` — clears `is_404`, `status_header()` | `status_header()` ✔; no WP unsetter for `is_404` | `Pages` | wrap ✔ (Pages' routing concern) |
+| `notFound()` | `$wp_query->set_404()` + `status_header(404)` | daan `CardService` ×3 | convention ✔ — keep; use `set_404()` |
+| `redirect()` (+ `?error=`), `ntdst_redirect()` | `wp_safe_redirect()` + exit | `ntdst_redirect` ×3 | `redirect()` wrap ✔; `ntdst_redirect()` is a pure pass-through — drop, `wp_safe_redirect` is one line |
+| `download()` / `inline()` / `sendFile()` / `downloadHeaders()` — Content-Disposition with RFC 5987 filename, Content-Length, nosniff, `nocache_headers()` | `nocache_headers()` ✔, `send_nosniff_header()` (`functions.php:7078`) ✔; no Content-Disposition helper | `downloadHeaders` ×3 (daan PressKit), `ntdst_download` ×2 | **smart** ✔ — keep; emit nosniff via `send_nosniff_header()` instead of the literal |
+| `$mimeTypes` table, `getMimeType()`, `registerMimeType()` | `wp_check_filetype($name, wp_get_mime_types())` over WP's table + the `mime_types` filter (`functions.php:3056, 3447, 3460`). WP's table has pdf csv txt ics png jpg webp zip gz xlsx docx; **lacks json xml vcf svg** | `getMimeType` ×8 | **reinvention of the table** → `wp_check_filetype()`; the four missing types via the `mime_types` filter, which is what `registerMimeType()` reinvents. Trap: pass `wp_get_mime_types()` explicitly — the default `$mimes` is `get_allowed_mime_types()`, the *upload* allow-list, capability-filtered, which drops svg/json for most users |
+| `http_response_code()` in `json()` | `status_header()` | — | goes with `json()` |
+| `NTDST_Template_Loader::locate()` — plugin template-dir registry + theme `/templates` + `locate_template()` fallback, traversal guard, hit-only cache | `locate_template()` is theme-only; WP has no plugin-dir registry | 16 files | **smart** ✔ — keep |
+| `templateInclude()` — hand-lists `single-{type}-{slug}`, `single-{type}`, `single`, `archive-{type}`, `archive` and searches custom paths on `template_include` | WP computes the full hierarchy itself (`{$type}_template_hierarchy`, `template.php:40`) and passes the candidate list to the `{$type}_template` filter (`$template, $type, $templates`, since 4.7) | via Pages / Theme | **partial copy of WP's hierarchy** (no `singular`, no taxonomy, no decoded slug) → hook `{$type}_template`, iterate WordPress's own `$templates` over the custom paths. Zero names listed by hand |
+| `locateInCustomPaths()` on `theme_file_path` | WP filter | — | wrap ✔ |
+| `page()` / `pageData()` / `ntdst_page_data()` | `template_include` cannot carry args | `ntdst_page_data` ×2; `Pages` | smart ✔ — keep |
+| `Theme::mixin('response')` | — | — | fine |
+
+Net: **keep** the template loader, the file-response policy, `notFound()`,
+`redirect()`, `render()`/`html()` as methods. **Replace the bodies** with
+WordPress's words: `load_template()`, `wp_check_filetype()` + `mime_types`,
+`send_nosniff_header()`, `set_404()`, `{$type}_template`. **Delete** `json()`,
+the four `api*` envelope builders, `error()`/`renderError()`/`getErrorHtml()`
+(→ `wp_die`), `$mimeTypes`/`getMimeType()`/`registerMimeType()`, `ntdst_redirect()`.
+Rough size: −250 lines, and one less wire shape (today there are two JSON error
+envelopes, documented as "do not unify — each has live consumers"; after D2 the
+consumers of one of them are gone and WordPress owns the other).
 
 **D3 — Same major, or a 6.0.0?** 5.0.0 is unreleased; nobody has taken it. Two
 majors in one week is worse than one larger one. Recommendation: all of this is
