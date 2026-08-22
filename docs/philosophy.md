@@ -15,9 +15,16 @@ it — this describes the package, it does not aspire past it.
 
 If WordPress already does something well, core does not do it again.
 
-`api/Data.php` says so in its own first line: *"A chain API over WP_Query plus
-the CPT/field vocabulary the metabox generator reads. Nothing else."* It is not
-a database abstraction. `NTDST_Rest` wraps `register_rest_route()` and adds
+`api/FieldTypes.php` says so where the vocabulary is declared: *"Where WordPress
+has the word, the entry is WordPress's function — this table maps names to them,
+it does not re-implement them."* Seventeen type names, each bound to
+`sanitize_text_field()`, `wp_kses_post()`, `absint()` or `wp_validate_boolean()`
+— core owns the NAME, WordPress owns the answer.
+
+`api/Data.php` holds the same line in its own first line: *"NTDST Data Layer — a
+chain API over WP_Query, and the meta registration a declared model owes
+WordPress."* It is not a database abstraction. `NTDST_Rest` wraps
+`register_rest_route()` and adds
 exactly two things WordPress does not have — a route without a callable
 `permission` never registers, and the permission runs once per request instead
 of twice.

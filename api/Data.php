@@ -1,9 +1,8 @@
 <?php
 
 /**
- * NTDST Data Layer — a chain API over WP_Query, plus the registration a
- * declared model owes WordPress: the meta keys, their sanitizers and the REST
- * shape they publish under.
+ * NTDST Data Layer — a chain API over WP_Query, and the meta registration a
+ * declared model owes WordPress.
  *
  * The field VOCABULARY is not here. One table names every type and says what
  * sanitizes it, what it publishes as and what draws it, and that table lives in
@@ -82,8 +81,7 @@ class NTDST_Data_Model
         $this->meta_prefix = $meta_prefix;
         $this->scopes = $scopes;
 
-        $this->setupSanitizers();
-        $this->setupValidators();
+        $this->bindFields();
     }
 
     /**
@@ -107,11 +105,10 @@ class NTDST_Data_Model
      * OPT IN and strictly `=== true`, so `'yes'`, `1` and a bare type string all
      * leave the field private. It lives alone because the exposure rule rests on it.
      *
-     * Two readers, both inside this class: `restFields()` (which fields may leave)
-     * and `schemaFor()` (in what shape, asked again at EVERY depth), the second
-     * reached only through `registerRestMeta()`. Nothing public asks either
-     * question a second time — a second way to ask is a second exposure a
-     * consumer can assemble beside the convergence point (INV-1).
+     * Private, and so is every reader of it: `schemaFor()` is reached only
+     * through `registerRestMeta()`. A second PUBLIC way to ask what a field
+     * publishes is a second exposure a consumer can assemble beside the
+     * convergence point (INV-1).
      */
     private function declaresRest(mixed $config): bool
     {
@@ -155,8 +152,10 @@ class NTDST_Data_Model
      * requires. A declared field's sanitizer must be IDEMPOTENT — update_metadata()
      * applies it again to the value this registration already cleaned.
      *
-     * A field with no publishable shape, or one whose type is a typo, unpublishes
-     * only itself and says so: throwing would abort `init` and take the type down.
+     * A field with no publishable shape unpublishes only itself and says so, once
+     * per model. There is no catch around the loop: a type name is resolved when
+     * the model is CONSTRUCTED, so a typo is already a fatal at register() naming
+     * the field, and nothing left here can throw at `init`.
      */
     public function registerRestMeta(string $postType): void
     {
@@ -166,58 +165,41 @@ class NTDST_Data_Model
         $refused = [];
 
         foreach ($this->restFields() as $field) {
-            try {
-                $refusal = null;
-                $schema = $this->schemaFor($this->schema[$field] ?? null, $refusal);
+            $refusal = null;
+            $schema = $this->schemaFor($this->schema[$field] ?? null, $refusal, "Field '{$field}'");
 
-                if ($schema === null) {
-                    $refused[] = sprintf(
-                        '`%s` (%s%s)',
-                        $field,
-                        ($refusal['path'] ?? '') === '' ? '' : sprintf('sub-field `%s`: ', $refusal['path']),
-                        (string) ($refusal['why'] ?? 'no publishable shape'),
-                    );
+            if ($schema === null) {
+                $refused[] = sprintf(
+                    '`%s` (%s%s)',
+                    $field,
+                    ($refusal['path'] ?? '') === '' ? '' : sprintf('sub-field `%s`: ', $refusal['path']),
+                    (string) ($refusal['why'] ?? 'no publishable shape'),
+                );
 
-                    continue;
-                }
-
-                $type = (string) $schema['type'];
-
-                register_post_meta($postType, $this->prefixMetaKey($field), [
-                    'type' => $type,
-                    'single' => true,
-                    'sanitize_callback' => fn($value) => $this->sanitizeField($field, $value),
-                    // Untyped and cast on purpose: map_meta_cap() hands $object_id
-                    // and $user_id through from its own $args, where either is a
-                    // numeric string as often as an int, and a typed parameter
-                    // would fatal on one. A non-scalar is refused outright rather
-                    // than cast — (int) new stdClass is a coin flip that lands on
-                    // 1, a real user id. A cast that lands on 0 denies, which is
-                    // the direction to fail in.
-                    'auth_callback' => static fn($allowed, $meta_key, $post_id, $user_id): bool
-                        => is_scalar($user_id)
-                        && is_scalar($post_id)
-                        && user_can((int) $user_id, 'edit_post', (int) $post_id),
-                    'show_in_rest' => in_array($type, ['array', 'object'], true)
-                        ? ['schema' => $schema]
-                        : true,
-                ]);
-            } catch (\Throwable $e) {
-                // One field's defect unpublishes that field. Letting it escape
-                // would abort the `init` hook that registered the post type.
-                if (function_exists('ntdst_log')) {
-                    ntdst_log('data')->error(
-                        sprintf(
-                            'Model "%s": field "%s" could not be registered for REST and is not '
-                            . 'published: %s',
-                            $this->post_type,
-                            $field,
-                            $e->getMessage(),
-                        ),
-                        ['model' => $this->post_type, 'field' => $field],
-                    );
-                }
+                continue;
             }
+
+            $type = (string) $schema['type'];
+
+            register_post_meta($postType, $this->prefixMetaKey($field), [
+                'type' => $type,
+                'single' => true,
+                'sanitize_callback' => fn($value) => $this->sanitizeField($field, $value),
+                // Untyped and cast on purpose: map_meta_cap() hands $object_id
+                // and $user_id through from its own $args, where either is a
+                // numeric string as often as an int, and a typed parameter
+                // would fatal on one. A non-scalar is refused outright rather
+                // than cast — (int) new stdClass is a coin flip that lands on
+                // 1, a real user id. A cast that lands on 0 denies, which is
+                // the direction to fail in.
+                'auth_callback' => static fn($allowed, $meta_key, $post_id, $user_id): bool
+                    => is_scalar($user_id)
+                    && is_scalar($post_id)
+                    && user_can((int) $user_id, 'edit_post', (int) $post_id),
+                'show_in_rest' => in_array($type, ['array', 'object'], true)
+                    ? ['schema' => $schema]
+                    : true,
+            ]);
         }
 
         if ($refused === [] || isset($warnedModels[$this->post_type])) {
@@ -270,9 +252,12 @@ class NTDST_Data_Model
      * every key undeclared, and its empty closed object nulls its own stored rows.
      *
      * @param array{path: string, why: string}|null $refusal Set when null is returned.
+     * @param string $where names the field (and the sub-field, at depth) if the
+     *        vocabulary refuses the type — a message with no subject in it is a
+     *        bug report nobody can act on.
      * @return array<string, mixed>|null
      */
-    private function schemaFor(mixed $config, ?array &$refusal = null): ?array
+    private function schemaFor(mixed $config, ?array &$refusal = null, string $where = 'A declared field'): ?array
     {
         $refusal = null;
 
@@ -284,9 +269,11 @@ class NTDST_Data_Model
 
         $type = self::declaredType($config);
 
-        // Ask the vocabulary what this name means. A name outside the 17 throws
-        // on the way through, with the registry's own message.
-        $entry = NTDST_FieldTypes::get($type);
+        // Ask the vocabulary what this name means, through the same resolver the
+        // constructor used, so a name outside the 17 throws with the FIELD in the
+        // message. (Construction already refused it; this cannot be reached on a
+        // model that exists.)
+        $entry = $this->typeFor($type, $where);
 
         if ($type === 'repeater') {
             $sub_fields = is_array($config['sub_fields'] ?? null) ? $config['sub_fields'] : [];
@@ -309,7 +296,7 @@ class NTDST_Data_Model
 
             foreach ($sub_fields as $sub => $sub_config) {
                 $inner = null;
-                $sub_schema = $this->schemaFor($sub_config, $inner);
+                $sub_schema = $this->schemaFor($sub_config, $inner, $where . " sub-field '{$sub}'");
 
                 if ($sub_schema === null) {
                     $refusal = [
@@ -322,7 +309,13 @@ class NTDST_Data_Model
                     return null;
                 }
 
-                $properties[(string) $sub] = $sub_schema;
+                // Keyed the way the cell is STORED (NTDST_FieldTypes::rowKey),
+                // never by the raw declared name: WordPress measures a stored row
+                // against this closed object, so a `salePrice` property against a
+                // stored `saleprice` cell nulls every row of the field and refuses
+                // the write that carries it — the partial-repeater failure, caused
+                // by a capital letter in a declaration.
+                $properties[NTDST_FieldTypes::rowKey((string) $sub)] = $sub_schema;
             }
 
             return [
@@ -359,43 +352,65 @@ class NTDST_Data_Model
      * Bind every declared field to the vocabulary — and refuse a declaration
      * the vocabulary has no word for.
      *
+     * ONE walk of the declaration, because each field is ONE declaration: it
+     * binds the sanitizer, it walks a repeater's rows, and it reads the
+     * validation rules, and the type name is resolved once for all three. Three
+     * loops over the same array could be given three different answers by a
+     * schema that changed between them, and each of them cost a reader a pass.
+     *
      * This runs at construction, which on a site is register() time: a retired
-     * name, an invention, or a type that cannot render inside a repeater row
-     * fails at `init` naming the field, instead of becoming a text input that
-     * stores whatever the box held (FR-4, threat rows #5 and #7). The whole
-     * declaration is kept as the field's config — the sanitizer reads
-     * `sub_fields`, `min`, `max` and the rest out of it.
+     * name, an invention, a type that cannot render inside a repeater row, or a
+     * sub-field carrying a `sanitizer` nothing would run, fails at `init` naming
+     * the field, instead of becoming a text input that stores whatever the box
+     * held. The whole declaration is kept as the
+     * field's config — the sanitizer reads `sub_fields`, `min`, `max` and the
+     * rest out of it.
      */
-    protected function setupSanitizers(): void
+    private function bindFields(): void
     {
         foreach ($this->schema as $field => $config) {
             $field = (string) $field;
-            $this->sanitizers[$field] = $this->sanitizerFor($field, $config);
+            $type = self::declaredType($config);
 
-            if (self::declaredType($config) === 'repeater' && is_array($config)) {
+            $this->sanitizers[$field] = $this->sanitizerFor($field, $config, $type);
+
+            if (!is_array($config)) {
+                continue;
+            }
+
+            if ($type === 'repeater') {
                 $this->assertRowTypes($field, $config['sub_fields'] ?? null, '');
             }
+
+            $this->validators[$field] = [
+                'required' => $config['required'] ?? false,
+                'min'      => $config['min'] ?? null,
+                'max'      => $config['max'] ?? null,
+                'validate' => $config['validate'] ?? null,
+            ];
         }
     }
 
     /**
      * The sanitizer for one declared field: the registry's, then the field's own.
      *
-     * A declared `sanitizer` COMPOSES on top of the registry's output — it never
-     * replaces it (FR-4 revision 3). A consumer, or a `ntdst/{model}/fields`
-     * filter, may tighten how a field is cleaned; it may not switch
-     * wp_kses_post() off on a `html` field and post markup through REST
-     * (threat row #6).
+     * A declared `sanitizer` COMPOSES on top of the registry's output — the
+     * registry ALWAYS runs, and an override cannot replace it. The registry
+     * always sees the raw input; the override's output is the consumer's. A
+     * consumer, or a `ntdst/{model}/fields` filter, cannot switch wp_kses_post()
+     * off on a `html` field and post markup through REST; what it then does with
+     * the cleaned value is its own code, and this makes no claim that the answer
+     * can only get stricter.
      *
      * An override must be IDEMPOTENT, like the entry it composes on:
      * register_post_meta() runs this callback again on the value it has already
      * cleaned, so one that appends or re-encodes grows the stored value on every
      * write. It runs on the way IN only — a read casts, it does not re-sanitize.
      */
-    private function sanitizerFor(string $field, mixed $config): \Closure
+    private function sanitizerFor(string $field, mixed $config, string $type): \Closure
     {
         $settings = is_array($config) ? $config : [];
-        $sanitize = $this->typeFor(self::declaredType($config), "Field '{$field}'")->sanitize;
+        $sanitize = $this->typeFor($type, "Field '{$field}'")->sanitize;
         $override = $settings['sanitizer'] ?? null;
 
         if (!is_callable($override)) {
@@ -408,11 +423,18 @@ class NTDST_Data_Model
     /**
      * Every sub-field of a repeater, at every depth, against the same table.
      *
-     * Three refusals, all of them at register(): a name outside the vocabulary,
+     * Four refusals, all of them at register(): a name outside the vocabulary,
      * a `cell = false` type (it cannot be edited in a row, and today it renders
-     * as a text input that stores the escaped soup — threat row #5), and two
-     * names that sanitize_key() to ONE key (a row stores one cell per key, so
-     * the second declaration would silently take the first one's type).
+     * as a text input that stores the escaped soup), two names
+     * that NTDST_FieldTypes::rowKey() folds into ONE key (a row stores one cell
+     * per key, so the second declaration would silently take the first one's
+     * type), and a sub-field that declares its own `sanitizer`.
+     *
+     * That last one is refused because nothing runs it: the row walk sanitizes
+     * each cell by its DECLARED TYPE and never looks for a callable, so the
+     * declaration means the author believes a cell is being tightened while it
+     * is not. "Quietly does nothing" is the worst answer a security declaration
+     * can get.
      *
      * A repeater INSIDE a repeater is legal — it is cell = false for RENDERING
      * only — and its own sub-fields are walked the same way.
@@ -427,9 +449,15 @@ class NTDST_Data_Model
 
         foreach ($subFields as $name => $config) {
             $name = (string) $name;
-            $key = self::rowKey($name);
+            $key = NTDST_FieldTypes::rowKey($name);
             $at = $path === '' ? $name : $path . '.' . $name;
             $where = "Field '{$field}' sub-field '{$at}'";
+
+            if (is_array($config) && array_key_exists('sanitizer', $config)) {
+                throw new InvalidArgumentException(
+                    "{$where}: a sub-field cannot declare a 'sanitizer'.",
+                );
+            }
 
             if (isset($seen[$key])) {
                 throw new InvalidArgumentException(
@@ -461,7 +489,7 @@ class NTDST_Data_Model
      * The vocabulary's entry for a name, with the declaration that asked for it.
      *
      * The registry's message says what to write instead; this says WHERE, and
-     * on a site that fatal is the whole bug report (threat row #7).
+     * on a site that fatal is the whole bug report.
      */
     private function typeFor(string $type, string $where): NTDST_FieldType
     {
@@ -489,44 +517,11 @@ class NTDST_Data_Model
     }
 
     /**
-     * The key a repeater cell is stored under: sanitize_key() of its name.
+     * One value, cleaned as the field it is written to — the model's ONE answer
+     * to "how does a key coming in get cleaned", asked by every write path.
      *
-     * A name already inside sanitize_key()'s own character set is its own key,
-     * so the ordinary declaration answers without calling WordPress — which is
-     * why a model can be constructed before WordPress is loaded (the collision
-     * check is not worth a hard dependency on load order).
-     *
-     * The caveat, stated rather than hidden: sanitize_key() is filterable. A
-     * plugin on the `sanitize_key` filter could map a clean name to something
-     * else, and this fast path would not see it — the collision check would then
-     * disagree with NTDST_FieldTypes::declarations(), which calls the filtered
-     * function. Nothing on the fleet filters it, and a filter that renames a
-     * clean key already breaks every stored row it touches.
-     */
-    private static function rowKey(string $name): string
-    {
-        return preg_match('/^[a-z0-9_\-]*$/', $name) === 1 ? $name : sanitize_key($name);
-    }
-
-    /**
-     * Setup validators based on schema
-     */
-    protected function setupValidators(): void
-    {
-        foreach ($this->schema as $field => $type_config) {
-            if (is_array($type_config)) {
-                $this->validators[$field] = [
-                    'required' => $type_config['required'] ?? false,
-                    'min' => $type_config['min'] ?? null,
-                    'max' => $type_config['max'] ?? null,
-                    'validate' => $type_config['validate'] ?? null,
-                ];
-            }
-        }
-    }
-
-    /**
-     * Sanitize field value based on schema
+     * An undeclared key still gets sanitize_text_field(): not this model's field,
+     * so not this model's type, but never stored exactly as it was posted.
      */
     protected function sanitizeField(string $field, $value)
     {
@@ -534,51 +529,10 @@ class NTDST_Data_Model
             return sanitize_text_field($value);
         }
 
-        // Always a Closure: setupSanitizers() binds every declared field
-        // through sanitizerFor(), so there is no "not callable" case to fall
-        // back from any more.
+        // Always a Closure: bindFields() binds every declared field through
+        // sanitizerFor() at construction, so there is no "not callable" case to
+        // fall back from any more.
         return ($this->sanitizers[$field])($value);
-    }
-
-    /**
-     * Format repeater field data on load
-     *
-     * @param mixed $value Raw repeater data from database
-     * @return array Formatted repeater data
-     */
-    protected function formatRepeaterField($value): array
-    {
-        // Handle null/empty
-        if (empty($value)) {
-            return [];
-        }
-
-        // If it's a JSON string, decode it
-        if (is_string($value)) {
-            $decoded = json_decode($value, true);
-            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
-                $value = $decoded;
-            } else {
-                // Not valid JSON, try unserialize (legacy)
-                $unserialized = @unserialize($value);
-                $value = is_array($unserialized) ? $unserialized : [];
-            }
-        }
-
-        // Ensure it's an array
-        if (!is_array($value)) {
-            return [];
-        }
-
-        // Ensure each row is an array
-        $formatted_rows = [];
-        foreach ($value as $row) {
-            if (is_array($row)) {
-                $formatted_rows[] = $row;
-            }
-        }
-
-        return $formatted_rows;
     }
 
     /**
@@ -623,13 +577,16 @@ class NTDST_Data_Model
     }
 
     /**
-     * Log a warning when a caller passes keys that are neither WordPress
-     * columns nor registered schema fields. Drops the keys silently from
-     * the returned array — the warning is the contract signal.
+     * Warn when a caller passes keys that are neither WordPress columns nor
+     * registered schema fields, and return the data WITHOUT them.
      *
-     * Called from create()/update() before sanitization, so typos surface
-     * as a clear "unregistered key" warning rather than a confusing
-     * "required field missing" validation error.
+     * The warning is the contract signal; what the caller does with the return
+     * is the caller's. create()/update() take the filtered array and drop the
+     * keys, so a typo surfaces as a clear "unregistered key" warning rather than
+     * a confusing "required field missing" validation error. updateMeta() and
+     * updateMetaBatch() take the WARNING only: a caller that names one meta key
+     * means to write it, so it is stored — through sanitize_text_field(), the
+     * same cleaning create() would have given it.
      */
     protected function warnUnregisteredKeys(array $data, string $operation): array
     {
@@ -1056,11 +1013,14 @@ class NTDST_Data_Model
         // REST registration all use. Read off `$this->sanitizers`, never rebuilt
         // and never re-derived from the declaration: a field declared as a bare
         // string (`'body' => 'html'`) is bound like any other, and this path used
-        // to store it raw. A key this model does not declare is not this model's
-        // to clean, and passes through untouched.
-        if (isset($this->sanitizers[$key])) {
-            $value = ($this->sanitizers[$key])($value);
-        }
+        // to store it raw.
+        //
+        // A key this model does not DECLARE gets create()'s answer, not a pass:
+        // it is warned about by name and stored through sanitize_text_field().
+        // One model must not have two answers for the same key, with the safe
+        // one depending on which method the caller reached for.
+        $this->warnUnregisteredKeys([$key => $value], 'updateMeta');
+        $value = $this->sanitizeField($key, $value);
 
         $metaKey = $this->prefixMetaKey($key);
         if (!$this->updateMetaValue($id, $metaKey, $value)) {
@@ -1090,11 +1050,14 @@ class NTDST_Data_Model
 
         $previousMeta = [];
 
+        // One warning for the whole batch, naming every key this model does not
+        // declare; the values are still stored, cleaned the way updateMeta()
+        // cleans them.
+        $this->warnUnregisteredKeys($data, 'updateMetaBatch');
+
         foreach ($data as $key => $value) {
             // The same bound closure updateMeta() uses, for the same reason.
-            if (isset($this->sanitizers[$key])) {
-                $value = ($this->sanitizers[$key])($value);
-            }
+            $value = $this->sanitizeField($key, $value);
 
             $metaKey = $this->prefixMetaKey($key);
             $previousMeta[$metaKey] = [
@@ -1816,23 +1779,6 @@ class NTDST_Data_Model
     }
 
     /**
-     * Decode array-like stored values without returning null on invalid JSON.
-     */
-    protected function decodeArrayField($value): array
-    {
-        if (is_array($value)) {
-            return $value;
-        }
-
-        if (!is_string($value) || $value === '') {
-            return [];
-        }
-
-        $decoded = json_decode($value, true);
-        return is_array($decoded) ? $decoded : [];
-    }
-
-    /**
      * Format meta according to schema — a READ, so it casts and decodes; it does
      * not re-sanitize and it never looks anything up.
      *
@@ -1872,42 +1818,16 @@ class NTDST_Data_Model
     }
 
     /**
-     * One stored value, read back as its declared type.
-     *
-     * INV-8 says every reader of a type name asks the registry, and this asks it
-     * — for the ENTRY, then keys on `->control`, which is the registry's own
-     * grouping (image and file are one `media`, array and json are one `json`).
-     * The five arms below are the declared **read-side storage decoding**
-     * exception to INV-8, recorded in README (T09), and they exist because a
-     * READ may not do what a WRITE does:
-     *
-     *   media    — `(int)`, never `sanitize`: the entry verifies the attachment
-     *              still exists, which is a lookup per field per row.
-     *   json     — decode only. The stored keys were sanitized on the way in,
-     *              and re-running sanitize_key() on a read can only rename them.
-     *   relation — decode, then intval. Same reason, plus absint() would flip a
-     *   gallery    stored negative and array_filter() would drop a stored 0.
-     *   repeater — its rows may be legacy-serialized; formatRepeaterField()
-     *              knows both shapes.
-     *   date     — as stored. Re-parsing a date on every read is strtotime()
-     *              per field, and the write side already refused a non-date.
-     *
-     * Everything else is a free cast — number, decimal, checkbox and the text
-     * family — and takes the registry's own sanitizer, which is idempotent by
-     * constraint and so cannot change a value this model stored.
+     * One stored value, read back as its declared type: the entry's own `read`,
+     * or its sanitizer when it declares none. A type owns how it is written and
+     * how it is read, in one row of one table, so the model keeps no decoder of
+     * its own that could disagree with the entry that wrote the value (INV-8).
      */
     private function readValue(mixed $config, mixed $value): mixed
     {
         $entry = NTDST_FieldTypes::get(self::declaredType($config));
 
-        return match ($entry->control) {
-            'repeater' => $this->formatRepeaterField($value),
-            'json' => $this->decodeArrayField($value),
-            'relation', 'gallery' => array_map('intval', $this->decodeArrayField($value)),
-            'media' => is_scalar($value) ? (int) $value : 0,
-            'date' => is_scalar($value) ? (string) $value : '',
-            default => ($entry->sanitize)($value, is_array($config) ? $config : []),
-        };
+        return ($entry->read ?? $entry->sanitize)($value, is_array($config) ? $config : []);
     }
 }
 

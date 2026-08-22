@@ -7,8 +7,14 @@
 defined('ABSPATH') || exit;
 
 /**
- * One field type: what sanitizes it, what it publishes as, what draws it, and
- * whether it may live inside a repeater row.
+ * One field type: what sanitizes it, what it publishes as, what draws it,
+ * whether it may live inside a repeater row, and how a stored value reads back.
+ *
+ * A type owns how it is written and how it is read, in one row of one table.
+ * The read is a CAST or a DECODE, never a second sanitization and never a
+ * lookup: the write side already ran, and a value stored around this model —
+ * by an importer, by WP-CLI, by the site's previous plugin — is not this
+ * model's to rewrite on the way out.
  *
  * Readonly because an entry is handed out, not lent: a caller that could edit
  * the sanitizer on the instance it received would edit it for every later
@@ -22,15 +28,20 @@ final class NTDST_FieldType
         public readonly ?array $schema,     // REST leaf shape; null = no leaf shape
         public readonly string $control,    // admin input key — rendering intent, never a type name
         public readonly bool $cell,         // may render inside a repeater row
+        // Storage decode: fn(mixed $stored, array $config): mixed.
+        // null = the sanitizer IS the cast (int, float, bool).
+        public readonly ?\Closure $read = null,
     ) {
     }
 }
 
 /**
  * The vocabulary's one home (INV-8). Seventeen names, and a closed set on
- * purpose: no filter, no registration method, two readers and nothing else —
- * a pluggable vocabulary is one a plugin can widen with a type whose sanitizer
- * is a no-op, and every type NAME on the site resolves here (threat row #6).
+ * purpose: no filter, no registration method, two readers of the table and
+ * nothing else that can reach it (`rowKey()` answers the KEY rule, not the
+ * table) — a pluggable vocabulary is one a plugin can widen with a type whose
+ * sanitizer is a no-op, and every type NAME on the site resolves here
+ * (threat row #6).
  * A name outside the 17 is a typo or a retired alias, and both fail loudly at
  * register(), the retired ones naming what to write instead.
  *
@@ -98,6 +109,29 @@ final class NTDST_FieldTypes
         return array_keys(self::table());
     }
 
+    /**
+     * THE KEY RULE, and there is one of it: the key a repeater cell is stored
+     * under is sanitize_key() of its declared name.
+     *
+     * Whoever declares a cell, whoever sanitizes a row, whoever refuses two
+     * names that collide, and whoever publishes the row's schema must all ask
+     * the same question. While each carried its own copy, a cell could be
+     * declared under one key and stored under another — and then the re-save
+     * loses the cell's type (an int comes back as text), or two declarations
+     * quietly become one.
+     *
+     * Idempotent, because the REST re-save arrives with the key the first pass
+     * produced. The function_exists() guard is for the one caller that runs
+     * before WordPress is loaded — a model constructed at file scope — and it
+     * mirrors WordPress's own algorithm rather than inventing a second one.
+     */
+    public static function rowKey(string $name): string
+    {
+        return function_exists('sanitize_key')
+            ? sanitize_key($name)
+            : (string) preg_replace('/[^a-z0-9_\-]/', '', strtolower($name));
+    }
+
     /** @return array<string, NTDST_FieldType> */
     private static function table(): array
     {
@@ -112,9 +146,36 @@ final class NTDST_FieldTypes
         $attachmentId = static fn(mixed $value, array $config): int => self::attachmentId($value);
         $text = static fn(mixed $value, array $config): string => sanitize_text_field(self::scalar($value));
 
+        // The read side, by shape rather than by name — five closures for the
+        // fourteen entries that need one. `int`, `float` and `bool` need none:
+        // their sanitizer IS the cast a read owes.
+        //
+        // readString  the string family and `date`: back byte for byte. A read
+        //             that re-cleaned would print a different string from the
+        //             one the row holds, and pay sanitize/kses per field per row.
+        // readId      `image`/`file`: the id that is stored, with NO lookup —
+        //             whether the attachment still exists is the write side's
+        //             question, and a lookup here is a query per field per row.
+        // readArray   `array`/`json`: decode only. The keys were sanitized on
+        //             the way in; sanitize_key() on a read can only rename them.
+        // readIds     `relation`/`gallery`: the same rule that WROTE the list,
+        //             so a read cannot disagree with a write about what an id is.
+        // readRows    `repeater`: rows, and nothing else. No cell is
+        //             re-sanitized, and nothing is unserialized — WordPress's
+        //             maybe_unserialize() already ran, so a string still
+        //             serialized here is not a value this model wrote.
+        $readString = static fn(mixed $stored, array $config): string => is_scalar($stored) ? (string) $stored : '';
+        $readId = static fn(mixed $stored, array $config): int => is_scalar($stored) ? (int) $stored : 0;
+        $readArray = static fn(mixed $stored, array $config): array => self::decode($stored);
+        $readIds = static fn(mixed $stored, array $config): array => self::ids(self::decode($stored));
+        $readRows = static fn(mixed $stored, array $config): array => array_values(
+            array_filter(self::decode($stored), 'is_array'),
+        );
+
         $table = [];
 
         // name · sanitize · REST leaf shape · admin control · may sit in a row
+        // · read (named, and only where the sanitizer is not already the cast)
         foreach ([
             // Signed on purpose (FR-5): absint() stripped the sign, and a
             // discount in cents is a negative int. A non-scalar is not a number.
@@ -143,12 +204,14 @@ final class NTDST_FieldTypes
                 'text',
                 $text,
                 ['type' => 'string'], 'text', true,
+                read: $readString,
             ),
             // Keeps the newlines sanitize_text_field() would flatten.
             new NTDST_FieldType(
                 'textarea',
                 static fn(mixed $value, array $config): string => sanitize_textarea_field(self::scalar($value)),
                 ['type' => 'string'], 'textarea', true,
+                read: $readString,
             ),
             // cell = false: markup cannot be edited in a repeater row, and a
             // row that renders it as a text input stores the escaped soup.
@@ -156,21 +219,25 @@ final class NTDST_FieldTypes
                 'html',
                 static fn(mixed $value, array $config): string => wp_kses_post(self::scalar($value)),
                 ['type' => 'string'], 'html', false,
+                read: $readString,
             ),
             new NTDST_FieldType(
                 'email',
                 static fn(mixed $value, array $config): string => sanitize_email(self::scalar($value)),
                 ['type' => 'string', 'format' => 'email'], 'email', true,
+                read: $readString,
             ),
             new NTDST_FieldType(
                 'url',
                 static fn(mixed $value, array $config): string => esc_url_raw(self::scalar($value)),
                 ['type' => 'string', 'format' => 'uri'], 'url', true,
+                read: $readString,
             ),
             new NTDST_FieldType(
                 'date',
                 static fn(mixed $value, array $config): string => self::date($value),
                 ['type' => 'string'], 'date', true,
+                read: $readString,
             ),
             // The option list is the admin's business; the stored value is
             // still only text (option validation is out of scope, D-scope).
@@ -178,6 +245,7 @@ final class NTDST_FieldTypes
                 'select',
                 $text,
                 ['type' => 'string'], 'select', true,
+                read: $readString,
             ),
             // The metabox posts this as a JSON string, so a JSON string is
             // accepted as well as an array. Not publishable: the sanitizer
@@ -187,33 +255,39 @@ final class NTDST_FieldTypes
                 'array',
                 $toArray,
                 null, 'json', true,
+                read: $readArray,
             ),
             new NTDST_FieldType(
                 'json',
                 $toArray,
                 null, 'json', true,
+                read: $readArray,
             ),
             // A single pick posts as a scalar; the field still stores a list.
             new NTDST_FieldType(
                 'relation',
                 static fn(mixed $value, array $config): array => self::ids(is_array($value) ? $value : [$value]),
                 ['type' => 'array', 'items' => ['type' => 'integer']], 'relation', false,
+                read: $readIds,
             ),
             // A gallery is a multi-pick control: a scalar is not a gallery.
             new NTDST_FieldType(
                 'gallery',
                 static fn(mixed $value, array $config): array => is_array($value) ? self::ids($value) : [],
                 ['type' => 'array', 'items' => ['type' => 'integer']], 'gallery', false,
+                read: $readIds,
             ),
             new NTDST_FieldType(
                 'image',
                 $attachmentId,
                 ['type' => 'integer'], 'media', true,
+                read: $readId,
             ),
             new NTDST_FieldType(
                 'file',
                 $attachmentId,
                 ['type' => 'integer'], 'media', true,
+                read: $readId,
             ),
             // The repeater's shape is structural, not a leaf: schemaFor()
             // recurses over sub_fields and builds the object itself.
@@ -221,6 +295,7 @@ final class NTDST_FieldTypes
                 'repeater',
                 static fn(mixed $value, array $config): array => self::repeater($value, $config),
                 null, 'repeater', false,
+                read: $readRows,
             ),
         ] as $type) {
             $table[$type->name] = $type;
@@ -311,12 +386,36 @@ final class NTDST_FieldTypes
      * posts — becomes a sanitized array, or nothing at all. A scalar JSON
      * document ("a string", 5) is not a field value: it stores as empty.
      *
+     * The decode is decode()'s, the same one the READ side uses: one answer to
+     * "what array do these stored bytes mean", so a write and a read cannot
+     * disagree about it.
+     *
      * @return array<array-key, mixed>
      */
     private static function toArray(mixed $value): array
     {
+        return self::nested(self::decode($value));
+    }
+
+    /**
+     * What an array-shaped storage value MEANS — an array, or nothing.
+     *
+     * An array is itself. A string is the JSON the metabox textarea posts (and
+     * what a write stored, once maybe_serialize() had a list to hold). Anything
+     * else, and any string that is not a JSON array or object, is the empty
+     * answer.
+     *
+     * NOTHING here unserializes. WordPress's own maybe_unserialize() has run by
+     * the time a meta value reaches this table, so a string that is STILL
+     * serialized is not a value this vocabulary wrote — and unserializing it is
+     * object instantiation from stored bytes.
+     *
+     * @return array<array-key, mixed>
+     */
+    private static function decode(mixed $value): array
+    {
         if (is_array($value)) {
-            return self::nested($value);
+            return $value;
         }
 
         if (!is_string($value) || trim($value) === '') {
@@ -325,7 +424,7 @@ final class NTDST_FieldTypes
 
         $decoded = json_decode($value, true);
 
-        return is_array($decoded) ? self::nested($decoded) : [];
+        return is_array($decoded) ? $decoded : [];
     }
 
     /**
@@ -386,7 +485,7 @@ final class NTDST_FieldTypes
 
             $cells = [];
             foreach ($row as $key => $value) {
-                $key = is_string($key) ? sanitize_key($key) : $key;
+                $key = is_string($key) ? self::rowKey($key) : $key;
                 $declared = $subFields[$key] ?? null;
                 $type = is_array($declared) ? ($declared['type'] ?? null) : $declared;
 
@@ -414,10 +513,10 @@ final class NTDST_FieldTypes
     }
 
     /**
-     * The sub-field declarations, keyed by sanitize_key() of the DECLARED name:
-     * a cell is stored under its sanitized key, so the re-save arrives with that
-     * key and `subTitle` must stay reachable from `subtitle` — otherwise the
-     * cell loses its type on every REST write and an int becomes text.
+     * The sub-field declarations, keyed by rowKey() of the DECLARED name: a cell
+     * is stored under that key, so the re-save arrives with it and `subTitle`
+     * must stay reachable from `subtitle` — otherwise the cell loses its type on
+     * every REST write and an int becomes text.
      *
      * @return array<array-key, mixed>
      */
@@ -429,7 +528,7 @@ final class NTDST_FieldTypes
 
         $keyed = [];
         foreach ($subFields as $name => $declaration) {
-            $keyed[is_string($name) ? sanitize_key($name) : $name] = $declaration;
+            $keyed[is_string($name) ? self::rowKey($name) : $name] = $declaration;
         }
 
         return $keyed;

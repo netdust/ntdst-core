@@ -35,10 +35,14 @@ fi
 #         was a SECOND vocabulary that could disagree with the first (INV-8);
 #         NTDST_FieldTypes::get() is the table now. `signed_int` is a retired
 #         TYPE NAME, not a symbol — shipped code may not declare a field with
-#         it, and api/FieldTypes.php is exempted for that one word because its
-#         RETIRED table has to spell it out in order to answer "use 'int'".
-#         (Same exemption README's `## Versions` section gets in
-#         PackageBootIntegrityTest, which pins these rows per symbol.)
+#         it, and ONE LINE of api/FieldTypes.php is exempted for that one word
+#         because its RETIRED table has to spell it out in order to answer
+#         "use 'int'". The exemption anchors to that ROW — `'signed_int' =>
+#         'int',` — and not to the file: exempting the file would let a real
+#         `new NTDST_FieldType('signed_int', …)` back in beside the row that
+#         retires it, in the one file where nobody would look for it.
+#         (Same line-anchored exemption PackageBootIntegrityTest applies, which
+#         pins these rows per symbol.)
 # v5.0.0 field-types: restSubFields() and restSchemaFor() — the two PUBLIC
 #         reads of the field description, 0 shipped readers. What a field
 #         publishes is asked once, by registerRestMeta() through the private
@@ -49,7 +53,7 @@ REMOVED=$(grep -rnE "ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NT
     --include='*.php' . \
     | grep -v /vendor/ \
     | grep -vE "^(\./)?tests/|^(\./)?specs/" \
-    | grep -vE "^(\./)?api/FieldTypes\.php:[0-9]+:.*signed_int" \
+    | grep -vE "^(\./)?api/FieldTypes\.php:[0-9]+: *'signed_int' *=> *'int'," \
     | grep -vE ':[0-9]+: *(\*|//|#|/\*)' || true)
 if [ -n "$REMOVED" ]; then
     echo "Shipped code still references a symbol removed in v3.0.0 or v5.0.0:"

@@ -165,12 +165,14 @@ final class NTDST_FieldType
         public readonly ?array $schema,       // REST JSON schema for the leaf; null = never publishable
         public readonly string $control,     // admin input key: number|checkbox|text|textarea|html|email|url|date|select|media|relation|gallery|repeater
         public readonly bool $cell,          // may render inside a repeater row
+        public readonly ?\Closure $read = null, // storage decode: fn(mixed $stored, array $config): mixed; null = the sanitizer IS the cast (int/float/bool)
     ) {}
 }
 final class NTDST_FieldTypes
 {
     public static function get(string $name): NTDST_FieldType;   // InvalidArgumentException for anything outside the 17; retired names name the canonical
     public static function names(): array;                        // the 17, in D4 order
+    public static function rowKey(string $name): string;          // THE key rule: sanitize_key() of a declared cell name, idempotent
     // no other public method; the table is a private static array built once
 }
 // FR-2 entries (name → sanitize · schema · control · cell):
@@ -197,10 +199,14 @@ final class NTDST_Data_Model {
     // constructor: every field and every sub_field resolves through NTDST_FieldTypes::get();
     //   InvalidArgumentException "Field 'provenance' sub-field 'notes': 'html' cannot be a repeater sub-field" (cell=false in sub_fields)
     //   InvalidArgumentException "Field 'n': Unknown field type 'integer'. Use 'int'." (the registry's message, prefixed with the field)
-    // setupSanitizers(): $this->sanitizers[$field] = $config['sanitizer'] ?? fn($v) => (NTDST_FieldTypes::get($type)->sanitize)($v, $config)
+    // ONE constructor walk (Cluster B gate, simplicity I1): bindFields() binds the sanitizer, walks a repeater's sub_fields and reads the validation rules, resolving the type name once per field.
+    //   the bound sanitizer: fn($v) => $override(($entry->sanitize)($v, $config)) — the registry ALWAYS runs; a declared `sanitizer` composes on its output and cannot replace it
+    //   a sub-field that declares its own `sanitizer` is refused at construction: "Field 'rows' sub-field 'title': a sub-field cannot declare a 'sanitizer'." (nothing would run it)
     // schemaFor(mixed $config, ?array &$refusal = null): ?array — structural rule only; leaf shape = NTDST_FieldTypes::get($type)->schema
-    // formatMeta() (~:1996) is a THIRD type table (read-side casts; calls sanitizeBoolean()/sanitizeNestedArray()) — T03 routes its read-side normalisation through NTDST_FieldTypes::get($type)->sanitize (idempotent by constraint, so applying it on read is safe) and deletes its match (T01 review I-1)
-    // REMOVED: getDefaultSanitizer(), sanitizeBoolean(), sanitizeJson(), sanitizeNestedArray(), sanitizeDate(), sanitizeAttachmentId(), sanitizeRepeater(), restSubFields(), restSchemaFor()
+    // readValue(): ($entry->read ?? $entry->sanitize)($value, $config) — one line, no match, no decoder of its own.
+    //   A type owns how it is written and how it is read, in one row of one table; formatRepeaterField() and decodeArrayField() are deleted with the match they served (Cluster B gate: simplicity I2, reviewer IMP-3, auditor R1/R2).
+    // schemaFor() keys a repeater's `properties` by NTDST_FieldTypes::rowKey($sub) — the key the cell is STORED under (reviewer IMP-1).
+    // REMOVED: getDefaultSanitizer(), sanitizeBoolean(), sanitizeJson(), sanitizeNestedArray(), sanitizeDate(), sanitizeAttachmentId(), sanitizeRepeater(), restSubFields(), restSchemaFor(), and (Cluster B gate) rowKey(), formatRepeaterField(), decodeArrayField(), setupSanitizers(), setupValidators()
     // KEPT public: chain + CRUD, getSchema(), getMetaPrefix(), restFields(), registerRestMeta()
 }
 
@@ -226,7 +232,7 @@ Named assets → attacks → mitigations. Reviewers converge on these; a task th
 3. **The metabox save path** — sanitized-twice becomes sanitized-once. *Attack:* "once" becomes "zero" (a Data-model save whose model lacks the field, or a non-Data save that skips the registry). *Mitigation:* `MetaboxGeneratorSaveTest` counts sanitizer invocations: exactly 1 per field on a Data-model save (the model's), exactly 1 per field on a non-Data save (the registry's), never 0; a field the model does not declare is not stored. (T05)
 4. **`int` stores negatives** (FR-5). *Attack:* a consumer handler that assumed `absint()` refused negatives now receives them (a quantity, a price). *Mitigation:* T02 grepped each D6 consumer's `int`/`integer` fields and their readers for `>= 0` assumptions (`specs/field-types/ground-truth.md`): stride has 12 fields whose admin controllers clamp with `absint()`/`max(0, …)` **on write** — they never store a negative, so the storage change cannot reach them; `price_modifier` (the old `signed_int`) is clamp-free everywhere; daan and josworld have none. README states the change and the write-side clamp note. (T02, T09)
 5. **A type inside a repeater row that cannot render in a cell** (`html`, `relation`, `gallery`, `repeater`). *Attack:* today it silently renders as a text input and stores whatever the text box held. *Mitigation:* `cell = false` types inside `sub_fields` throw at `register()` naming the field and sub-field (SC-3); no `default:` text input exists in the renderer — an unknown control is a `LogicException`. (T03, T06)
-6. **The vocabulary is a closed set** (D9) — **and the per-field `sanitizer` override is the remaining door.** *Attack:* a plugin injects a type whose sanitizer is a no-op; OR a `ntdst/{model}/fields` filter (`api/Data.php:~2151`) sets `['sanitizer' => fn($v) => $v]` on a `html` field, replacing `wp_kses_post` with nothing, REST writes included. *Mitigation:* no filter, no registration method on the registry; `ReflectionClass(NTDST_FieldTypes)` has exactly two public static methods (SC-1); AND (spec rev 3, T03) a declared `sanitizer` runs AFTER the registry's on its output — it composes, it cannot replace — pinned by a case where a no-op override on a `html` field still strips `<script>`. Residual: a composed sanitizer can still corrupt (not widen) — README names the override as tightening-only. (T01, T03)
+6. **The vocabulary is a closed set** (D9) — **and the per-field `sanitizer` override is the remaining door.** *Attack:* a plugin injects a type whose sanitizer is a no-op; OR a `ntdst/{model}/fields` filter (`api/Data.php:~2151`) sets `['sanitizer' => fn($v) => $v]` on a `html` field, replacing `wp_kses_post` with nothing, REST writes included. *Mitigation:* no filter, no registration method on the registry; `ReflectionClass(NTDST_FieldTypes)` has exactly two public static methods (SC-1); AND (spec rev 3, T03) a declared `sanitizer` runs AFTER the registry's on its output — it composes, it cannot replace — pinned by a case where a no-op override on a `html` field still strips `<script>`. Residual: the registry always sees the raw input; the override's output is the consumer's — README says the registry always runs and an override cannot replace it, and claims nothing about the override only tightening. (T01, T03)
 7. **A consumer boots on a retired name.** *Attack:* the site fatals at `init` with an unhelpful message. *Mitigation:* the message names the canonical (`Use 'int'.`) and the field; T07/T08 rename every declaration before any consumer updates core; README's migration table has 13 rows (SC-8). (T03, T07, T08, T09)
 
 **Explicitly out of scope:** `select` option validation; `relation` target validation; promoting the josworld YOOtheme bridge; splitting `NTDST_Data_Model`.
