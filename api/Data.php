@@ -161,10 +161,88 @@ class NTDST_Data_Model
         return $fields;
     }
 
-    /** The REST schema for one declared field, or null if it may not leave. */
+    /**
+     * The REST schema for one declared field, or null if it may not leave.
+     *
+     * A permission alone is not enough to register a field: `register_post_meta()`
+     * refuses an array or object value that arrives without a shape. This is the
+     * single place a field TYPE becomes that shape, so what a field is published
+     * as cannot drift from what it is sanitised as.
+     *
+     * The denial is the strict half — `=== true`, so a `'yes'` typo leaves the
+     * field private instead of publishing the one it misspelled.
+     */
     public function restSchemaFor(string $field): ?array
     {
-        return null;
+        $config = $this->schema[$field] ?? null;
+
+        if (!is_array($config) || ($config['show_in_rest'] ?? false) !== true) {
+            return null;
+        }
+
+        return $this->schemaForType((string) ($config['type'] ?? 'string'), $config);
+    }
+
+    /**
+     * One type name, one published shape.
+     *
+     * The type VOCABULARY stays where it already lives. getDefaultSanitizer() is
+     * asked first, so an unknown type fails there, with its message — a second
+     * list of type names that could fall out of step with it never exists. The
+     * match below therefore carries no default arm: a type this layer learns to
+     * sanitise but not to publish must fail loudly instead of picking a shape.
+     *
+     * A repeater is closed behind its declared sub-fields. The parent may leave;
+     * nothing inside it that stayed silent leaves with it.
+     *
+     * @param array<string, mixed> $config
+     * @return array<string, mixed>
+     */
+    private function schemaForType(string $type, array $config): array
+    {
+        // Ask the sanitizer table what this type name means. Only its verdict is
+        // wanted here, not the sanitizer — a typo throws on the way through.
+        $this->getDefaultSanitizer($type);
+
+        if ($type === 'repeater') {
+            $sub_fields = is_array($config['sub_fields'] ?? null) ? $config['sub_fields'] : [];
+            $properties = [];
+
+            foreach ($sub_fields as $sub => $sub_config) {
+                if (!is_array($sub_config) || ($sub_config['show_in_rest'] ?? false) !== true) {
+                    continue;
+                }
+
+                $properties[(string) $sub] = $this->schemaForType(
+                    (string) ($sub_config['type'] ?? 'string'),
+                    $sub_config,
+                );
+            }
+
+            return [
+                'type' => 'array',
+                'items' => [
+                    'type' => 'object',
+                    'properties' => $properties,
+                    'additionalProperties' => false,
+                ],
+            ];
+        }
+
+        return match ($type) {
+            'int', 'integer', 'signed_int', 'image', 'file' => ['type' => 'integer'],
+            'float', 'double' => ['type' => 'number'],
+            'bool', 'boolean' => ['type' => 'boolean'],
+            'text', 'textarea', 'html', 'content', 'wysiwyg', 'select', 'date' => ['type' => 'string'],
+            'email' => ['type' => 'string', 'format' => 'email'],
+            'url' => ['type' => 'string', 'format' => 'uri'],
+            'array' => ['type' => 'array', 'items' => ['type' => 'string']],
+            'gallery', 'relation', 'post_relation', 'person' => [
+                'type' => 'array',
+                'items' => ['type' => 'integer'],
+            ],
+            'json' => ['type' => 'object', 'additionalProperties' => true],
+        };
     }
 
     /**
