@@ -393,6 +393,38 @@ Rough size: −250 lines, and one less wire shape (today there are two JSON erro
 envelopes, documented as "do not unify — each has live consumers"; after D2 the
 consumers of one of them are gone and WordPress owns the other).
 
+**D2d — `core/Pages.php` (493 lines) audited against WordPress 7.0.4 (02:50).**
+Consumers on current-core sites: daan `CardService` (`path('/card')`,
+`path('/card/contact.vcf')`), josworld `TeamService` (`single('team')`,
+`redirect()`), plus `single`/`page`/`archive`/`when` ≈ 4 each via Theme.
+
+| feature | WordPress has | verdict |
+|---|---|---|
+| `path()` — compiles `:param` to a regex, matches `REQUEST_URI` inside `template_include`, then un-404s (`commitOk()`: `$wp_query->is_404 = false`) and suppresses `redirect_canonical` (`preventRedirectForRoutes`) | `add_rewrite_rule()` (`rewrite.php:140`), `add_rewrite_tag()` / the `query_vars` filter (`class-wp.php:311`), `template_redirect` (`template-loader.php:23`), `flush_rewrite_rules()` (`rewrite.php:278`) | **against WordPress.** WP parses the request, finds no rule, marks 404; Pages then flips the flag back and blocks the canonical redirect — two fights with the loader to make an unknown URL work. Rewrap: `path()` registers a rewrite rule + query vars from the same `:param` pattern and dispatches on `template_redirect` reading `get_query_var()`. WP knows the URL: no `is_404` flipping, no `redirect_canonical` filter, `url()` is `home_url()` over the same pattern. Flush when the rule set changes (hash in an option — the plugin idiom). `POST`-only pages stay a method check in the dispatcher |
+| `resolveRouteResult()` / `commitOk()` / the deferred-404 seam | — | exists only because `path()` fights the 404; goes with the rewrap. The "refuse" arm becomes `$wp_query->set_404(); status_header(404)` — WP's words |
+| `template()` / `single()` / `page()` / `archive()` on `{$type}_template` | the filter | wrap ✔ — **one ruling to record:** a callback returns a template *path* (via `NTDST_Template_Loader::page()`), never renders-and-exits inside the filter. Exiting inside `{$type}_template` skips `wp_head`/`wp_footer` and every later filter; returning the path is how WP's loader is meant to be used. josworld's `single('team')` exits with a redirect — fine for a redirect, not for a render |
+| `when()` on `template_include` | the filter | wrap ✔, same ruling |
+| `url()` | `home_url()` | wrap ✔ keep |
+| `redirect()` | `wp_safe_redirect()` | third redirect wrapper in core (`Response::redirect()`, `ntdst_redirect()`, `Pages::redirect()`) — keep **one** |
+| `ntdst_pages()` on `init` | — | fine |
+
+**D2e — `core/Theme.php` (529 lines) audited against WordPress 7.0.4.** daan
+constructs it from `theme-config.php` and binds a Vite hook; method use across
+the four sites: `mixin` 20, `get` 15, `mail` 8, `filter` 8, `on` 7, `when` 4,
+`templatePath` 4, `single`/`page`/`archive` 4 each, `style`/`script` 0.
+
+| feature | WordPress has | verdict |
+|---|---|---|
+| config → `load_theme_textdomain`, `add_theme_support`, `add_image_size` + `image_size_names_choose`, `register_nav_menus`, `register_sidebar`, `excerpt_length` / `excerpt_more`, `$content_width`, all on `after_setup_theme` | every one a WP function on WP's own hook | **wrap ✔** — declarative config over WP's setup calls. This is the convention layer doing its job |
+| `the_generator` → `''` | WP filter; **baseline `HeadCleanupService:143–145` already does it** | duplicate → remove from Theme; baseline owns head cleanup (never a second home) |
+| `excerpt_length` forced to 55 | WP's default is 55 | register the filter only when config sets a value |
+| `on()` / `filter()` | `add_action` / `add_filter` | pass-throughs whose only value is the chain — that *is* the facade; keep |
+| `style()` / `script()` deferred to `wp_enqueue_scripts` | `wp_enqueue_style` / `wp_enqueue_script(…, $args)` — since 6.3 `$args` is an array with `strategy` (defer/async), bool kept for back-compat (`functions.wp-scripts.php:481`) | `script()`'s `bool $in_footer` **narrows WP's API** (philosophy §1: "narrowing sends consumers back to the raw call"). Zero consumers; daan enqueues through its own Vite hook. Drop both |
+| `when()` | — | trivial `if`; harmless |
+| `templatePath()` | loader | wrap ✔ |
+| `single()` / `page()` / `archive()` forwarders onto Pages | — | the file calls them "a second public surface that has to track its owner's signature" and records two repairs. `$theme->pages()->single()` is one hop. One name per concept → drop the forwarders (12 call sites fleet-wide; fleet breaking is accepted). Decision, recommendation: drop |
+| `mixin()` / `__call()` — instance proxy + Reflection method-injection | nothing in WP; core's own composition | keep; the proxy form is what sites use (`mail()`, `data()`, `slug()`), the Reflection form is the heavier half — count its users in the spec before keeping both |
+
 **D3 — Same major, or a 6.0.0?** 5.0.0 is unreleased; nobody has taken it. Two
 majors in one week is worse than one larger one. Recommendation: all of this is
 5.0.0.
