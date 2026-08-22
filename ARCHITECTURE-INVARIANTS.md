@@ -95,7 +95,7 @@ marks the ONE pending declaration it was chained onto, and nothing else.
 handler body instead of on the route; a second permission registry; a
 `public_actions`-style list of names that may go without a gate.
 **Mechanical check:** `grep -rn "__return_true\|=> 'public'\|->public()\|public_actions" --include=*.php . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/"` → every route hit is a `GET`. Today the hits are: `services/Mailer.php:574`, a DOCBLOCK IDIOM (`add_filter('ntdst_wrap_all_emails', '__return_true')` — a filter switch, not a route permission), and `api/Actions.php`'s `$public_actions` + its `ntdst/api/public_actions` filter, which is the second permission registry this invariant forbids and which leaves with `Actions.php` in phase 3. A site asserts its anonymous surface with `rest_get_server()->get_routes($ns)` filtered on `permission_callback === '__return_true'` — WordPress's registry, not ours.
-**Status:** established by Cluster 2 (T04–T06); code holds at `088d414` for
+**Status:** established by Cluster 2 (T04–T06); code holds at `d91e117` for
 routes through `ntdst_rest()`; `Actions.php:132,147` + `$public_actions` register
 their own routes outside it until phase 3; flips to holds-today at FR-16.
 
@@ -132,7 +132,7 @@ audit that applied it.
 that re-implements a lookup WordPress's own function answers; a hand-written
 list of template names; a `{success, data}` array built by hand.
 **Mechanical check:** `grep -rn "private static array\|protected static array" --include=*.php api core admin support services` → each hit is either a WordPress-less concern (rate buckets, template dirs, declared limits), a named deliberate exception below, or a bypass.
-**Status:** `Rest::$surface` and `Rest::$cors['origins']` are gone at `088d414`
+**Status:** `Rest::$surface` and `Rest::$cors['origins']` are gone at `d91e117`
 (Cluster 2, T05–T06): the route register is `WP_REST_Server::get_routes()` and
 the origin list is `allowed_http_origins`. Outstanding, for phase 4:
 `Response::$mimeTypes`, `Template_Loader::templateInclude()`'s hand-listed
