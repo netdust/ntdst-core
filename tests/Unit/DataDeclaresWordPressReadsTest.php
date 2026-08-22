@@ -175,13 +175,17 @@ final class DataDeclaresWordPressReadsTest extends TestCase
     /**
      * The behaviour says "including a sub-field inside a declared repeater",
      * and a repeater's sub-field may itself be a repeater. Depth is not a
-     * special case: EVERY object the schema opens must be closed behind the
-     * names that opted in, or an undeclared grandchild rides out inside a
-     * declared parent — which is the disclosure the cluster exists to prevent.
+     * special case, and a partial publication is not an option: WordPress
+     * validates the stored row against the schema it was given, so a repeater
+     * published without one of its keys reads back null, refuses a write that
+     * carries that key, and loses it on a write that does not. An undeclared
+     * grandchild therefore makes the whole top-level field unpublishable — the
+     * name never leaves, and neither does anything around it.
      */
-    public function testAnUndeclaredGrandchildNeverLeavesInsideADeclaredRepeater(): void
+    public function testAnUndeclaredGrandchildKeepsTheWholeRepeaterOffWordPress(): void
     {
         $this->declareModel('gig', [
+            'venue_city'  => ['type' => 'text', 'show_in_rest' => true],
             'provenance' => [
                 'type' => 'repeater',
                 'show_in_rest' => true,
@@ -199,10 +203,41 @@ final class DataDeclaresWordPressReadsTest extends TestCase
             ],
         ]);
 
-        $call = $this->callFor('_gig_provenance');
-        $schema = $call[2]['show_in_rest']['schema'] ?? null;
+        $encoded = implode('', array_map(fn(array $c) => $this->encodeRegistration($c), $this->metaCalls));
 
-        $this->assertIsArray($schema, 'A declared repeater must travel as a full schema.');
+        $this->assertSame(['_gig_venue_city'], $this->metaKeys(), 'The repeater is not publishable; the scalar is.');
+        $this->assertStringNotContainsString('hammer_price', $encoded);
+        $this->assertStringNotContainsString('lot_number', $encoded);
+        $this->assertStringNotContainsString('provenance', $encoded);
+    }
+
+    /**
+     * The publishable version of the same tree: every name at every depth opted
+     * in. It travels as one closed schema, so WordPress accepts the stored rows
+     * and no key that was never named can ride along inside them.
+     */
+    public function testAFullyDeclaredNestedRepeaterTravelsClosedAtEveryLevel(): void
+    {
+        $this->declareModel('gig', [
+            'provenance' => [
+                'type' => 'repeater',
+                'show_in_rest' => true,
+                'sub_fields' => [
+                    'year' => ['type' => 'text', 'show_in_rest' => true],
+                    'lots' => [
+                        'type' => 'repeater',
+                        'show_in_rest' => true,
+                        'sub_fields' => [
+                            'lot_number' => ['type' => 'int', 'show_in_rest' => true],
+                        ],
+                    ],
+                ],
+            ],
+        ]);
+
+        $schema = $this->callFor('_gig_provenance')[2]['show_in_rest']['schema'] ?? null;
+
+        $this->assertIsArray($schema, 'A fully declared repeater must travel as a full schema.');
 
         // Level 1 — the declared repeater itself.
         $this->assertSame('array', $schema['type']);
@@ -222,10 +257,6 @@ final class DataDeclaresWordPressReadsTest extends TestCase
             $inner['items']['additionalProperties'],
             'The nested object must be closed too — depth is not an exemption.',
         );
-
-        // And the invariant behind both, stated so no encoding can carry the
-        // undeclared name out of the model.
-        $this->assertStringNotContainsString('hammer_price', $this->encodeRegistration($call));
     }
 
     // -- 2. A realistic model: the gig ---------------------------------------
@@ -271,6 +302,52 @@ final class DataDeclaresWordPressReadsTest extends TestCase
             ['gig', 'gig'],
             array_map(static fn(array $call) => $call[0], $this->metaCalls),
             'Meta is registered against the post type that was just registered.',
+        );
+    }
+
+    /**
+     * SC-1, exactly: the key set WordPress is given EQUALS the declared set —
+     * no extra, no missing. `custom-fields` widens the `meta` object of the
+     * type, so "the declared ones are in there somewhere" is not the promise;
+     * the promise is that the response carries those keys and no others.
+     * Order is not part of it.
+     */
+    public function testTheRegisteredKeySetIsExactlyTheDeclaredSet(): void
+    {
+        $this->declareModel('gig', $this->gigFields());
+
+        $registered = array_map(
+            static fn(string $key): string => (string) preg_replace('/^_gig_/', '', $key),
+            $this->metaKeys(),
+        );
+
+        $declared = ['venue_city', 'venue_country'];
+
+        sort($registered);
+        sort($declared);
+
+        $this->assertSame($declared, $registered, 'The registered keys are the declared fields, exactly.');
+        $this->assertSame([], array_diff($registered, $declared), 'No key WordPress was not owed.');
+        $this->assertSame([], array_diff($declared, $registered), 'No declared field left unpublished.');
+    }
+
+    /**
+     * A declared `json` blob is the one declaration WordPress must NOT be told
+     * about: nothing inside it was ever named, so publishing it hands every key
+     * of every stored row to an anonymous caller — the daan field that answered
+     * `{"k":"v","n":1}` to a logged-out curl.
+     */
+    public function testADeclaredJsonBlobNeverReachesWordPress(): void
+    {
+        $fields = $this->gigFields();
+        $fields['settlement_blob'] = ['type' => 'json', 'show_in_rest' => true];
+
+        $this->declareModel('gig', $fields);
+
+        $this->assertSame(['_gig_venue_city', '_gig_venue_country'], $this->metaKeys());
+        $this->assertStringNotContainsString(
+            'settlement_blob',
+            implode('', array_map(fn(array $c) => $this->encodeRegistration($c), $this->metaCalls)),
         );
     }
 
