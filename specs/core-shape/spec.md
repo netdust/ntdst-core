@@ -1,6 +1,6 @@
 # core-shape — ntdst-core 5.0.0: declare in Data, route through Rest, WordPress does the rest
 
-**Status:** spec, revision 2 (2026-08-22 — Cluster 1 gate rulings approved by Stefan: FR-1 attribution, FR-2 json and repeater rows, FR-3 readers, SC-1 path, assumption on `additionalProperties`; revision 1 2026-08-23 09:40 — ground-truth amendments to FR-2, FR-9, FR-14, SC-10, two assumptions) — written 2026-08-23 from the rulings in
+**Status:** spec, revision 3 (2026-08-22 — Cluster 2 gate rulings: FR-6 declared origins apply to REST requests only; FR-4 a string permission is a capability; `defaults()` may set a posture, never an opening; write-verb rule is a READ allow-list; revision 2 2026-08-22 — Cluster 1 gate rulings approved by Stefan: FR-1 attribution, FR-2 json and repeater rows, FR-3 readers, SC-1 path, assumption on `additionalProperties`; revision 1 2026-08-23 09:40 — ground-truth amendments to FR-2, FR-9, FR-14, SC-10, two assumptions) — written 2026-08-23 from the rulings in
 `docs/plans/2026-08-23-core-shape-brief.md`, confirmed in brainstorming the same
 morning. Awaiting Stefan's review, then `writing-plans`.
 **Target release:** v5.0.0 (breaking, unreleased — the 5.0.0 `Rest` rewrite is
@@ -75,11 +75,11 @@ they do not inform the design (D5).
 
 ### Phase 2 — Rest is the one surface, internal by default
 
-- **FR-4:** A route registered through `ntdst_rest()` with no `permission` is internal: its `permission_callback` is the string `'is_user_logged_in'`. `->public()` on the last-registered route sets `'__return_true'`. A string capability resolves to `current_user_can($cap)`. A write verb (`POST`, `PUT`, `PATCH`, `DELETE`) that names no capability is refused with one `_doing_it_wrong` and does not register. `show_in_index` is forwarded untouched. Establishes INV-3.
+- **FR-4:** A route registered through `ntdst_rest()` with no `permission` is internal: its `permission_callback` is the string `'is_user_logged_in'`. `->public()` on the last-registered route sets `'__return_true'`. A string capability resolves to `current_user_can($cap)`. A write verb (`POST`, `PUT`, `PATCH`, `DELETE`) that names no capability is refused with one `_doing_it_wrong` and does not register. `show_in_index` is forwarded untouched. Establishes INV-3. Revision 3 (Cluster 2 gate): any unrecognised string is a capability — never a function name (`edit_post`, `activate_plugins`, `wp_is_json_request` are also global functions; a string must never gate a write as a function); the write-verb rule is a READ allow-list (`GET`, `HEAD`, `OPTIONS`) so a custom verb is a write; `defaults()` may set a posture (`'logged_in'`, a capability) but never an opening (`'public'` or a callable is refused and dropped), and defaults are frozen into a declaration when its verb runs; `->public()` marks only the declaration its verb returned and refuses loudly after that declaration has flushed.
   Source: D2a, D2b, D2c — Stefan 2026-08-22 01:20 "everything is default internal unless we set them public"; 2026-08-23 "Refused — does not register"; "No — separate word"
 - **FR-5:** `NTDST_Rest::surface()`, `publicSurface()`, `opaqueSurface()`, `forgetSurface()` and the `$surface` property are removed. README shows the three-line assertion over `rest_get_server()->get_routes($ns)` filtered on `permission_callback === '__return_true'`. Establishes INV-5.
   Source: D2d — Stefan 2026-08-22 01:30 "publicSurface(), what is this?"; brief ruling "delete it"
-- **FR-6:** `cors([...])` adds the origins to WordPress's `allowed_http_origins` filter and keeps no list of its own; `sendCors()` decides with `is_allowed_http_origin()`, fails closed, sends `Access-Control-Allow-Credentials` only when `cors()` was asked, refuses `'*'`. `corsDecision()` stays a pure function over the WordPress list. Establishes INV-5.
+- **FR-6:** `cors([...])` adds the origins to WordPress's `allowed_http_origins` filter **while a REST request is being served** (`wp_is_serving_rest_request()`; revision 3 — `send_origin_headers()` on admin-ajax/admin-post/the customizer grants `Access-Control-Allow-Credentials: true` unconditionally, so a REST declaration must not widen those surfaces) and keeps no list of its own; credentials are a per-origin attribute (revision 3); `sendCors()` decides with `is_allowed_http_origin()`, fails closed, sends `Access-Control-Allow-Credentials` only when `cors()` was asked, refuses `'*'`. `corsDecision()` stays a pure function over the WordPress list. Establishes INV-5.
   Source: D2e — Stefan 2026-08-22 02:00 "we don't invent if wordpress has options for it"; 2026-08-23 "Off unless asked"
 
 ### Phase 3 — Actions out
@@ -137,7 +137,7 @@ The plan owes a `## Threat model`.
 - [x] **CSRF / session** — core stops minting nonces; cookie-authenticated REST relies on `rest_cookie_check_errors()`. Removing `verifyOrigin()` is recorded as guarding nothing the nonce rule does not (brief D2).
 - [x] **Untrusted parsing** — relation-search params (`search`, `post_type[]`); rewrite-rule `:param` values reaching `get_query_var()`; both sanitized as today.
 - [x] **Rate limiting** — unchanged primitive (INV-7); the relation-search route declares a `rate_limit`.
-- [x] **CORS** — the list moves to `allowed_http_origins`, which admin-ajax also reads: widening it for REST widens it for admin-ajax. Stated in README; the fail-closed emitter stays.
+- [x] **CORS** — the list moves to `allowed_http_origins`, which admin-ajax also reads. Revision 3: the declared origins are appended only while serving a REST request, so admin-ajax/admin-post/the customizer keep WordPress's defaults (they would otherwise grant credentials unconditionally — a declared origin could read `admin-ajax.php?action=rest-nonce` and ride the victim's session). Stated in README; the fail-closed emitter stays.
 
 ## User-facing surfaces
 
