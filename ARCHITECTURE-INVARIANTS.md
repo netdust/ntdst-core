@@ -11,6 +11,12 @@ Each entry says whether it **holds today** or is **established by** a phase of
 The governing rule behind all of them is `docs/philosophy.md` §1: wrap WordPress,
 never replace it — where WordPress has a word, core uses it.
 
+**Run the checks with the `-E` form.** `grep` on this machine is **ugrep**, which
+prints a recursive hit as `api/Data.php` where GNU grep prints `./api/Data.php`.
+An exclusion anchored on `^./` therefore matches nothing, and the check passes for
+the wrong reason. Every exclusion below is written
+`grep -vE "^(\./)?<file>|(^|/)vendor/|(^|/)tests/"` so it holds under both.
+
 ---
 
 ## INV-1 — A post-meta field reaches an HTTP surface only if its description names it
@@ -23,16 +29,30 @@ it never shapes a response.
 declared field to `NTDST_Data_Model::registerRestMeta()`, which is the only caller of
 `register_post_meta()`. The declaration itself has ONE reader:
 `NTDST_Data_Model::declaresRest()` — the strict `show_in_rest === true` test, written
-once. Its callers are `restFields()` (which fields), `restSubFields()` (the same
-question one level down), `restSchemaFor()` (in what shape) and `registerRestMeta()`
-(which decides through the first two). A sixth site re-spelling the predicate is a
-bypass even when it agrees, because agreeing today is not the same as converging.
+once. Its callers are `restFields()` (which fields may leave), `schemaFor()` (in what
+shape, asked again at EVERY depth — the recursion is the guard, so one silent
+sub-field makes the whole field unpublishable) behind the public `restSchemaFor()`,
+and `restSubFields()` (the same question one level down, kept because consumers read
+it — FR-3). `registerRestMeta()` never tests the declaration itself; it decides
+entirely through the first two. A further site re-spelling the predicate is a bypass
+even when it agrees, because agreeing today is not the same as converging.
+`registerRestMeta()` is `public` by necessity — `NTDST_Data_Manager::register()` is a
+different class — and it fails closed on anything it cannot publish: a field with no
+schema registers nothing, and a field whose type is foreign to the vocabulary throws
+inside a per-field `try/catch` that unpublishes that one field rather than aborting
+`init` and taking the post type off the site.
 **Bypass smell:** `register_post_meta()` / `register_meta()` called outside
 `api/Data.php`; a route handler returning a row or `getMeta()` bag without
 projecting through `restFields()`; any `public_fields` / `public_shape` /
 `PUBLIC_SHAPE`-style allow-list; a `private`, `hidden` or `exposed` key on a field.
-**Mechanical check:** `grep -rn "register_post_meta\|register_meta(" --include=*.php . | grep -vE "^(\./)?api/Data\.php|(^|/)vendor/|(^|/)tests/"` → empty. (The `-E` form and the optional `./` are load-bearing: GNU grep prints `./api/Data.php` but ugrep prints `api/Data.php`, so an anchored `^./` exclusion silently matched nothing and the check passed for the wrong reason.) Second: `grep -rn "show_in_rest" --include=*.php api/Data.php` → every hit is `declaresRest()` itself, a docblock, or an ARG being written to `register_post_meta()` / `register_taxonomy()`; no second READER of the declaration. `grep -rn "public_fields\|public_shape\|publicRow" --include=*.php . | grep -vE "(^|/)vendor/|(^|/)tests/"` → empty. (`tests/` is excluded for a reason, not for convenience: `tests/Unit/DataDropsExposureTest.php` is the test that ENFORCES this ban, and it has to name the banned vocabulary in order to forbid it. Without the exclusion the check reports its own enforcement as the violation.)
-**Status:** established by phase 1.
+**Mechanical check:** `grep -rn "register_post_meta\|register_meta(" --include=*.php . | grep -vE "^(\./)?api/Data\.php|(^|/)vendor/|(^|/)tests/"` → empty. (The `-E` form and the optional `./` are load-bearing: GNU grep prints `./api/Data.php` but ugrep prints `api/Data.php`, so an anchored `^./` exclusion silently matched nothing and the check passed for the wrong reason.) Second: `grep -rn "show_in_rest" --include=*.php api/Data.php` → every hit is `declaresRest()` itself, a docblock, or an ARG being written to `register_post_meta()` / `register_taxonomy()`; no second READER of the declaration. `grep -rn "public_fields\|public_shape\|publicRow" --include=*.php . | grep -vE "(^|/)vendor/|(^|/)tests/"` → empty. (`tests/` is excluded for a reason, not for convenience: `tests/Unit/DataDropsExposureTest.php` is the test that ENFORCES this ban, and it has to name the banned vocabulary in order to forbid it. Without the exclusion the check reports its own enforcement as the violation.) The `show_in_rest` check has one hit that is NOT about a field: `NTDST_Data_Manager::register()` reads `$args['show_in_rest']` of the POST TYPE, to warn when a declaration can reach no route. That is a different key on a different thing, not a second reader.
+**Deliberate exceptions:**
+- A model with no `label` registers no post type and therefore no meta, and warns once per model.
+- A post type that is not itself in REST (`show_in_rest` absent or false) still registers its meta — WordPress emits none of it — and warns once per model.
+- `json` and any partially-declared repeater are **not publishable at all**, and each warns once per model. Half a repeater is not half published: WordPress validates the stored row against the closed schema, so the value reads back `null`, a write carrying the undeclared key is refused 400, and a legal write drops that key from storage.
+- A scalar registers `show_in_rest => true` rather than a schema, so `format` (email, uri) is advisory only. A `format` in the schema would validate stored legacy values and read them back as `null`; the model's sanitizer, not the schema, is what enforces the shape (DD-9).
+**Status:** established by Cluster 1 (T02–T03); code holds at `b52b855`; flips to
+holds-today at the release commit (FR-16).
 
 ## INV-2 — One HTTP surface: every route registers through `ntdst_rest()`
 
@@ -44,7 +64,7 @@ caller of `register_rest_route()` in the package.
 **Bypass smell:** `register_rest_route(` anywhere else; `add_action('wp_ajax_`;
 an `ntdst/api_data/` or `ntdst/api/` dispatch filter; a route whose permission
 is decided somewhere other than its registration.
-**Mechanical check:** `grep -rn "register_rest_route(\|wp_ajax_\|ntdst/api_data\|ntdst_actions" --include=*.php --include=*.js . | grep -v "^./api/Rest.php\|/vendor/\|/tests/"` → empty.
+**Mechanical check:** `grep -rn "register_rest_route(\|wp_ajax_\|ntdst/api_data\|ntdst_actions" --include=*.php --include=*.js . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/"` → empty.
 **Status:** established by phase 3 (today `api/Actions.php` and
 `admin/RelationField.php:47` violate it).
 
@@ -54,6 +74,10 @@ A route is reachable without login only through `->public()`. A route that says
 nothing is `is_user_logged_in`. A write verb (`POST`/`PUT`/`PATCH`/`DELETE`) that
 names no capability does not register.
 
+This governs the routes CORE REGISTERS. The anonymous reach of declared DATA over
+WordPress's own `/wp/v2` is not decided here — it is INV-1's decision, taken by the
+field description, and `/wp/v2` is anonymous-readable by WordPress's design.
+
 **Convergence point:** `api/Rest.php` — `NTDST_Rest::permission()` resolves the
 three states to WordPress's own callables (`__return_true`,
 `'is_user_logged_in'`, `current_user_can`) and `registerOne()` refuses the
@@ -61,7 +85,7 @@ unnamed write.
 **Bypass smell:** `'permission' => '__return_true'` or a closure that returns
 `true` unconditionally; `->public()` on a write; a capability check inside a
 handler body instead of on the route; a second permission registry.
-**Mechanical check:** `grep -rn "__return_true\|=> 'public'\|->public()" --include=*.php . | grep -v "^./api/Rest.php\|/vendor/\|/tests/"` → every hit is a `GET`. A site asserts its anonymous surface with `rest_get_server()->get_routes($ns)` filtered on `permission_callback === '__return_true'` — WordPress's registry, not ours.
+**Mechanical check:** `grep -rn "__return_true\|=> 'public'\|->public()" --include=*.php . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/"` → every hit is a `GET`. A site asserts its anonymous surface with `rest_get_server()->get_routes($ns)` filtered on `permission_callback === '__return_true'` — WordPress's registry, not ours.
 **Status:** established by phase 2 (today: no default — unnamed routes are refused — and `publicSurface()` keeps a second registry).
 
 ## INV-4 — CSRF and nonces are WordPress's; core mints nothing
@@ -129,7 +153,7 @@ the permission has passed — a refused caller never makes the site write.
 **Bypass smell:** a transient or option that counts attempts outside
 `RateLimiter`; `attempt()` called before the permission check; a limiter keyed
 on `$_SERVER['REMOTE_ADDR']` instead of `NTDST_ClientIp`.
-**Mechanical check:** `grep -rn "set_transient\|get_transient" --include=*.php api core admin services` → only `support/RateLimiter.php` (and `Mailer`'s own, see exceptions). In `guard()`, `$permission($request)` precedes `RateLimiter::attempt`.
+**Mechanical check:** `grep -rn "set_transient\|get_transient" --include=*.php api core admin services support` → only `support/RateLimiter.php` counts attempts. (`support` is in the list on purpose: without it the check never reads the one file it is about. `admin/MetaboxGenerator.php`'s `SAVE_ERROR_TRANSIENT_PREFIX` is a hit and not a counter — it parks one save-error MESSAGE for one redirect and is consumed on read.) In `guard()`, `$permission($request)` precedes `RateLimiter::attempt`.
 **Status:** holds today (`f42c732`); baseline's login throttle converges on it (`ntdst-baseline` `51f7e2e`).
 
 ---

@@ -13,7 +13,7 @@ Every CORE task closes with `cd ~/Sites/ntdst-core && composer gate` exit 0 and 
 Stakes: high — this is the anonymous-exposure surface; a wrong filter or schema is disclosure on every site that updates.
 
 Behaviour: a field declared show_in_rest => true appears on WordPress's own /wp/v2/<type> endpoint for anonymous callers, and a field not declared never does — including a sub-field inside a declared repeater.
-Observable: `curl -s https://daan.ddev.site/wp-json/wp/v2/gig/<id> | jq '.meta'` lists exactly the declared keys and omits the seeded `daan_internal_promo_budget` probe.
+Observable: `curl -s https://daan.ddev.site/wp-json/wp/v2/gigs/<id> | jq '.meta'` lists exactly the declared keys and omits the seeded `daan_internal_promo_budget` probe.
 RED until: tests/Unit/DataRegistersRestMetaTest.php
 
 - [ ] T01 — daan path repo branch and the probe declarations [Tier B]  (files: composer.json, ../daan/composer.json, ../daan/web/app/mu-plugins/daan-core/services/musician/TourService.php)
@@ -34,7 +34,7 @@ RED until: tests/Unit/DataRegistersRestMetaTest.php
   Proven by: new test
   Unit test: with `register_post_meta` captured through Brain Monkey `Functions\expect()`, a model with 3 fields declared `show_in_rest => true` (one repeater) and 2 undeclared yields exactly 3 calls, each with `$postType`, the prefixed meta key, `type` from restSchemaFor(), `single => true`, a callable `sanitize_callback` that equals the model's sanitizer for that field, an `auth_callback` that returns `user_can($userId, 'edit_post', $postId)`, and `show_in_rest` equal to `true` for scalars and `['schema' => …]` for array/object types; a model with 0 declared fields yields 0 calls and `register_post_type` receives `supports` WITHOUT `custom-fields`; with ≥1 declared field `register_post_type` receives `supports` containing `custom-fields` exactly once (not duplicated when the site already lists it); a field declared `show_in_rest => 'yes'` (non-strict true) is NOT registered.
 
-Integration gate: `cd ~/Sites/ntdst-core && composer gate && cd ~/Sites/daan && git checkout chore/core-path-repo && ddev composer update netdust/ntdst-core && curl -s https://daan.ddev.site/wp-json/wp/v2/gig/$(ddev exec wp post list --post_type=gig --format=ids | cut -d' ' -f1) | jq '.meta'`
+Integration gate: `cd ~/Sites/ntdst-core && composer gate && cd ~/Sites/daan && git checkout chore/core-path-repo && ddev composer update netdust/ntdst-core && curl -s https://daan.ddev.site/wp-json/wp/v2/gigs/$(ddev exec wp post list --post_type=gig --format=ids | cut -d' ' -f1) | jq -e '(.meta | keys) == ["venue_city","venue_country"]'` — `gigs` is daan's `rest_base`, and the jq asserts the key set EXACTLY (exit 1 on any extra or missing key), because `custom-fields` widens the `meta` object beyond what this package declared.
 
 ── REVIEW GATE ── *(provisional tier: FULL — reviewer + security-sentinel + invariant-auditor + code-simplicity)*
 
