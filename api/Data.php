@@ -99,18 +99,9 @@ class NTDST_Data_Model
     }
 
     /**
-     * The one reading of the declaration, for every caller that asks.
-     *
-     * WordPress's key with WordPress's default: OPT IN, and strictly. `=== true`,
-     * so `'yes'`, `1` and `'true'` are typos that leave the field private rather
-     * than near-misses that publish it. A config that is not a description at all
-     * — a bare type string like `'price' => 'int'` — never named anything either.
-     *
-     * It lives alone because the whole exposure rule rests on it (INV-1). This was
-     * once spelled out at five sites that happened to agree; five agreeing copies
-     * of a rule is five chances to drift, on the one surface where drifting means
-     * a private field leaves. Callers: restFields(), restSubFields() (both levels),
-     * restSchemaFor(), and through them registerRestMeta().
+     * The one reading of the declaration: WordPress's key with WordPress's default,
+     * OPT IN and strictly `=== true`, so `'yes'`, `1` and a bare type string all
+     * leave the field private. It lives alone because the exposure rule rests on it.
      */
     private function declaresRest(mixed $config): bool
     {
@@ -184,117 +175,174 @@ class NTDST_Data_Model
      * The REST schema for one declared field, or null if it may not leave.
      *
      * A permission alone is not enough to register a field: `register_post_meta()`
-     * refuses an array or object value that arrives without a shape. This is the
-     * single place a field TYPE becomes that shape, so what a field is published
-     * as cannot drift from what it is sanitised as.
-     *
-     * The denial is the strict half — `=== true`, so a `'yes'` typo leaves the
-     * field private instead of publishing the one it misspelled.
+     * refuses an array or object value that arrives without a shape. One place
+     * decides that shape, so a field cannot be published as two things — note that
+     * the shape is not the sanitiser's: `array` sanitises nested but publishes a
+     * flat list of strings, and `json` publishes nothing at all.
      */
     public function restSchemaFor(string $field): ?array
     {
-        $config = $this->schema[$field] ?? null;
-
-        if (!$this->declaresRest($config)) {
-            return null;
-        }
-
-        return $this->schemaForType((string) ($config['type'] ?? 'string'), $config);
+        return $this->schemaFor($this->schema[$field] ?? null);
     }
 
     /**
-     * Hand every declared field to WordPress's own meta registry.
+     * Hand every publishable declared field to WordPress's own meta registry.
      *
-     * restFields() says WHICH fields may leave and restSchemaFor() says in what
-     * SHAPE; this is where those two answers become the registration WordPress
-     * reads when it builds `/wp/v2/<type>`. The loop asks those same two
-     * methods, so no second opt-in test exists here to fall out of step with
-     * them — and this file stays the only caller of register_post_meta()
-     * (INV-1), which is what keeps the exposure decision in one place.
+     * restFields() says which fields may leave and schemaFor() says in what shape,
+     * or that there is no shape it can publish; this file stays the only caller of
+     * register_post_meta() (INV-1), which keeps that decision in one place.
      *
-     * A registration is a WRITE surface as much as a read one, so both
-     * callbacks are real. The write is admitted by `edit_post` ON THE POST
-     * BEING WRITTEN, judged FOR THE USER WORDPRESS NAMED — map_meta_cap() hands
-     * that user id in as the fourth argument exactly because it is not always
-     * the current session. Asking current_user_can() instead answers about
-     * whoever happens to be logged in, so `user_can($other, 'edit_post_meta',
-     * $postId, $key)` from admin or WP-CLI code would be answered by the wrong
-     * person's capabilities. The incoming `$allowed` is ignored just as
-     * deliberately: passing it through would let WordPress's protected-key
-     * heuristic, or any earlier filter, decide who may write this model's meta.
-     * And the value is cleaned by the same path a create() write takes, so
-     * `/wp/v2` cannot store a value the model's own API would have refused.
+     * The write is admitted by `edit_post` ON THE POST BEING WRITTEN, judged FOR
+     * THE USER WORDPRESS NAMED — map_meta_cap() hands that subject in because it
+     * is not always the current session, so current_user_can() would answer about
+     * the wrong person. The incoming `$allowed` is ignored on purpose: honouring
+     * it would let WordPress's protected-key heuristic, or any earlier filter,
+     * decide who may write this model's meta. An array value travels with its
+     * whole closed schema, which register_post_meta() requires. And a declared
+     * field's sanitizer must be IDEMPOTENT: update_metadata() applies it again to
+     * a value this callback has already cleaned.
      *
-     * An array or object value travels with its whole schema: register_post_meta()
-     * drops one that arrives without a shape, and that schema is the CLOSED one,
-     * so a sub-field that stayed silent cannot ride out inside a parent that
-     * did not.
+     * Refusing is fine; refusing silently is not, so a declared field with no
+     * publishable shape warns once per model, and a field whose type is a typo
+     * takes only itself down — throwing here would abort `init` and take the whole
+     * post type off the site.
      */
     public function registerRestMeta(string $postType): void
     {
+        /** @var array<string, true> $warnedModels one warning per model per process */
+        static $warnedModels = [];
+
+        $refused = [];
+
         foreach ($this->restFields() as $field) {
-            $schema = $this->restSchemaFor($field);
+            try {
+                $refusal = null;
+                $schema = $this->schemaFor($this->schema[$field] ?? null, $refusal);
 
-            // Both read the same declaration, so restFields() cannot name a
-            // field restSchemaFor() then refuses. The guard is for the reader.
-            if ($schema === null) {
-                continue;
+                if ($schema === null) {
+                    $refused[] = sprintf(
+                        '`%s` (%s%s)',
+                        $field,
+                        ($refusal['path'] ?? '') === '' ? '' : sprintf('sub-field `%s`: ', $refusal['path']),
+                        (string) ($refusal['why'] ?? 'no publishable shape'),
+                    );
+
+                    continue;
+                }
+
+                $type = (string) $schema['type'];
+
+                register_post_meta($postType, $this->prefixMetaKey($field), [
+                    'type' => $type,
+                    'single' => true,
+                    'sanitize_callback' => fn($value) => $this->sanitizeField($field, $value),
+                    // Untyped and cast on purpose: map_meta_cap() hands $object_id
+                    // and $user_id through from its own $args, where either is a
+                    // numeric string as often as an int, and a typed parameter
+                    // would fatal on one. A non-scalar is refused outright rather
+                    // than cast — (int) new stdClass is a coin flip that lands on
+                    // 1, a real user id. A cast that lands on 0 denies, which is
+                    // the direction to fail in.
+                    'auth_callback' => static fn($allowed, $meta_key, $post_id, $user_id): bool
+                        => is_scalar($user_id)
+                        && is_scalar($post_id)
+                        && user_can((int) $user_id, 'edit_post', (int) $post_id),
+                    'show_in_rest' => in_array($type, ['array', 'object'], true)
+                        ? ['schema' => $schema]
+                        : true,
+                ]);
+            } catch (\Throwable $e) {
+                // One field's defect unpublishes that field. Letting it escape
+                // would abort the `init` hook that registered the post type.
+                if (function_exists('ntdst_log')) {
+                    ntdst_log('data')->error(
+                        sprintf(
+                            'Model "%s": field "%s" could not be registered for REST and is not '
+                            . 'published: %s',
+                            $this->post_type,
+                            $field,
+                            $e->getMessage(),
+                        ),
+                        ['model' => $this->post_type, 'field' => $field],
+                    );
+                }
             }
+        }
 
-            $type = (string) $schema['type'];
+        if ($refused === [] || isset($warnedModels[$this->post_type])) {
+            return;
+        }
 
-            register_post_meta($postType, $this->prefixMetaKey($field), [
-                'type' => $type,
-                'single' => true,
-                'sanitize_callback' => fn($value) => $this->sanitizeField($field, $value),
-                // Untyped and cast on purpose: map_meta_cap() hands $object_id
-                // and $user_id through from its own $args, where either is a
-                // numeric string as often as an int, and a typed parameter
-                // would fatal on one. A cast that lands on 0 denies, which is
-                // the direction to fail in.
-                'auth_callback' => static fn($allowed, $meta_key, $post_id, $user_id): bool
-                    => user_can((int) $user_id, 'edit_post', (int) $post_id),
-                'show_in_rest' => in_array($type, ['array', 'object'], true)
-                    ? ['schema' => $schema]
-                    : true,
-            ]);
+        $warnedModels[$this->post_type] = true;
+
+        if (function_exists('ntdst_log')) {
+            ntdst_log('data')->warning(
+                sprintf(
+                    'Model "%s" declares REST field(s) that have no publishable shape, so they '
+                    . 'reach no /wp/v2 response: %s. Declare every sub-field of a repeater, or '
+                    . 'drop `show_in_rest` from the field.',
+                    $this->post_type,
+                    implode('; ', $refused),
+                ),
+                ['model' => $this->post_type, 'fields' => $refused],
+            );
         }
     }
 
     /**
-     * One type name, one published shape.
+     * One config, one published shape — or null, meaning "this may not leave".
      *
-     * The type VOCABULARY stays where it already lives. getDefaultSanitizer() is
-     * asked first, so an unknown type fails there, with its message — a second
-     * list of type names that could fall out of step with it never exists. The
-     * match below therefore carries no default arm: a type this layer learns to
-     * sanitise but not to publish must fail loudly instead of picking a shape.
+     * ONE method for every depth, because the rule is the same at every depth and
+     * the recursion IS the guard: a sub-field asks this about itself, and a null
+     * anywhere below propagates all the way up. That is what makes a repeater
+     * all-or-nothing. WordPress validates a stored row against the schema it was
+     * given (class-wp-rest-meta-fields.php prepare_value), so a repeater published
+     * without one of its keys reads back null, refuses a write carrying that key,
+     * and drops it on a write that does not. Half a repeater is not half published;
+     * it is broken. `json` names no sub-fields at all, so it is never publishable.
      *
-     * A repeater is closed behind its declared sub-fields. The parent may leave;
-     * nothing inside it that stayed silent leaves with it.
+     * The type VOCABULARY stays where it already lives: getDefaultSanitizer() is
+     * asked first and a typo throws there, with its message.
      *
-     * @param array<string, mixed> $config
-     * @return array<string, mixed>
+     * @param array{path: string, why: string}|null $refusal Set when null is returned.
+     * @return array<string, mixed>|null
      */
-    private function schemaForType(string $type, array $config): array
+    private function schemaFor(mixed $config, ?array &$refusal = null): ?array
     {
+        $refusal = null;
+
+        if (!$this->declaresRest($config)) {
+            $refusal = ['path' => '', 'why' => 'it never declared `show_in_rest => true`'];
+
+            return null;
+        }
+
+        $type = (string) ($config['type'] ?? 'string');
+
         // Ask the sanitizer table what this type name means. Only its verdict is
         // wanted here, not the sanitizer — a typo throws on the way through.
         $this->getDefaultSanitizer($type);
 
         if ($type === 'repeater') {
-            $sub_fields = is_array($config['sub_fields'] ?? null) ? $config['sub_fields'] : [];
             $properties = [];
+            $sub_fields = is_array($config['sub_fields'] ?? null) ? $config['sub_fields'] : [];
 
             foreach ($sub_fields as $sub => $sub_config) {
-                if (!$this->declaresRest($sub_config)) {
-                    continue;
+                $inner = null;
+                $sub_schema = $this->schemaFor($sub_config, $inner);
+
+                if ($sub_schema === null) {
+                    $refusal = [
+                        'path' => ($inner['path'] ?? '') === ''
+                            ? (string) $sub
+                            : (string) $sub . '.' . $inner['path'],
+                        'why'  => (string) ($inner['why'] ?? ''),
+                    ];
+
+                    return null;
                 }
 
-                $properties[(string) $sub] = $this->schemaForType(
-                    (string) ($sub_config['type'] ?? 'string'),
-                    $sub_config,
-                );
+                $properties[(string) $sub] = $sub_schema;
             }
 
             return [
@@ -307,7 +355,7 @@ class NTDST_Data_Model
             ];
         }
 
-        return match ($type) {
+        $schema = match ($type) {
             'int', 'integer', 'signed_int', 'image', 'file' => ['type' => 'integer'],
             'float', 'double' => ['type' => 'number'],
             'bool', 'boolean' => ['type' => 'boolean'],
@@ -319,8 +367,28 @@ class NTDST_Data_Model
                 'type' => 'array',
                 'items' => ['type' => 'integer'],
             ],
-            'json' => ['type' => 'object', 'additionalProperties' => true],
+            // A blob carries no sub-field vocabulary, so nothing inside one was
+            // ever named and publishing it would hand every stored key out whole.
+            'json' => null,
+
+            // The two tables are one vocabulary. getDefaultSanitizer() accepted
+            // this name and the schema table did not, so they have drifted: add
+            // the type here, or take it out of getDefaultSanitizer().
+            default => throw new InvalidArgumentException(
+                "Unknown field type '{$type}': getDefaultSanitizer() knows it and the REST "
+                . "schema table does not. Add it to schemaFor(), or remove it from "
+                . "getDefaultSanitizer() — the two tables are one vocabulary.",
+            ),
         };
+
+        if ($schema === null) {
+            $refusal = [
+                'path' => '',
+                'why'  => 'a `json` blob names no sub-fields, so nothing inside it ever opted in',
+            ];
+        }
+
+        return $schema;
     }
 
     /**
@@ -2011,6 +2079,45 @@ class NTDST_Data_Manager
     }
 
     /**
+     * A declaration that reaches no /wp/v2 response, said out loud.
+     *
+     * Refusing is right; refusing SILENTLY is not — the module asked for
+     * `show_in_rest => true` and got nothing back, with no way to find out short of
+     * reading /wp/v2 and guessing. The layer fails closed AND loudly, so name the
+     * model and say which half is missing.
+     *
+     * Once per model per process: registration runs on every `init`, and the same
+     * warning on every request is noise nobody reads.
+     *
+     * @param list<string> $declared
+     */
+    private function warnDeclarationGoesNowhere(string $name, array $declared, string $reason): void
+    {
+        /** @var array<string, true> $warned */
+        static $warned = [];
+
+        if (isset($warned[$name]) || !function_exists('ntdst_log')) {
+            return;
+        }
+
+        $warned[$name] = true;
+
+        ntdst_log('data')->warning(
+            sprintf(
+                'Model "%s" declares %d REST field(s) that reach no /wp/v2 response: %s. Fix that, '
+                . 'or drop `show_in_rest` from the fields that cannot be published.',
+                $name,
+                count($declared),
+                $reason,
+            ),
+            [
+                'model'  => $name,
+                'fields' => $declared,
+            ],
+        );
+    }
+
+    /**
      * Register a new data model
      *
      * @param  string $name   Post type name
@@ -2028,10 +2135,8 @@ class NTDST_Data_Manager
         $config['fields'] = apply_filters("ntdst/{$name}/fields", $config['fields'] ?? []);
         $config['field_groups'] = apply_filters("ntdst/{$name}/field_groups", $config['field_groups'] ?? []);
 
-        // The model is built BEFORE the post type now, because `supports` has to
-        // know whether anything opted in and restFields() is the one place that
-        // question is answered. Nothing is stored yet — a register_post_type()
-        // failure below still returns without leaving a model behind.
+        // Built BEFORE the post type: `supports` has to know whether anything opted
+        // in, and restFields() is the one place that is answered. Nothing is stored yet.
         $model = new NTDST_Data_Model(
             $name,
             $config['fields'] ?? [],
@@ -2061,16 +2166,15 @@ class NTDST_Data_Manager
                 'taxonomies',
             ])));
 
-            // `custom-fields` is the switch that makes WordPress emit `meta` at
-            // all (class-wp-rest-posts-controller.php checks
-            // post_type_supports() before it adds the field), so the support
-            // follows the declaration rather than being asked for by hand: on
-            // when a field opted in, absent when none did. Absent is the point
-            // — a post type that declared nothing must not grow a meta surface.
-            // Added at most once, so a caller that already listed it keeps the
-            // list it wrote.
+            // `custom-fields` is the switch that makes WordPress emit `meta` at all,
+            // so the support follows the declaration: on when a field opted in,
+            // absent when none did. A caller's own entries are kept — including the
+            // single string WordPress itself accepts — and it is added at most once.
             if ($declared !== []) {
-                $supports = is_array($args['supports'] ?? null) ? $args['supports'] : [];
+                $supports = $args['supports'] ?? [];
+                $supports = is_array($supports)
+                    ? $supports
+                    : (is_string($supports) && $supports !== '' ? [$supports] : []);
 
                 if (!in_array('custom-fields', $supports, true)) {
                     $supports[] = 'custom-fields';
@@ -2114,28 +2218,25 @@ class NTDST_Data_Manager
             // branch that registered one could also give it the `custom-fields`
             // support WordPress needs before it emits that meta.
             $model->registerRestMeta($name);
-        } elseif ($declared !== []) {
-            // No `label`, so no post type, so no meta and no `custom-fields` —
-            // a write surface with no matching read surface is the wrong half
-            // to open, and refusing is right. Refusing SILENTLY is not: the
-            // module asked for `show_in_rest => true` and got nothing back,
-            // with no way to find out short of reading /wp/v2 and guessing.
-            // INV-4 fails closed AND loudly, so say which model was dropped.
-            if (function_exists('ntdst_log')) {
-                ntdst_log('data')->warning(
-                    sprintf(
-                        'Model "%s" declares %d REST field(s) but no `label`, so it registers no '
-                        . 'post type and none of them reach /wp/v2. Give the model a label, or '
-                        . 'drop `show_in_rest` from the fields that cannot be published.',
-                        $name,
-                        count($declared),
-                    ),
-                    [
-                        'model'  => $name,
-                        'fields' => $declared,
-                    ],
+
+            // The meta is registered and harmless, but a type WordPress mounts no
+            // /wp/v2 route for publishes none of it.
+            if ($declared !== [] && empty($args['show_in_rest'])) {
+                $this->warnDeclarationGoesNowhere(
+                    $name,
+                    $declared,
+                    'the post type itself is not in REST (`show_in_rest` absent or false), so '
+                    . 'WordPress mounts no route for it',
                 );
             }
+        } elseif ($declared !== []) {
+            // No `label`, so no post type, so no meta and no `custom-fields`: a
+            // write surface with no read surface is the wrong half to open.
+            $this->warnDeclarationGoesNowhere(
+                $name,
+                $declared,
+                'the model has no `label`, so it registers no post type at all',
+            );
         }
 
         self::$models[$name] = $model;
