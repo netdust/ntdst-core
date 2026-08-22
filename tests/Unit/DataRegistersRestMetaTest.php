@@ -14,6 +14,13 @@
 //      only when every sub-field opted in (closed object, every name present);
 //      one undeclared sub-field at any depth makes the whole field unpublishable.
 //      A `json` blob has no sub-field vocabulary at all, so it never publishes.
+//      A repeater that declared NO sub-fields has no vocabulary either. Its
+//      schema would be a closed object with zero properties, and WordPress
+//      measures the stored value against that schema on every read and write
+//      (class-wp-rest-meta-fields.php:556, prepare_value) — so every stored row
+//      reads back as null and a write wipes it. Same mechanism as the partial
+//      repeater, so the same verdict: unpublishable, absent or empty or not an
+//      array at all.
 //
 // Both refusals are LOUD: a field that said `show_in_rest => true` and cannot be
 // published is a declaration the module will never see honoured, so registration
@@ -338,19 +345,44 @@ final class DataRegistersRestMetaTest extends TestCase
     }
 
     /**
-     * A repeater with no sub-fields at all has nothing undeclared in it, so it
-     * publishes — as a closed object with no properties. Asserted
-     * unconditionally: "whatever it returns is fine" is not a contract.
+     * A repeater that declared no sub-fields has nothing to publish, and the
+     * empty schema is not harmless. `properties => []` with
+     * `additionalProperties => false` names NOTHING and admits nothing, and
+     * WordPress measures the stored value against exactly that schema on both
+     * sides of the boundary (class-wp-rest-meta-fields.php:556, prepare_value).
+     * A stored row therefore reads back as null and a write wipes it — the
+     * partial-repeater mechanism with every key undeclared instead of one.
+     *
+     * So the verdict is the partial repeater's: no schema. Absent, empty, or a
+     * value that is not a sub-field list at all — the three ways a declaration
+     * arrives with no vocabulary — all answer null.
+     *
+     * @dataProvider noSubFieldsProvider
+     * @param array<string, mixed> $declaration what the field says besides its type
      */
-    public function testARepeaterWithZeroSubFieldsPublishesAClosedEmptyObject(): void
+    public function testARepeaterWithNoDeclaredSubFieldsHasNoSchema(array $declaration): void
     {
-        $schema = $this->repeater([])->restSchemaFor('provenance');
+        $model = $this->model([
+            'provenance' => array_merge(
+                ['type' => 'repeater', 'show_in_rest' => true],
+                $declaration,
+            ),
+        ]);
 
-        $this->assertIsArray($schema);
-        $this->assertSame('array', $schema['type']);
-        $this->assertSame('object', $schema['items']['type']);
-        $this->assertSame([], $schema['items']['properties']);
-        $this->assertFalse($schema['items']['additionalProperties']);
+        $this->assertNull(
+            $model->restSchemaFor('provenance'),
+            'A repeater with no sub-fields publishes a schema that nulls its own stored rows.',
+        );
+    }
+
+    /** @return array<string, array{0: array<string, mixed>}> */
+    public static function noSubFieldsProvider(): array
+    {
+        return [
+            'sub_fields absent'      => [[]],
+            'sub_fields empty array' => [['sub_fields' => []]],
+            'sub_fields not a list'  => [['sub_fields' => 'nope']],
+        ];
     }
 
     /**
@@ -400,6 +432,30 @@ final class DataRegistersRestMetaTest extends TestCase
         $this->assertNull(
             $model->restSchemaFor('provenance'),
             'An undeclared grandchild breaks the rows of the field that contains it.',
+        );
+    }
+
+    /**
+     * Depth does not rescue an empty vocabulary either. The inner repeater
+     * declares no sub-fields, so it cannot publish; a parent that published
+     * around it would hand WordPress a closed object whose `lots` property
+     * nulls every inner row, and the parent's own rows go with it. The
+     * TOP-LEVEL field is what must be refused.
+     */
+    public function testANestedRepeaterWithNoSubFieldsMakesTheTopLevelFieldUnpublishable(): void
+    {
+        $model = $this->repeater([
+            'year' => ['type' => 'text', 'show_in_rest' => true],
+            'lots' => [
+                'type' => 'repeater',
+                'show_in_rest' => true,
+                'sub_fields' => [], // nothing named, one level down
+            ],
+        ]);
+
+        $this->assertNull(
+            $model->restSchemaFor('provenance'),
+            'An empty repeater inside a repeater takes the whole field down.',
         );
     }
 
@@ -877,6 +933,40 @@ final class DataRegistersRestMetaTest extends TestCase
     }
 
     /**
+     * A repeater with no sub-fields: registered nowhere, and said out loud.
+     *
+     * Registering it would be worse than dropping it. WordPress would accept
+     * the key, then measure every stored row against a closed object with no
+     * properties — the rows read back null and the next write wipes them. So
+     * the registration boundary refuses it exactly like the partial one, the
+     * scalar beside it still registers, and the module is told which field it
+     * lost and that the reason is the missing sub_fields.
+     */
+    public function testARepeaterWithNoSubFieldsIsRefusedLoudlyWhileTheScalarStillRegisters(): void
+    {
+        $this->captureRegistrations();
+
+        $this->namedModel('no_subfields_loud', [
+            'venue'      => ['type' => 'text', 'show_in_rest' => true],
+            'provenance' => ['type' => 'repeater', 'show_in_rest' => true, 'sub_fields' => []],
+        ])->registerRestMeta('probe_cpt');
+
+        $this->assertCount(1, $this->metaCalls, 'Exactly one field is publishable here.');
+        $this->assertSame(['_probe_venue'], $this->metaKeys(), 'The empty repeater registers nothing; the scalar does.');
+        $this->assertStringNotContainsString(
+            'provenance',
+            (string) json_encode($this->metaCalls),
+            'The refused field must not reach WordPress under any key.',
+        );
+
+        $warnings = $this->logMessages('warning');
+        $this->assertCount(1, $warnings, 'A dropped REST declaration warns exactly once.');
+        $this->assertStringContainsString('provenance', $warnings[0], 'The warning must name the field.');
+        $this->assertStringContainsString('sub_fields', $warnings[0], 'The warning must say why: no sub_fields.');
+        $this->assertSame([], $this->logMessages('error'), 'This is a declaration to fix, not a failure.');
+    }
+
+    /**
      * Once per model per process. Registration runs on every `init`, and a
      * warning on every request is noise nobody reads.
      */
@@ -1052,9 +1142,15 @@ final class DataRegistersRestMetaTest extends TestCase
     }
 
     /**
-     * `supports` given as a string is what WordPress itself accepts, and the
-     * caller meant it: keep the entry, add the one the declaration requires.
-     * Dropping it would silently remove the title from the editor.
+     * `supports` given as a bare string is NOT something WordPress accepts.
+     * register_post_type() documents the argument as `array|false`, and
+     * WP_Post_Type::add_supports() foreaches the value — a string reaches that
+     * loop and fatals. So core normalises it to `[$string]` because WordPress
+     * would otherwise die, not because WordPress would have understood it.
+     *
+     * The caller still meant the entry, so normalising keeps it and adds the
+     * one the declaration requires. Dropping it would silently remove the title
+     * from the editor.
      */
     public function testRegisterKeepsASupportsStringAndAddsCustomFieldsBesideIt(): void
     {
