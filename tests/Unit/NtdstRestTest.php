@@ -8,6 +8,16 @@
 // Contract source: spec.md FR-3, SC-1, SC-2, decision D6; plan.md threat model
 // items 1 and 3; tasks.md Cluster B1.
 //
+// AMENDED for specs/core-shape FR-4 (T04) by the independent test-author. The
+// default permission moved from "refused" to "logged in", so the absence rule
+// this file encoded is now VERB-DEPENDENT: an unnamed GET registers with the
+// string 'is_user_logged_in', and only POST/PUT/PATCH/DELETE without a named
+// capability stay absent from the route table. The two cases that asserted
+// absence for every verb were rewritten here; nothing was relaxed — the
+// dangerous half (a write verb anyone logged in could reach) is asserted
+// exactly as before. The GET-side facts and every public()/pending case live
+// in tests/Unit/NtdstRestDefaultsTest.php, which owns FR-4.
+//
 // WHY THIS FILE ASSERTS ABSENCE AND CALL COUNTS RATHER THAN STATUS CODES:
 //
 //  (1) WordPress FAILS OPEN on a missing permission_callback. Since 5.5 core
@@ -247,16 +257,22 @@ final class NtdstRestTest extends TestCase
     /**
      * @dataProvider permissionlessOptionsProvider
      */
-    public function testRouteWithoutPermissionIsAbsentFromTheRouteTable(array $options): void
+    public function testWriteRouteWithoutPermissionIsAbsentFromTheRouteTable(array $options): void
     {
         // WHY: threat-model item 1 — WP registers a permission-less route and
         // then skips the check (rest-api.php:890), leaving it world-readable.
         // The framework's promise is absence, not denial: assert the key is not
         // in the route table. A control route is declared in the same run so
         // this cannot pass vacuously. (SC-1)
+        //
+        // FR-4 narrowed this to the WRITE verbs. An unnamed GET is now internal
+        // ('is_user_logged_in') rather than refused, but an unnamed write is
+        // still never handed to register_rest_route() — on a site with open
+        // registration "logged in" is "anyone". The verb changed; the property
+        // did not.
         $rest = ntdst_rest('x/v1');
-        $rest->get('/guarded', fn() => [], ['permission' => fn() => true]);
-        $rest->get('/open', fn() => ['secret' => 'leaked'], $options);
+        $rest->post('/guarded', fn() => [], ['permission' => fn() => true]);
+        $rest->post('/open', fn() => ['secret' => 'leaked'], $options);
 
         $keys = $this->routeKeys();
 
@@ -360,9 +376,15 @@ final class NtdstRestTest extends TestCase
     public function testEveryVerbMapsToItsMethodAndEnforcesTheSameFailClosedRule(string $verb, string $method): void
     {
         // WHY: fail-closed that only holds on get() is a hole on the write
-        // verbs, which are the ones that mutate. The same rule on every verb is
-        // the contract; the method mapping is FR-2 (verbs belong to ntdst_rest
-        // alone, and get() now always means an HTTP GET resource route).
+        // verbs, which are the ones that mutate. The method mapping is FR-2
+        // (verbs belong to ntdst_rest alone, and get() now always means an HTTP
+        // GET resource route).
+        //
+        // FR-4 split the unnamed case by verb, and the split is the mitigation:
+        // an unnamed GET is INTERNAL (is_user_logged_in — WordPress's own
+        // wp_ajax_ posture), an unnamed WRITE is ABSENT. Both halves are
+        // asserted here, so a wrapper that publishes an unnamed write, or that
+        // silently drops every unnamed read, fails.
         $rest = ntdst_rest('x/v1');
         $rest->{$verb}('/guarded', fn() => [], ['permission' => fn() => true]);
         $rest->{$verb}('/open', fn() => [], []);
@@ -370,8 +392,24 @@ final class NtdstRestTest extends TestCase
         $keys = $this->routeKeys();
 
         $this->assertContains('/x/v1/guarded', $keys, "{$verb}() must register a route with a callable permission.");
-        $this->assertNotContains('/x/v1/open', $keys, "{$verb}() must refuse a route with no permission, like every other verb.");
         $this->assertSame([$method], $this->methodsOf($this->registeredArgs('/x/v1/guarded') ?? []));
+
+        if ($method === 'GET') {
+            $this->assertContains('/x/v1/open', $keys, 'an unnamed GET is internal, not refused (FR-4).');
+            $this->assertSame(
+                'is_user_logged_in',
+                $this->registeredArgs('/x/v1/open')['permission_callback'] ?? null,
+                "an unnamed GET registers with the STRING 'is_user_logged_in' (FR-4, SC-2).",
+            );
+
+            return;
+        }
+
+        $this->assertNotContains(
+            '/x/v1/open',
+            $keys,
+            "{$verb}() names no capability — it must never be handed to register_rest_route().",
+        );
     }
 
     // =====================================================================

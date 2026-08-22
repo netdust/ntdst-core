@@ -183,6 +183,12 @@ final class NTDST_Rest
         return $this->route($route, 'DELETE', $handler, $options);
     }
 
+    /** Signature shell only — T04's split RED asserts the behaviour. */
+    public function public(): self
+    {
+        return $this;
+    }
+
     /**
      * @param array<string, mixed> $options
      */
