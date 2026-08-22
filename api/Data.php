@@ -161,6 +161,12 @@ class NTDST_Data_Model
         return $fields;
     }
 
+    /** The REST schema for one declared field, or null if it may not leave. */
+    public function restSchemaFor(string $field): ?array
+    {
+        return null;
+    }
+
     /**
      * Setup default sanitizers based on schema types
      */
