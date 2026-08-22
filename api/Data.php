@@ -188,24 +188,16 @@ class NTDST_Data_Model
     /**
      * Hand every publishable declared field to WordPress's own meta registry.
      *
-     * restFields() says which fields may leave and schemaFor() says in what shape,
-     * or that there is no shape it can publish; this file stays the only caller of
-     * register_post_meta() (INV-1), which keeps that decision in one place.
+     * `$user_id` is WordPress's subject — map_meta_cap() names the user the write is
+     * judged FOR, so current_user_can() would answer about the wrong person.
+     * `$allowed` is ignored on purpose: honouring it would let WordPress's
+     * protected-key heuristic decide who may write this model's meta. An array or
+     * object value carries its whole closed schema, which register_post_meta()
+     * requires. A declared field's sanitizer must be IDEMPOTENT — update_metadata()
+     * applies it again to the value this registration already cleaned.
      *
-     * The write is admitted by `edit_post` ON THE POST BEING WRITTEN, judged FOR
-     * THE USER WORDPRESS NAMED — map_meta_cap() hands that subject in because it
-     * is not always the current session, so current_user_can() would answer about
-     * the wrong person. The incoming `$allowed` is ignored on purpose: honouring
-     * it would let WordPress's protected-key heuristic, or any earlier filter,
-     * decide who may write this model's meta. An array value travels with its
-     * whole closed schema, which register_post_meta() requires. And a declared
-     * field's sanitizer must be IDEMPOTENT: update_metadata() applies it again to
-     * a value this callback has already cleaned.
-     *
-     * Refusing is fine; refusing silently is not, so a declared field with no
-     * publishable shape warns once per model, and a field whose type is a typo
-     * takes only itself down — throwing here would abort `init` and take the whole
-     * post type off the site.
+     * A field with no publishable shape, or one whose type is a typo, unpublishes
+     * only itself and says so: throwing would abort `init` and take the type down.
      */
     public function registerRestMeta(string $postType): void
     {
@@ -273,20 +265,24 @@ class NTDST_Data_Model
             return;
         }
 
+        if (!function_exists('ntdst_log')) {
+            // Do NOT burn the once-per-model flag on a process where the logger is
+            // not loaded yet: the refusal would then be silent for the whole request.
+            return;
+        }
+
         $warnedModels[$this->post_type] = true;
 
-        if (function_exists('ntdst_log')) {
-            ntdst_log('data')->warning(
-                sprintf(
-                    'Model "%s" declares REST field(s) that have no publishable shape, so they '
-                    . 'reach no /wp/v2 response: %s. Declare every sub-field of a repeater, or '
-                    . 'drop `show_in_rest` from the field.',
-                    $this->post_type,
-                    implode('; ', $refused),
-                ),
-                ['model' => $this->post_type, 'fields' => $refused],
-            );
-        }
+        ntdst_log('data')->warning(
+            sprintf(
+                'Model "%s" declares REST field(s) that have no publishable shape, so they '
+                . 'reach no /wp/v2 response: %s. Give a repeater sub_fields and declare every '
+                . 'one of them, or drop `show_in_rest` from the field.',
+                $this->post_type,
+                implode('; ', $refused),
+            ),
+            ['model' => $this->post_type, 'fields' => $refused],
+        );
     }
 
     /**
@@ -299,7 +295,12 @@ class NTDST_Data_Model
      * given (class-wp-rest-meta-fields.php prepare_value), so a repeater published
      * without one of its keys reads back null, refuses a write carrying that key,
      * and drops it on a write that does not. Half a repeater is not half published;
-     * it is broken. `json` names no sub-fields at all, so it is never publishable.
+     * it is broken.
+     *
+     * Three declarations therefore have NO publishable shape: `json` (a blob names
+     * no sub-fields), a repeater with any undeclared sub-field at any depth, and a
+     * repeater with no `sub_fields` at all — the last one is the partial case with
+     * every key undeclared, and its empty closed object nulls its own stored rows.
      *
      * The type VOCABULARY stays where it already lives: getDefaultSanitizer() is
      * asked first and a typo throws there, with its message.
@@ -324,8 +325,23 @@ class NTDST_Data_Model
         $this->getDefaultSanitizer($type);
 
         if ($type === 'repeater') {
-            $properties = [];
             $sub_fields = is_array($config['sub_fields'] ?? null) ? $config['sub_fields'] : [];
+
+            // Absent, empty, or not a list at all: three ways to arrive with no
+            // vocabulary, one verdict. `properties => []` with
+            // `additionalProperties => false` names nothing and admits nothing, and
+            // WordPress measures the stored rows against exactly that — they read
+            // back null and the next write wipes them.
+            if ($sub_fields === []) {
+                $refusal = [
+                    'path' => '',
+                    'why'  => 'it declares no `sub_fields`, so it names nothing to publish',
+                ];
+
+                return null;
+            }
+
+            $properties = [];
 
             foreach ($sub_fields as $sub => $sub_config) {
                 $inner = null;
@@ -2167,9 +2183,9 @@ class NTDST_Data_Manager
             ])));
 
             // `custom-fields` is the switch that makes WordPress emit `meta` at all,
-            // so the support follows the declaration: on when a field opted in,
-            // absent when none did. A caller's own entries are kept — including the
-            // single string WordPress itself accepts — and it is added at most once.
+            // so the support follows the declaration, and is added at most once. A
+            // string is normalised to a list because WordPress takes `array|false`
+            // and add_supports() foreaches it — a string loses every support silently.
             if ($declared !== []) {
                 $supports = $args['supports'] ?? [];
                 $supports = is_array($supports)
