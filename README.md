@@ -167,6 +167,12 @@ so the filter reads all of them, not the first. A capability route registers a
 closure and reads as opaque there; this finds the routes that named themselves
 anonymous, which is the property worth pinning.
 
+A rate-limited route registers a closure too — `public` or not — because the
+limiter has to run, so the snippet above will not see it. Treat EVERY closure as
+unanswered-for: list the routes whose `permission_callback` is not one of the two
+literal strings, and settle those by reading what the route declared, never by
+the type of the callback.
+
 **Retired options no longer take your endpoint away.** An option that never
 existed still refuses the route. `cors` and `before_dispatch` are *ignored*,
 with one `_doing_it_wrong` naming the replacement, and the route registers. An
