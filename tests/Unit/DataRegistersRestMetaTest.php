@@ -48,6 +48,10 @@ final class DataRegistersRestMetaTest extends TestCase
         // The model names absint() by string ('int' => 'absint'); nothing in
         // this process defines it.
         Functions\when('absint')->alias(static fn($v) => abs((int) $v));
+
+        // ntdst_log() is a REAL recorder from tests/bootstrap.php; the entries
+        // are process-wide, so each case starts from an empty log.
+        $GLOBALS['_ntdst_test_log'] = [];
     }
 
     protected function tearDown(): void
@@ -542,46 +546,74 @@ final class DataRegistersRestMetaTest extends TestCase
     }
 
     /**
-     * The write side, refused. WordPress calls the auth callback as
-     * ($allowed, $meta_key, $object_id, $user_id, $cap, $caps) — the incoming
-     * $allowed is TRUE here, so a callback that passes its first argument
-     * through would grant the write. The capability decides, nothing else.
+     * The gate answers about the user WORDPRESS named, never about whoever
+     * happens to be current.
+     *
+     * WordPress mounts the callback as
+     * add_filter("auth_post_meta_{$key}_for_{$subtype}", $cb, 10, 6) and calls
+     * it as ($allowed, $meta_key, $object_id, $user_id, $cap, $caps) —
+     * map_meta_cap() supplies $user_id, and that user is not necessarily the
+     * current one (a capability may be mapped for another user entirely).
+     * current_user_can() therefore judges the wrong subject; the fourth
+     * argument is the subject. user_can($userId, 'edit_post', $postId) is the
+     * question, and current_user_can() must not be asked at all.
+     *
+     * @param bool $sentinel what WordPress answers about that user
      */
-    public function testTheAuthCallbackRefusesWhenTheUserCannotEditThePost(): void
+    private function stubUserCan(bool $sentinel): void
+    {
+        $this->capChecks = [];
+
+        Functions\when('user_can')->alias(function ($user, $cap, ...$rest) use ($sentinel) {
+            $this->capChecks[] = [$user, $cap, $rest[0] ?? null];
+
+            return $sentinel;
+        });
+
+        Functions\when('current_user_can')->alias(function (...$args) {
+            $this->fail(
+                'The gate asked about the CURRENT user. The write is judged for the user id in '
+                . 'the callback\'s fourth argument. current_user_can(' . json_encode($args) . ')',
+            );
+        });
+    }
+
+    /**
+     * The write side, refused. The incoming $allowed is TRUE in one of the two
+     * calls, so a callback that passes its first argument through would grant
+     * the write. The capability answer decides, nothing else.
+     */
+    public function testTheAuthCallbackRefusesWhenTheNamedUserCannotEditThePost(): void
     {
         $this->captureRegistrations();
-        $this->capChecks = [];
-        Functions\when('current_user_can')->alias(function (...$args) {
-            $this->capChecks[] = $args;
-
-            return false;
-        });
+        $this->stubUserCan(false);
 
         $this->model($this->declaredAndSilentFields())->registerRestMeta('probe_cpt');
 
         $auth = $this->callFor('_probe_venue')[2]['auth_callback'];
 
-        $this->assertSame(false, $auth(true, '_probe_venue', 4242, 7, 'edit_post', ['edit_posts']));
-        $this->assertSame([['edit_post', 4242]], $this->capChecks, "The check is current_user_can('edit_post', \$postId).");
+        $this->assertSame(false, $auth(true, 'k', 42, 7, 'edit_post', ['edit_posts']));
+        $this->assertSame(false, $auth(false, 'k', 42, 7, 'edit_post', ['edit_posts']));
+        $this->assertSame(
+            [[7, 'edit_post', 42], [7, 'edit_post', 42]],
+            $this->capChecks,
+            "The check is user_can(\$userId, 'edit_post', \$postId) — the user WordPress named.",
+        );
     }
 
     /** And granted on the same authority — against an incoming $allowed of false. */
-    public function testTheAuthCallbackAllowsWhenTheUserCanEditThePost(): void
+    public function testTheAuthCallbackAllowsWhenTheNamedUserCanEditThePost(): void
     {
         $this->captureRegistrations();
-        $this->capChecks = [];
-        Functions\when('current_user_can')->alias(function (...$args) {
-            $this->capChecks[] = $args;
-
-            return true;
-        });
+        $this->stubUserCan(true);
 
         $this->model($this->declaredAndSilentFields())->registerRestMeta('probe_cpt');
 
         $auth = $this->callFor('_probe_provenance')[2]['auth_callback'];
 
-        $this->assertSame(true, $auth(false, '_probe_provenance', 99, 7, 'edit_post', ['edit_posts']));
-        $this->assertSame([['edit_post', 99]], $this->capChecks);
+        $this->assertSame(true, $auth(false, 'k', 42, 7, 'edit_post', ['edit_posts']));
+        $this->assertSame(true, $auth(true, 'k', 42, 7, 'edit_post', ['edit_posts']));
+        $this->assertSame([[7, 'edit_post', 42], [7, 'edit_post', 42]], $this->capChecks);
     }
 
     // -- What each declared field registers as -------------------------------
@@ -748,6 +780,62 @@ final class DataRegistersRestMetaTest extends TestCase
         $this->assertContains('title', $supports);
         $this->assertContains('editor', $supports);
         $this->assertContains('thumbnail', $supports);
+    }
+
+    /**
+     * `supports => false` is how a caller says "no title, no editor, no
+     * thumbnail" — it was never a statement about meta. A field was NAMED as
+     * public on the same registration, and WordPress cannot emit that field
+     * without the `custom-fields` support. The declaration wins: supports
+     * becomes exactly the one entry the declaration requires, and nothing else
+     * comes back.
+     */
+    public function testRegisterAddsCustomFieldsSupportEvenWhenTheCallerPassedSupportsFalse(): void
+    {
+        $this->captureRegistrations();
+
+        $this->registerModel(
+            ['venue' => ['type' => 'text', 'show_in_rest' => true]],
+            ['supports' => false],
+        );
+
+        $this->assertSame(['custom-fields'], $this->supportsReceived());
+        $this->assertSame(['_probe_venue'], $this->metaKeys());
+    }
+
+    /**
+     * A model declared WITHOUT a label registers no post type, and therefore no
+     * meta — a write surface with no read surface is the wrong half to open.
+     * That is correct, and it is also silent, which is the defect: the module
+     * declared `show_in_rest => true` and got nothing, with no way to find out.
+     * Refusing is fine; refusing quietly is not (INV-4 — fail closed, and
+     * loudly).
+     */
+    public function testALabelLessModelWithDeclaredFieldsRefusesLoudly(): void
+    {
+        $this->captureRegistrations();
+        $GLOBALS['_ntdst_test_log'] = [];
+
+        (new NTDST_Data_Manager())->register('thing', [
+            'fields'       => ['venue' => ['type' => 'text', 'show_in_rest' => true]],
+            'meta_prefix'  => '_probe_',
+            'auto_metabox' => false,
+        ]);
+
+        $this->assertSame([], $this->metaCalls, 'No post type, no meta registration.');
+        $this->assertSame([], $this->postTypeCalls);
+
+        $warnings = array_values(array_filter(
+            $GLOBALS['_ntdst_test_log'] ?? [],
+            static fn(array $entry): bool => ($entry[1] ?? '') === 'warning',
+        ));
+
+        $this->assertCount(1, $warnings, 'A silently dropped REST declaration must warn exactly once.');
+        $this->assertStringContainsString(
+            'thing',
+            (string) ($warnings[0][2] ?? ''),
+            'The warning must name the model whose declared fields were dropped.',
+        );
     }
 
     /** A caller that already listed it gets no second copy, and keeps its own list. */
