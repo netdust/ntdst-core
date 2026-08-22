@@ -19,14 +19,19 @@ A field leaves the model only when its description says `show_in_rest => true`,
 with WordPress's meaning: opt in, nobody-named-nobody-leaves. The model declares;
 it never shapes a response.
 
-**Convergence point:** `api/Data.php` — `NTDST_Data_Model::register()` hands every
-declared field to `register_post_meta(..., ['show_in_rest' => true])`;
-`restFields()` / `restSubFields()` are the only readers of the declaration.
+**Convergence point:** `api/Data.php` — `NTDST_Data_Manager::register()` hands every
+declared field to `NTDST_Data_Model::registerRestMeta()`, which is the only caller of
+`register_post_meta()`. The declaration itself has ONE reader:
+`NTDST_Data_Model::declaresRest()` — the strict `show_in_rest === true` test, written
+once. Its callers are `restFields()` (which fields), `restSubFields()` (the same
+question one level down), `restSchemaFor()` (in what shape) and `registerRestMeta()`
+(which decides through the first two). A sixth site re-spelling the predicate is a
+bypass even when it agrees, because agreeing today is not the same as converging.
 **Bypass smell:** `register_post_meta()` / `register_meta()` called outside
 `api/Data.php`; a route handler returning a row or `getMeta()` bag without
 projecting through `restFields()`; any `public_fields` / `public_shape` /
 `PUBLIC_SHAPE`-style allow-list; a `private`, `hidden` or `exposed` key on a field.
-**Mechanical check:** `grep -rn "register_post_meta\|register_meta(" --include=*.php . | grep -v "^./api/Data.php\|/vendor/\|/tests/"` → empty. `grep -rn "public_fields\|public_shape\|publicRow" --include=*.php . | grep -v /vendor/` → empty.
+**Mechanical check:** `grep -rn "register_post_meta\|register_meta(" --include=*.php . | grep -vE "^(\./)?api/Data\.php|(^|/)vendor/|(^|/)tests/"` → empty. (The `-E` form and the optional `./` are load-bearing: GNU grep prints `./api/Data.php` but ugrep prints `api/Data.php`, so an anchored `^./` exclusion silently matched nothing and the check passed for the wrong reason.) Second: `grep -rn "show_in_rest" --include=*.php api/Data.php` → every hit is `declaresRest()` itself, a docblock, or an ARG being written to `register_post_meta()` / `register_taxonomy()`; no second READER of the declaration. `grep -rn "public_fields\|public_shape\|publicRow" --include=*.php . | grep -v /vendor/` → empty.
 **Status:** established by phase 1.
 
 ## INV-2 — One HTTP surface: every route registers through `ntdst_rest()`

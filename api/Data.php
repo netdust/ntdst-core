@@ -99,6 +99,25 @@ class NTDST_Data_Model
     }
 
     /**
+     * The one reading of the declaration, for every caller that asks.
+     *
+     * WordPress's key with WordPress's default: OPT IN, and strictly. `=== true`,
+     * so `'yes'`, `1` and `'true'` are typos that leave the field private rather
+     * than near-misses that publish it. A config that is not a description at all
+     * — a bare type string like `'price' => 'int'` — never named anything either.
+     *
+     * It lives alone because the whole exposure rule rests on it (INV-1). This was
+     * once spelled out at five sites that happened to agree; five agreeing copies
+     * of a rule is five chances to drift, on the one surface where drifting means
+     * a private field leaves. Callers: restFields(), restSubFields() (both levels),
+     * restSchemaFor(), and through them registerRestMeta().
+     */
+    private function declaresRest(mixed $config): bool
+    {
+        return is_array($config) && ($config['show_in_rest'] ?? false) === true;
+    }
+
+    /**
      * The fields a model declares may leave it, by WordPress's own key.
      *
      * `show_in_rest => true` on a field description, with WordPress's meaning:
@@ -116,7 +135,7 @@ class NTDST_Data_Model
         $fields = [];
 
         foreach ($this->schema as $field => $config) {
-            if (is_array($config) && ($config['show_in_rest'] ?? false) === true) {
+            if ($this->declaresRest($config)) {
                 $fields[] = (string) $field;
             }
         }
@@ -139,7 +158,7 @@ class NTDST_Data_Model
         $fields = [];
 
         foreach ($this->schema as $field => $config) {
-            if (!is_array($config) || ($config['show_in_rest'] ?? false) !== true) {
+            if (!$this->declaresRest($config)) {
                 continue;
             }
 
@@ -150,7 +169,7 @@ class NTDST_Data_Model
             $kept = [];
 
             foreach ($config['sub_fields'] as $sub => $subConfig) {
-                if (is_array($subConfig) && ($subConfig['show_in_rest'] ?? false) === true) {
+                if ($this->declaresRest($subConfig)) {
                     $kept[] = (string) $sub;
                 }
             }
@@ -176,7 +195,7 @@ class NTDST_Data_Model
     {
         $config = $this->schema[$field] ?? null;
 
-        if (!is_array($config) || ($config['show_in_rest'] ?? false) !== true) {
+        if (!$this->declaresRest($config)) {
             return null;
         }
 
@@ -261,7 +280,7 @@ class NTDST_Data_Model
             $properties = [];
 
             foreach ($sub_fields as $sub => $sub_config) {
-                if (!is_array($sub_config) || ($sub_config['show_in_rest'] ?? false) !== true) {
+                if (!$this->declaresRest($sub_config)) {
                     continue;
                 }
 
