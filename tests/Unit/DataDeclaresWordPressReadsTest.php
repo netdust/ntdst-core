@@ -351,6 +351,52 @@ final class DataDeclaresWordPressReadsTest extends TestCase
         );
     }
 
+    /**
+     * `array` is the second blob, and spec revision 3 says so out loud. Its
+     * sanitizer keeps a KEYED map whose leaves are typed scalars — an int stays
+     * an int — while the only leaf shape a keyed map could be given is a list
+     * of strings. WordPress measures the stored value against the schema it was
+     * given on every read, so publishing it would null the field's own value
+     * and refuse the writes that could repair it.
+     *
+     * So a declared `array` reaches WordPress under no key, exactly like a
+     * declared `json` — and the module is told, once, that its declaration went
+     * nowhere.
+     */
+    public function testADeclaredArrayFieldNeverReachesWordPressAndWarnsOnce(): void
+    {
+        $fields = $this->gigFields();
+        $fields['settlement_map'] = ['type' => 'array', 'show_in_rest' => true];
+
+        // Its own post type, and one WordPress mounts a route for: the
+        // unpublishable warning is guarded once per MODEL per process (the
+        // `gig` cases above already spend that guard on their own refusals),
+        // and a type with no /wp/v2 route would warn about the SAME fields for
+        // a different reason. The reason under test is the field's.
+        $this->declareModel('gig_settlement_probe', $fields, ['show_in_rest' => true]);
+
+        $this->assertSame(['_gig_venue_city', '_gig_venue_country'], $this->metaKeys());
+        $this->assertStringNotContainsString(
+            'settlement_map',
+            implode('', array_map(fn(array $c) => $this->encodeRegistration($c), $this->metaCalls)),
+        );
+
+        $warnings = array_values(array_map(
+            static fn(array $entry): string => (string) ($entry[2] ?? ''),
+            array_filter(
+                $GLOBALS['_ntdst_test_log'] ?? [],
+                static fn(array $entry): bool => ($entry[1] ?? '') === 'warning',
+            ),
+        ));
+
+        // Neither the model name nor the field name contains the word `array`,
+        // so the last assertion can only be satisfied by the REASON the warning
+        // gives — not by the sentence that names what was dropped.
+        $this->assertCount(1, $warnings, 'A declaration that goes nowhere warns exactly once.');
+        $this->assertStringContainsString('settlement_map', $warnings[0], 'The warning must name the field.');
+        $this->assertStringContainsString('array', $warnings[0], 'The warning must say which type was dropped.');
+    }
+
     /** Silence covers a repeater's children too: no parent, no publication. */
     public function testASilentRepeatersDeclaredSubFieldsPublishNothing(): void
     {

@@ -67,8 +67,18 @@ final class DataRestFieldsTest extends TestCase
         $this->assertSame([], $model->restFields());
     }
 
-    /** The trap a flat list cannot reach: a value one level down. */
-    public function testASubFieldMustNameItselfSeparately(): void
+    /**
+     * A repeater is ONE declared field. restFields() reports the names a module
+     * declared, so a repeater appears once under its own name and its
+     * sub-fields are not names of their own — whether or not they said
+     * `show_in_rest => true`.
+     *
+     * The second read one level down (restSubFields()) is deleted by
+     * field-types FR-4: it had zero shipped readers, and while it existed it
+     * was a second way to ask what a field publishes, beside the one
+     * convergence point (INV-1).
+     */
+    public function testADeclaredRepeaterIsOneNameAndItsSubFieldsAreNotNames(): void
     {
         $model = $this->model([
             'provenance' => [
@@ -82,11 +92,10 @@ final class DataRestFieldsTest extends TestCase
         ]);
 
         $this->assertSame(['provenance'], $model->restFields());
-        $this->assertSame(['provenance' => ['year']], $model->restSubFields());
     }
 
     /** An unnamed parent takes its children with it, however they are marked. */
-    public function testAnUnnamedParentTakesItsSubFieldsWithIt(): void
+    public function testAnUnnamedRepeaterDoesNotLeaveEvenWhenASubFieldNamedItself(): void
     {
         $model = $this->model([
             'provenance' => [
@@ -96,6 +105,5 @@ final class DataRestFieldsTest extends TestCase
         ]);
 
         $this->assertSame([], $model->restFields());
-        $this->assertSame([], $model->restSubFields());
     }
 }

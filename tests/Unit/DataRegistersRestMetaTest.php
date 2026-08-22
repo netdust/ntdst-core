@@ -1,11 +1,15 @@
 <?php // tests/Unit/DataRegistersRestMetaTest.php
 // What a declared field looks like once it leaves — and what never leaves at all.
 //
-// restSchemaFor() is the only place the Data layer turns a field TYPE into a
-// REST schema. Two rules are load-bearing, and both are denial rules:
+// registerRestMeta() is the only place the Data layer turns a field DESCRIPTION
+// into something WordPress publishes, and after field-types FR-4 it is the only
+// place a caller can observe the answer: the leaf shape comes from
+// NTDST_FieldTypes, the structural rule stays in a PRIVATE schemaFor(), and the
+// two public 0-reader helpers are deleted. Two rules are load-bearing, and both
+// are denial rules:
 //
 //   1. STRICT OPT-IN. A field that did not say `show_in_rest => true` — exactly
-//      true, not 'yes', not 1 — has no schema. null, every time.
+//      true, not 'yes', not 1 — reaches WordPress under no key. Every time.
 //   2. A repeater publishes ALL OR NOTHING. WordPress validates a stored row
 //      against the closed schema it was given, so a row carrying a key the
 //      schema does not name reads back as null and a write that carries it is
@@ -13,7 +17,9 @@
 //      the undeclared sub-field from storage. A repeater therefore publishes
 //      only when every sub-field opted in (closed object, every name present);
 //      one undeclared sub-field at any depth makes the whole field unpublishable.
-//      A `json` blob has no sub-field vocabulary at all, so it never publishes.
+//      A `json` blob has no sub-field vocabulary at all, so it never publishes,
+//      and neither does an `array` (spec revision 3): its sanitizer keeps a
+//      KEYED map of typed scalars, which no leaf schema admits.
 //      A repeater that declared NO sub-fields has no vocabulary either. Its
 //      schema would be a closed object with zero properties, and WordPress
 //      measures the stored value against that schema on every read and write
@@ -27,6 +33,7 @@
 // warns once per model, naming the field.
 //
 // T02 cases are grouped first; T03 (registerRestMeta) appends below them.
+// Written against field-types FR-4, SC-2 and SC-5, and core-shape INV-1.
 defined('ABSPATH') || exit;
 
 use Brain\Monkey;
@@ -34,6 +41,7 @@ use Brain\Monkey\Functions;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/../../api/FieldTypes.php';
 require_once __DIR__ . '/../../api/Data.php';
 
 final class DataRegistersRestMetaTest extends TestCase
@@ -81,52 +89,96 @@ final class DataRegistersRestMetaTest extends TestCase
         return new NTDST_Data_Model('probe', $fields, '_probe_');
     }
 
-    /** A single declared field of the given type, ready to ask about. */
-    private function declared(string $type): NTDST_Data_Model
-    {
-        return $this->model(['probe_field' => ['type' => $type, 'show_in_rest' => true]]);
-    }
-
     // ---------------------------------------------------------------- T02 --
-    // restSchemaFor(): the denial rules first, then the type table.
+    // The structural rule, read where it is now observable: the registration.
+    //
+    // field-types FR-4 deletes restSchemaFor(): schemaFor() is private, keeps
+    // ONLY the structural rule (the repeater recursion and the all-or-nothing
+    // refusal) and reads each leaf's shape from NTDST_FieldTypes::get($type)
+    // ->schema. So the one place a caller can still see what a field publishes
+    // is the register_post_meta() call registerRestMeta() makes — `type` plus
+    // `show_in_rest` (true for a scalar, ['schema' => …] for an array).
+    //
+    // Every promise below is core-shape's, word for word. Only the observable
+    // moved, and it moved to the stronger one: "has no schema" now reads as
+    // "reaches WordPress under NO key", which denies the write surface as well
+    // as the read one.
 
-    /** A field the model never heard of has no schema. */
-    public function testAnUnknownFieldNameHasNoSchema(): void
+    /** Distinct model names: the unpublishable warning is guarded once per model. */
+    private static int $modelSequence = 0;
+
+    /**
+     * A model name nobody else in this process has used, so a once-per-model
+     * guard cannot swallow a warning another case is asserting.
+     *
+     * @param array<string, mixed> $fields
+     */
+    private function freshModel(array $fields): NTDST_Data_Model
     {
-        $model = $this->model(['venue' => ['type' => 'text', 'show_in_rest' => true]]);
-
-        $this->assertNull($model->restSchemaFor('nonexistent'));
+        return new NTDST_Data_Model('probe_seq_' . (++self::$modelSequence), $fields, '_probe_');
     }
 
-    /** WordPress's default, kept: a field nobody named does not leave. */
-    public function testAFieldThatNamedNothingHasNoSchema(): void
+    /**
+     * Declare $fields, register them, and hand back the register_post_meta()
+     * call for $field — or null when the field was refused and WordPress was
+     * told nothing about it under any key.
+     *
+     * @param  array<string, mixed> $fields
+     * @return array<int, mixed>|null
+     */
+    private function registrationOf(array $fields, string $field): ?array
     {
-        $model = $this->model(['promo_budget' => ['type' => 'float']]);
+        $this->captureRegistrations();
+        $this->freshModel($fields)->registerRestMeta('probe_cpt');
 
-        $this->assertNull($model->restSchemaFor('promo_budget'));
+        foreach ($this->metaCalls as $call) {
+            if (($call[1] ?? null) === '_probe_' . $field) {
+                return $call;
+            }
+        }
+
+        return null;
     }
 
-    public function testShowInRestFalseHasNoSchema(): void
+    /**
+     * One declared repeater called `provenance`, the shape every rule below is
+     * stated on.
+     *
+     * @param  array<string, mixed> $subFields
+     * @return array<string, mixed>
+     */
+    private function repeaterFields(array $subFields): array
     {
-        $model = $this->model(['cost' => ['type' => 'float', 'show_in_rest' => false]]);
+        return [
+            'provenance' => [
+                'type'         => 'repeater',
+                'show_in_rest' => true,
+                'sub_fields'   => $subFields,
+            ],
+        ];
+    }
 
-        $this->assertNull($model->restSchemaFor('cost'));
+    /**
+     * The closed object a declared repeater published, or null when it
+     * published nothing at all.
+     *
+     * @param array<string, mixed> $subFields
+     * @return array<string, mixed>|null
+     */
+    private function publishedRepeaterSchema(array $subFields): ?array
+    {
+        $call = $this->registrationOf($this->repeaterFields($subFields), 'provenance');
+
+        return $call === null ? null : ($call[2]['show_in_rest']['schema'] ?? null);
     }
 
     /**
      * Strict `=== true`. A truthy near-miss is a typo, and a typo must not be
-     * the thing that publishes a private field.
+     * the thing that publishes a private field — at the top level (below) or
+     * one level down inside a repeater.
      *
-     * @dataProvider truthyNearMissProvider
+     * @return array<string, array{0: mixed}>
      */
-    public function testATruthyNearMissDoesNotPublishTheField(mixed $declaration): void
-    {
-        $model = $this->model(['cost' => ['type' => 'float', 'show_in_rest' => $declaration]]);
-
-        $this->assertNull($model->restSchemaFor('cost'));
-    }
-
-    /** @return array<string, array{0: mixed}> */
     public static function truthyNearMissProvider(): array
     {
         return [
@@ -137,91 +189,112 @@ final class DataRegistersRestMetaTest extends TestCase
         ];
     }
 
+    /** WordPress's default, kept: a field nobody named does not leave. */
+    public function testAFieldThatNamedNothingIsNeverPublished(): void
+    {
+        $this->assertNull($this->registrationOf(['promo_budget' => ['type' => 'float']], 'promo_budget'));
+        $this->assertSame([], $this->metaCalls, 'Silence registers nothing at all.');
+    }
+
+    public function testShowInRestFalseIsNeverPublished(): void
+    {
+        $this->assertNull(
+            $this->registrationOf(['cost' => ['type' => 'float', 'show_in_rest' => false]], 'cost'),
+        );
+        $this->assertSame([], $this->metaCalls);
+    }
+
     /**
-     * The type table, exactly as the spec writes it.
+     * The leaf shape is the REGISTRY's — one table, asked by the layer that
+     * registers, never a second table carried inside Data.
      *
-     * @dataProvider scalarTypeProvider
-     * @param array<string, mixed>|null $expected
-     */
-    public function testATypeMapsToItsSchema(string $type, ?array $expected): void
-    {
-        $this->assertSame($expected, $this->declared($type)->restSchemaFor('probe_field'));
-    }
-
-    /** @return array<string, array{0: string, 1: array<string, mixed>|null}> */
-    public static function scalarTypeProvider(): array
-    {
-        $integer = ['type' => 'integer'];
-        $string  = ['type' => 'string'];
-        $idList  = ['type' => 'array', 'items' => ['type' => 'integer']];
-
-        return [
-            'int'           => ['int', $integer],
-            'integer'       => ['integer', $integer],
-            'signed_int'    => ['signed_int', $integer],
-            'image'         => ['image', $integer],
-            'file'          => ['file', $integer],
-
-            'float'         => ['float', ['type' => 'number']],
-            'double'        => ['double', ['type' => 'number']],
-
-            'bool'          => ['bool', ['type' => 'boolean']],
-            'boolean'       => ['boolean', ['type' => 'boolean']],
-
-            'text'          => ['text', $string],
-            'textarea'      => ['textarea', $string],
-            'html'          => ['html', $string],
-            'content'       => ['content', $string],
-            'wysiwyg'       => ['wysiwyg', $string],
-            'select'        => ['select', $string],
-            'date'          => ['date', $string],
-
-            'email'         => ['email', ['type' => 'string', 'format' => 'email']],
-            'url'           => ['url', ['type' => 'string', 'format' => 'uri']],
-
-            'array'         => ['array', ['type' => 'array', 'items' => ['type' => 'string']]],
-
-            'gallery'       => ['gallery', $idList],
-            'relation'      => ['relation', $idList],
-            'post_relation' => ['post_relation', $idList],
-            'person'        => ['person', $idList],
-
-            // A blob has no sub-field vocabulary, so nothing inside it was ever
-            // named. Publishing it would hand every key of every stored row to
-            // an anonymous caller — the daan `{"k":"v","n":1}` read. Unpublishable.
-            'json'          => ['json', null],
-        ];
-    }
-
-    /**
-     * Stated on its own, because it is a denial and not a table row: a declared
-     * `json` field has NO schema. `['type'=>'object','additionalProperties'=>true]`
-     * is the opposite of the rule the layer exists for — it names nothing and
-     * admits everything.
-     */
-    public function testADeclaredJsonFieldHasNoSchema(): void
-    {
-        $model = $this->model([
-            'payload' => ['type' => 'json', 'show_in_rest' => true],
-        ]);
-
-        $this->assertNull($model->restSchemaFor('payload'));
-    }
-
-    /**
-     * A repeater with a shape helper, so each case below reads as its own rule.
+     * This is the whole of field-types FR-4's schema half, said at the boundary
+     * that matters: what WordPress is handed for a declared field of type X is
+     * built out of NTDST_FieldTypes::get(X)->schema and nothing else. A name
+     * whose registry shape is null (`array` and `json` — both keep typed
+     * scalars that no leaf schema admits — and `repeater`, which has no leaf at
+     * all and declares no sub_fields here) publishes nothing.
      *
-     * @param array<string, mixed> $subFields
+     * Note what `show_in_rest => true` means for `email` and `url`: WordPress
+     * derives the published schema from `type` alone, so the registry's
+     * `format` facet does not travel. That is core-shape's shipped answer and
+     * it is asserted, not assumed.
+     *
+     * @dataProvider vocabularyProvider
      */
-    private function repeater(array $subFields): NTDST_Data_Model
+    public function testAPublishedLeafCarriesTheRegistrysShape(string $type): void
     {
-        return $this->model([
-            'provenance' => [
-                'type' => 'repeater',
-                'show_in_rest' => true,
-                'sub_fields' => $subFields,
-            ],
-        ]);
+        $registry = NTDST_FieldTypes::get($type)->schema;
+
+        $call = $this->registrationOf(
+            ['probe_field' => ['type' => $type, 'show_in_rest' => true]],
+            'probe_field',
+        );
+
+        if ($registry === null) {
+            $this->assertNull(
+                $call,
+                "'{$type}' has no publishable leaf shape, so it must reach WordPress under no key.",
+            );
+            $this->assertSame([], $this->metaCalls, "'{$type}' must register nothing at all.");
+
+            return;
+        }
+
+        $this->assertNotNull($call, "'{$type}' has a leaf shape in the registry, so it must be registered.");
+
+        $this->assertSame(
+            $registry['type'],
+            $call[2]['type'] ?? null,
+            "'{$type}': the registered `type` must be the registry's, not a second table's.",
+        );
+
+        $this->assertSame(
+            in_array($registry['type'], ['array', 'object'], true) ? ['schema' => $registry] : true,
+            $call[2]['show_in_rest'] ?? null,
+            "'{$type}': what WordPress publishes must be the registry's shape.",
+        );
+    }
+
+    /** @return array<string, array{0: string}> */
+    public static function vocabularyProvider(): array
+    {
+        $rows = [];
+
+        foreach (NTDST_FieldTypes::names() as $name) {
+            $rows[$name] = [$name];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * `array` joins it (spec revision 3). Its sanitizer keeps a KEYED map with
+     * typed scalars, and the leaf WordPress would be given is a list of
+     * strings — so every stored value reads back null against its own published
+     * schema, the partial-repeater mechanism one type down. Unpublishable, and
+     * said out loud so the module that wrote `show_in_rest => true` can find
+     * out that it got nothing.
+     */
+    public function testADeclaredArrayFieldIsNeverPublishedAndSaysSoOnce(): void
+    {
+        $this->captureRegistrations();
+
+        $this->namedModel('keyed_map_loud', ['settlement' => ['type' => 'array', 'show_in_rest' => true]])
+            ->registerRestMeta('probe_cpt');
+
+        $this->assertSame([], $this->metaCalls, 'A keyed map has no publishable leaf shape.');
+        $this->assertStringNotContainsString('settlement', (string) json_encode($this->metaCalls));
+
+        $warnings = $this->logMessages('warning');
+
+        // The model is `keyed_map_loud` and the field is `settlement`: neither
+        // spells `array`, so the type assertion can only be met by the reason
+        // the warning gives.
+        $this->assertCount(1, $warnings, 'A dropped REST declaration warns exactly once.');
+        $this->assertStringContainsString('settlement', $warnings[0], 'The warning must name the field.');
+        $this->assertStringContainsString('array', $warnings[0], 'The warning must say which type was dropped.');
+        $this->assertSame([], $this->logMessages('error'), 'This is a declaration to fix, not a failure.');
     }
 
     /**
@@ -234,56 +307,53 @@ final class DataRegistersRestMetaTest extends TestCase
      * is refused 400, and an admin write of only the declared keys replaces the
      * row and drops the undeclared one from storage.
      *
-     * A partially declared repeater is therefore not publishable at all.
+     * A partially declared repeater is therefore registered nowhere.
      */
-    public function testARepeaterWithAnyUndeclaredSubFieldHasNoSchema(): void
+    public function testARepeaterWithAnyUndeclaredSubFieldIsNeverPublished(): void
     {
-        $model = $this->repeater([
-            'year'       => ['type' => 'text', 'show_in_rest' => true],
-            'lot'        => ['type' => 'int', 'show_in_rest' => true],
-            'sale_price' => ['type' => 'float'], // one silent sub-field is enough
-        ]);
-
         $this->assertNull(
-            $model->restSchemaFor('provenance'),
+            $this->publishedRepeaterSchema([
+                'year'       => ['type' => 'text', 'show_in_rest' => true],
+                'lot'        => ['type' => 'int', 'show_in_rest' => true],
+                'sale_price' => ['type' => 'float'], // one silent sub-field is enough
+            ]),
             'Two declared sub-fields and one silent one is not a publishable repeater.',
         );
+        $this->assertSame([], $this->metaCalls);
     }
 
     /** `show_in_rest => false` inside is the same refusal, said out loud. */
-    public function testARepeaterWithARefusedSubFieldHasNoSchema(): void
+    public function testARepeaterWithARefusedSubFieldIsNeverPublished(): void
     {
-        $model = $this->repeater([
+        $this->assertNull($this->publishedRepeaterSchema([
             'year'    => ['type' => 'text', 'show_in_rest' => true],
             'reserve' => ['type' => 'float', 'show_in_rest' => false],
-        ]);
-
-        $this->assertNull($model->restSchemaFor('provenance'));
+        ]));
+        $this->assertSame([], $this->metaCalls);
     }
 
     /**
      * The only repeater that publishes: every sub-field opted in. The object is
      * closed behind exactly those names, so WordPress accepts the stored row and
-     * nothing that was never named can ride along inside it.
+     * nothing that was never named can ride along inside it — and each leaf
+     * inside it is the registry's shape for that sub-field's type.
      */
     public function testAFullyDeclaredRepeaterPublishesEverySubFieldInAClosedObject(): void
     {
-        $model = $this->repeater([
-            'year' => ['type' => 'text', 'show_in_rest' => true],
-            'lot'  => ['type' => 'int', 'show_in_rest' => true],
-        ]);
-
         $this->assertSame([
             'type' => 'array',
             'items' => [
                 'type' => 'object',
                 'properties' => [
-                    'year' => ['type' => 'string'],
-                    'lot'  => ['type' => 'integer'],
+                    'year' => NTDST_FieldTypes::get('text')->schema,
+                    'lot'  => NTDST_FieldTypes::get('int')->schema,
                 ],
                 'additionalProperties' => false,
             ],
-        ], $model->restSchemaFor('provenance'));
+        ], $this->publishedRepeaterSchema([
+            'year' => ['type' => 'text', 'show_in_rest' => true],
+            'lot'  => ['type' => 'int', 'show_in_rest' => true],
+        ]));
     }
 
     /**
@@ -295,12 +365,11 @@ final class DataRegistersRestMetaTest extends TestCase
      */
     public function testASubFieldTruthyNearMissMakesTheWholeRepeaterUnpublishable(mixed $declaration): void
     {
-        $model = $this->repeater([
+        $this->assertNull($this->publishedRepeaterSchema([
             'year'       => ['type' => 'text', 'show_in_rest' => true],
             'sale_price' => ['type' => 'float', 'show_in_rest' => $declaration],
-        ]);
-
-        $this->assertNull($model->restSchemaFor('provenance'));
+        ]));
+        $this->assertSame([], $this->metaCalls);
     }
 
     /**
@@ -310,36 +379,36 @@ final class DataRegistersRestMetaTest extends TestCase
      */
     public function testABareStringSubFieldConfigMakesTheRepeaterUnpublishable(): void
     {
-        $model = $this->repeater([
+        $this->assertNull($this->publishedRepeaterSchema([
             'year' => ['type' => 'text', 'show_in_rest' => true],
             'qty'  => 'int',
-        ]);
-
-        $this->assertNull($model->restSchemaFor('provenance'));
+        ]));
+        $this->assertSame([], $this->metaCalls);
     }
 
     /**
-     * The invariant behind every case above, stated so no encoding of the schema
-     * can carry an undeclared sub-field NAME out of the model — and so the
-     * declared shape is proved to carry its own.
+     * The invariant behind every case above, stated so no encoding of the
+     * registration can carry an undeclared sub-field NAME out to WordPress —
+     * and so the declared shape is proved to carry its own.
      */
-    public function testNoUndeclaredSubFieldNameAppearsAnywhereInTheSchema(): void
+    public function testNoUndeclaredSubFieldNameReachesWordPress(): void
     {
-        $partial = $this->repeater([
+        $this->registrationOf($this->repeaterFields([
             'year'       => ['type' => 'text', 'show_in_rest' => true],
             'sale_price' => ['type' => 'float'],
             'reserve'    => ['type' => 'float', 'show_in_rest' => false],
-        ]);
+        ]), 'provenance');
 
-        $encoded = (string) json_encode($partial->restSchemaFor('provenance'));
+        $encoded = (string) json_encode($this->metaCalls);
 
         $this->assertStringNotContainsString('sale_price', $encoded);
         $this->assertStringNotContainsString('reserve', $encoded);
         $this->assertStringNotContainsString('year', $encoded, 'A partial repeater publishes nothing at all.');
+        $this->assertStringNotContainsString('provenance', $encoded);
 
-        $whole = (string) json_encode($this->repeater([
+        $whole = (string) json_encode($this->publishedRepeaterSchema([
             'year' => ['type' => 'text', 'show_in_rest' => true],
-        ])->restSchemaFor('provenance'));
+        ]));
 
         $this->assertStringContainsString('year', $whole);
     }
@@ -353,26 +422,23 @@ final class DataRegistersRestMetaTest extends TestCase
      * A stored row therefore reads back as null and a write wipes it — the
      * partial-repeater mechanism with every key undeclared instead of one.
      *
-     * So the verdict is the partial repeater's: no schema. Absent, empty, or a
-     * value that is not a sub-field list at all — the three ways a declaration
-     * arrives with no vocabulary — all answer null.
+     * So the verdict is the partial repeater's: registered nowhere. Absent,
+     * empty, or a value that is not a sub-field list at all — the three ways a
+     * declaration arrives with no vocabulary — all reach WordPress under no key.
      *
      * @dataProvider noSubFieldsProvider
      * @param array<string, mixed> $declaration what the field says besides its type
      */
-    public function testARepeaterWithNoDeclaredSubFieldsHasNoSchema(array $declaration): void
+    public function testARepeaterWithNoDeclaredSubFieldsIsNeverPublished(array $declaration): void
     {
-        $model = $this->model([
-            'provenance' => array_merge(
-                ['type' => 'repeater', 'show_in_rest' => true],
-                $declaration,
-            ),
-        ]);
-
         $this->assertNull(
-            $model->restSchemaFor('provenance'),
-            'A repeater with no sub-fields publishes a schema that nulls its own stored rows.',
+            $this->registrationOf(
+                ['provenance' => array_merge(['type' => 'repeater', 'show_in_rest' => true], $declaration)],
+                'provenance',
+            ),
+            'A repeater with no sub-fields would publish a schema that nulls its own stored rows.',
         );
+        $this->assertSame([], $this->metaCalls);
     }
 
     /** @return array<string, array{0: array<string, mixed>}> */
@@ -391,7 +457,7 @@ final class DataRegistersRestMetaTest extends TestCase
      */
     public function testANestedRepeaterPublishesClosedAtEveryLevelWhenEveryNameOptedIn(): void
     {
-        $model = $this->repeater([
+        $schema = $this->publishedRepeaterSchema([
             'year' => ['type' => 'text', 'show_in_rest' => true],
             'lots' => [
                 'type' => 'repeater',
@@ -402,37 +468,43 @@ final class DataRegistersRestMetaTest extends TestCase
             ],
         ]);
 
-        $schema = $model->restSchemaFor('provenance');
-
         $this->assertIsArray($schema);
         $this->assertSame(['year', 'lots'], array_keys($schema['items']['properties']));
         $this->assertFalse($schema['items']['additionalProperties']);
+        $this->assertSame(
+            NTDST_FieldTypes::get('text')->schema,
+            $schema['items']['properties']['year'],
+            'A leaf two levels in is still the registry\'s shape.',
+        );
 
         $inner = $schema['items']['properties']['lots'];
         $this->assertSame('array', $inner['type']);
         $this->assertSame(['lot_number'], array_keys($inner['items']['properties']));
         $this->assertFalse($inner['items']['additionalProperties']);
+        $this->assertSame(
+            NTDST_FieldTypes::get('int')->schema,
+            $inner['items']['properties']['lot_number'],
+        );
     }
 
     /** And one undeclared grandchild takes the TOP-LEVEL field down with it. */
     public function testOneUndeclaredGrandchildMakesTheTopLevelFieldUnpublishable(): void
     {
-        $model = $this->repeater([
-            'year' => ['type' => 'text', 'show_in_rest' => true],
-            'lots' => [
-                'type' => 'repeater',
-                'show_in_rest' => true,
-                'sub_fields' => [
-                    'lot_number'   => ['type' => 'int', 'show_in_rest' => true],
-                    'hammer_price' => ['type' => 'float'], // silent, two levels down
-                ],
-            ],
-        ]);
-
         $this->assertNull(
-            $model->restSchemaFor('provenance'),
+            $this->publishedRepeaterSchema([
+                'year' => ['type' => 'text', 'show_in_rest' => true],
+                'lots' => [
+                    'type' => 'repeater',
+                    'show_in_rest' => true,
+                    'sub_fields' => [
+                        'lot_number'   => ['type' => 'int', 'show_in_rest' => true],
+                        'hammer_price' => ['type' => 'float'], // silent, two levels down
+                    ],
+                ],
+            ]),
             'An undeclared grandchild breaks the rows of the field that contains it.',
         );
+        $this->assertSame([], $this->metaCalls);
     }
 
     /**
@@ -444,42 +516,109 @@ final class DataRegistersRestMetaTest extends TestCase
      */
     public function testANestedRepeaterWithNoSubFieldsMakesTheTopLevelFieldUnpublishable(): void
     {
-        $model = $this->repeater([
-            'year' => ['type' => 'text', 'show_in_rest' => true],
-            'lots' => [
-                'type' => 'repeater',
-                'show_in_rest' => true,
-                'sub_fields' => [], // nothing named, one level down
-            ],
-        ]);
-
         $this->assertNull(
-            $model->restSchemaFor('provenance'),
+            $this->publishedRepeaterSchema([
+                'year' => ['type' => 'text', 'show_in_rest' => true],
+                'lots' => ['type' => 'repeater', 'show_in_rest' => true, 'sub_fields' => []],
+            ]),
             'An empty repeater inside a repeater takes the whole field down.',
+        );
+        $this->assertSame([], $this->metaCalls);
+    }
+
+    // -- SC-5: what the Data layer is allowed to be asked ---------------------
+
+    /**
+     * The chain and CRUD, spelled out, so the surface assertion below can say
+     * something about the FOUR names that are not them. Written from the class
+     * as core-shape left it: a method that disappears from this list is caught
+     * too, because the list is asserted present.
+     */
+    private const CHAIN_AND_CRUD = [
+        '__construct',
+        'all',
+        'attachTerms',
+        'count',
+        'create',
+        'delete',
+        'deleteMeta',
+        'detachTerms',
+        'find',
+        'first',
+        'get',
+        'getMeta',
+        'limit',
+        'orWhere',
+        'orderBy',
+        'paginate',
+        'scope',
+        'syncTerms',
+        'update',
+        'updateMeta',
+        'updateMetaBatch',
+        'where',
+        'whereDate',
+        'whereIn',
+        'whereNot',
+        'whereTax',
+        'withMeta',
+        'withTerms',
+    ];
+
+    /**
+     * SC-5. Besides the query chain and CRUD, the Data layer answers exactly
+     * four questions — and every one of them REPORTS the field description or
+     * hands it to WordPress. None of them shapes a response.
+     *
+     * A fifth public reader is the thing this invariant exists to stop: while a
+     * second read of the declaration exists, a consumer can assemble its own
+     * exposure beside the one convergence point, and agreeing with it today is
+     * not the same as converging on it.
+     */
+    public function testTheDataModelsPublicSurfaceIsExactlyFourReaders(): void
+    {
+        $methods = array_map(
+            static fn(ReflectionMethod $m): string => $m->getName(),
+            (new ReflectionClass(NTDST_Data_Model::class))->getMethods(ReflectionMethod::IS_PUBLIC),
+        );
+        sort($methods);
+
+        $this->assertSame(
+            [],
+            array_values(array_diff(self::CHAIN_AND_CRUD, $methods)),
+            'The query chain and CRUD are not what this spec removes.',
+        );
+
+        $readers = array_values(array_diff($methods, self::CHAIN_AND_CRUD));
+        sort($readers);
+
+        $this->assertSame(
+            ['getMetaPrefix', 'getSchema', 'registerRestMeta', 'restFields'],
+            $readers,
+            'Besides the chain and CRUD, NTDST_Data_Model answers exactly these four.',
         );
     }
 
     /**
-     * Same rule as getDefaultSanitizer(): an unknown type is a typo, and a typo
-     * must fail loudly rather than default to a permissive schema.
-     *
-     * The field carries an explicit sanitizer, which is the one path where an
-     * unknown type survives construction — so this asks restSchemaFor() itself.
+     * The two the spec deletes, named. restSchemaFor() and restSubFields() were
+     * public reads of the field description with zero shipped readers; while
+     * either exists it is a second way to ask what a field publishes, which is
+     * exactly what INV-1 says there must not be.
      */
-    public function testAnUnknownTypeThrows(): void
+    public function testTheDataModelKeepsNoPublicRestSchemaHelpers(): void
     {
-        $model = $this->model([
-            'blurb' => ['type' => 'wysiwig', 'show_in_rest' => true, 'sanitizer' => 'strval'],
-        ]);
-
-        $this->expectException(InvalidArgumentException::class);
-
-        $model->restSchemaFor('blurb');
+        foreach (['restSchemaFor', 'restSubFields'] as $gone) {
+            $this->assertFalse(
+                method_exists(NTDST_Data_Model::class, $gone),
+                "NTDST_Data_Model::{$gone}() still exists; FR-4 deletes it — the shape a field "
+                . 'publishes is asked once, by registerRestMeta().',
+            );
+        }
     }
 
     /**
-     * The layer gains restSchemaFor() and registerRestMeta() — nothing that
-     * models a project, a shape, or a public view. Those live elsewhere.
+     * The layer registers and it reports — nothing that models a project, a
+     * shape, or a public view. Those live elsewhere.
      */
     public function testDataModelGrowsNoProjectShapeOrPublicVocabulary(): void
     {
@@ -808,19 +947,20 @@ final class DataRegistersRestMetaTest extends TestCase
         $venue = $this->callFor('_probe_venue');
         $this->assertSame('probe_cpt', $venue[0]);
         $this->assertSame('_probe_venue', $venue[1]);
-        $this->assertSame($model->restSchemaFor('venue')['type'], $venue[2]['type']);
+        $this->assertSame(NTDST_FieldTypes::get('text')->schema['type'], $venue[2]['type']);
         $this->assertSame($this->expectedPayload('string', true), $this->payloadOf($venue));
 
         $capacity = $this->callFor('_probe_capacity');
         $this->assertSame('probe_cpt', $capacity[0]);
-        $this->assertSame($model->restSchemaFor('capacity')['type'], $capacity[2]['type']);
+        $this->assertSame(NTDST_FieldTypes::get('int')->schema['type'], $capacity[2]['type']);
         $this->assertSame($this->expectedPayload('integer', true), $this->payloadOf($capacity));
     }
 
     /**
      * An array value has no shape WordPress can guess, so the whole schema
-     * travels — and it is the CLOSED one restSchemaFor() built, which is what
-     * keeps an undeclared sub-field out of the response.
+     * travels — and it is the CLOSED object the structural rule built out of
+     * the registry's leaf shapes, which is what keeps an undeclared sub-field
+     * out of the response.
      */
     public function testARepeaterRegistersItsWholeSchemaUnderShowInRest(): void
     {
@@ -830,7 +970,17 @@ final class DataRegistersRestMetaTest extends TestCase
         $model->registerRestMeta('probe_cpt');
 
         $call = $this->callFor('_probe_provenance');
-        $schema = $model->restSchemaFor('provenance');
+        $schema = [
+            'type' => 'array',
+            'items' => [
+                'type' => 'object',
+                'properties' => [
+                    'year' => NTDST_FieldTypes::get('text')->schema,
+                    'lot'  => NTDST_FieldTypes::get('int')->schema,
+                ],
+                'additionalProperties' => false,
+            ],
+        ];
 
         $this->assertSame($this->expectedPayload('array', ['schema' => $schema]), $this->payloadOf($call));
         $this->assertSame(['year', 'lot'], array_keys($call[2]['show_in_rest']['schema']['items']['properties']));
@@ -893,7 +1043,7 @@ final class DataRegistersRestMetaTest extends TestCase
     {
         $this->captureRegistrations();
 
-        $this->namedModel('json_loud', ['payload' => ['type' => 'json', 'show_in_rest' => true]])
+        $this->namedModel('blob_loud', ['payload' => ['type' => 'json', 'show_in_rest' => true]])
             ->registerRestMeta('probe_cpt');
 
         $warnings = $this->logMessages('warning');
