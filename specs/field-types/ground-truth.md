@@ -9,7 +9,7 @@ Canonical mapping used below (FR-3, D4): `integer`→`int` · `signed_int`→`in
 · `double`→`float` · `boolean`→`bool` · `wysiwyg`→`html` · `content`→`html`
 · `person`→`relation` · `post_relation`→`relation` · `datetime`→`date`.
 (`string`, `number`, `decimal`, `longtext` are in the 13-name retired list
-but no hit below is one of them; `themes/` directories on daan and stride were also grepped — 0 hits — — they map `string`→`text`, `number`→`int` (the registry's message table: the metabox rendered `number` as a step-1 integer),
+but no FIELD-DECLARATION hit below is one of them (stride's 32 `'string'` hits are REST arg schemas — see its table). `themes/` directories on daan and stride were also grepped: 0 hits. — they map `string`→`text`, `number`→`int` (the registry's message table: the metabox rendered `number` as a step-1 integer),
 `decimal`→`float`, `longtext`→`textarea` per FR-2/D4 if ever found.)
 
 ---
@@ -216,7 +216,7 @@ cd ~/Sites/stride && grep -rnE "'type'\s*=>\s*'(int|integer|signed_int)'" web/ap
 | `created_by` | `VoucherCPT.php:125` | `VoucherAdminController.php:546` — `absint($fields['created_by'])` | **Yes** |
 
 **21 int fields audited. 12 have a `>= 0` assumption in a reader/writer
-(`absint()` or `max(0, ...)`): `capacity` ×2, `completion_threshold`: no,
+(`absint()` or `max(0, ...)`): `capacity` ×2,
 `deadline_months`, `user_id`, `edition_id` ×2, `discount`, `tax`, `total`,
 `usage_limit`, `used_count`, `created_by`.** These are all **ID or
 count/money fields where positivity is the intended domain rule** (a
