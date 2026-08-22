@@ -7,18 +7,25 @@ declare(strict_types=1);
  * Automatically generates metaboxes from registered field definitions
  * Works with NTDST Data.php ORM
  *
- * OUTPUT CONTRACT — 'wysiwyg' field type:
- * A 'wysiwyg' field is sanitized on save with wp_kses_post(), which
- * preserves a safe HTML subset (<p>, <a href>, <strong>, <em>, <ul>/<li>,
- * <br>, ...) rather than stripping all markup like 'textarea' does. Because
- * the stored value legitimately CONTAINS HTML, any template/consumer that
- * outputs a 'wysiwyg' field MUST escape it with wp_kses_post() again at
- * render time — NEVER with esc_html() (which encodes the HTML and renders
- * literal "<p>" tags to the visitor instead of a paragraph break) and NEVER
- * with a raw echo (which would defeat the sanitization boundary entirely if
- * the stored value is ever hand-edited via wp_update_post()/direct DB
- * access outside this class's own save path). This is the rule that must
- * exist BEFORE any template consumes a 'wysiwyg' field.
+ * THIS CLASS DOES NOT SANITIZE. It reads the POST, unslashes it, and hands
+ * the values on: to the Data model, which cleans them inside update()/
+ * create(), or — where a post type has no model — straight to
+ * NTDST_FieldTypes::get($type)->sanitize. The metabox once carried a private
+ * type switch of its own, and two tables that answer "what is a bool" can
+ * disagree (INV-8): this one read the string 'false' as true and absint()'d
+ * the sign off an int, while the model's table did neither.
+ *
+ * OUTPUT CONTRACT — the 'html' field type:
+ * An 'html' field is sanitized with wp_kses_post(), which preserves a safe
+ * HTML subset (<p>, <a href>, <strong>, <em>, <ul>/<li>, <br>, ...) rather
+ * than stripping all markup like 'textarea' does. Because the stored value
+ * legitimately CONTAINS HTML, any template/consumer that outputs one MUST
+ * escape it with wp_kses_post() again at render time — NEVER with esc_html()
+ * (which encodes the HTML and renders literal "<p>" tags to the visitor
+ * instead of a paragraph break) and NEVER with a raw echo (which would
+ * defeat the sanitization boundary entirely if the stored value is ever
+ * hand-edited via wp_update_post()/direct DB access). This is the rule that
+ * must exist BEFORE any template consumes an 'html' field.
  *
  * @package NTDST
  * @version 1.0.0
@@ -966,8 +973,8 @@ final class NTDST_MetaboxGenerator
             case 'image':
             case 'file':
                 // T45's cell, reused verbatim. Storage is deliberately NOT
-                // touched: sanitizeAttachmentId() still returns an int (0 for
-                // nothing), unlike the repeater arm's empty-string marker —
+                // touched: a top-level image/file field still stores an int (0
+                // for nothing), unlike a repeater cell's empty-string marker —
                 // ProfileService's four fields already hold live values in the
                 // int shape on every ntdst site.
                 $this->render_repeater_media_cell($field_id, $field_name, $safe_value, $type, $options);
@@ -1797,43 +1804,73 @@ final class NTDST_MetaboxGenerator
             return;
         }
 
-        // Sanitize and prepare data based on field types
         $fields_config = $this->registered_models[$model_name]['fields'];
-        $sanitized_data = [];
 
-        foreach ($fields_data as $field_name => $field_value) {
-            $field_config = $fields_config[$field_name] ?? 'text';
-            $field_type = is_array($field_config) ? ($field_config['type'] ?? 'text') : $field_config;
+        // EVERYTHING from here to the write runs inside ONE try, and NOTHING
+        // is written until every field has resolved.
+        //
+        // The vocabulary REFUSES a name outside the seventeen, so a field
+        // declared with a retired alias ('wysiwyg', 'boolean', 'integer')
+        // throws while it is being resolved. Outside the try that is a fatal:
+        // a white-screened post that loses every other field on the screen.
+        // Inside a try but written as it goes, it is a post half-saved beside
+        // a "Saving failed" notice, which is the worse of the two answers a
+        // reader has to reconcile. Resolve all, then write all, or write
+        // nothing and tell the editor.
+        try {
+            $is_data_model = $this->isDataModel($model_name);
+            $sanitized_data = [];
 
-            // Remove WordPress slashes before sanitizing
-            $field_value = wp_unslash($field_value);
+            foreach ($fields_data as $field_name => $field_value) {
+                // Remove WordPress slashes first: every branch below wants the
+                // value the editor actually typed.
+                $field_value = wp_unslash($field_value);
 
-            // Pass full config for repeater fields (needs sub_fields info)
-            $sanitized = $this->sanitize_field($field_value, $field_type, $field_config);
-            $sanitized_data[$field_name] = $sanitized;
-        }
+                if ($is_data_model) {
+                    // Hand the model the posted value UNCLEANED. The model's
+                    // own registry-bound sanitizer runs inside update()/
+                    // create() and is the one and only clean (INV-8): a value
+                    // cleaned here and cleaned again there is a value cleaned
+                    // by two tables that can disagree. Idempotent functions
+                    // hide the disagreement — sanitize_text_field() twice
+                    // reads exactly like once — so it only ever surfaced on
+                    // the types where it costs: an int that lost its sign to
+                    // absint(), a bool that read the string 'false' as true.
+                    $sanitized_data[$field_name] = $field_value;
+                    continue;
+                }
 
-        // Handle relation/gallery fields that weren't submitted (treat as empty)
-        // This is critical for when users remove all items from a relation field
-        foreach ($fields_config as $field_name => $field_config) {
-            if (isset($sanitized_data[$field_name])) {
-                continue; // Already processed
+                // No model here, so no model sanitizer: the registry is asked
+                // directly, exactly once per submitted field. The full config
+                // rides along because a `repeater` reads its own sub_fields
+                // out of it and resolves every cell through this same table —
+                // there is no second, hand-rolled row walk.
+                $field_config = $fields_config[$field_name] ?? 'text';
+                $field_type = is_array($field_config) ? ($field_config['type'] ?? 'text') : $field_config;
+
+                $sanitized_data[$field_name] = (NTDST_FieldTypes::get($field_type)->sanitize)(
+                    $field_value,
+                    is_array($field_config) ? $field_config : [],
+                );
             }
 
-            $type = is_array($field_config) ? ($field_config['type'] ?? 'text') : $field_config;
+            // Handle relation/gallery fields that weren't submitted (treat as empty)
+            // This is critical for when users remove all items from a relation field
+            foreach ($fields_config as $field_name => $field_config) {
+                if (isset($sanitized_data[$field_name])) {
+                    continue; // Already processed
+                }
 
-            // For relation and gallery fields, missing POST data means user cleared all items
-            if (in_array($type, ['relation', 'gallery'])) {
-                $sanitized_data[$field_name] = [];
+                $type = is_array($field_config) ? ($field_config['type'] ?? 'text') : $field_config;
+
+                // For relation and gallery fields, missing POST data means user cleared all items
+                if (in_array($type, ['relation', 'gallery'])) {
+                    $sanitized_data[$field_name] = [];
+                }
             }
-        }
 
-        // Check if this is a registered Data model or native post type
-        $is_data_model = $this->isDataModel($model_name);
-
-        if ($is_data_model) {
-            // Save using Data.php ORM for registered models
-            try {
+            if ($is_data_model) {
+                // Save using Data.php ORM for registered models
                 $model = ntdst_data()->get($model_name);
                 // 'any' is load-bearing. With the publish-only default this
                 // returns WP_Error for a draft, the branch below falls through
@@ -1862,39 +1899,40 @@ final class NTDST_MetaboxGenerator
                     // Fire hook for extensibility only on a genuine save.
                     do_action("ntdst/metabox_saved/{$model_name}", $post_id, $sanitized_data);
                 }
-            } catch (\Throwable $e) {
-                // Converge on the same surfacing channel as a WP_Error RETURN
-                // above: record_save_error() both sets the post-scoped
-                // transient (so the editor sees the failure instead of a
-                // silent "saved") and logs it — no separate inline log here,
-                // or the failure would be recorded twice. The editor-facing
-                // message is GENERIC: a DB-layer throw can carry table/column
-                // names that don't belong on an edit screen. The raw
-                // exception text rides in the WP_Error's data slot, which
-                // record_save_error() logs but never surfaces.
-                $this->record_save_error(
-                    $post_id,
-                    $model_name,
-                    new \WP_Error(
-                        'metabox_save_exception',
-                        'Saving failed — see logs.',
-                        $e->getMessage(),
-                    ),
-                );
-            }
-        } else {
-            // Use WordPress native functions for unregistered/native post types
-            foreach ($sanitized_data as $field_name => $value) {
-                // Delete meta if value is empty array (cleaner than storing serialized empty array)
-                if (is_array($value) && empty($value)) {
-                    delete_post_meta($post_id, $field_name);
-                } else {
-                    update_post_meta($post_id, $field_name, $value);
+            } else {
+                // Use WordPress native functions for unregistered/native post types
+                foreach ($sanitized_data as $field_name => $value) {
+                    // Delete meta if value is empty array (cleaner than storing serialized empty array)
+                    if (is_array($value) && empty($value)) {
+                        delete_post_meta($post_id, $field_name);
+                    } else {
+                        update_post_meta($post_id, $field_name, $value);
+                    }
                 }
-            }
 
-            // Fire hook for extensibility
-            do_action("ntdst/metabox_saved/{$model_name}", $post_id, $sanitized_data);
+                // Fire hook for extensibility
+                do_action("ntdst/metabox_saved/{$model_name}", $post_id, $sanitized_data);
+            }
+        } catch (\Throwable $e) {
+            // Converge on the same surfacing channel as a WP_Error RETURN
+            // above: record_save_error() both sets the post-scoped transient
+            // (so the editor sees the failure instead of a silent "saved")
+            // and logs it — no separate inline log here, or the failure would
+            // be recorded twice. The editor-facing message is GENERIC: a
+            // refused type name and a DB-layer throw both carry detail
+            // (table/column names, the whole vocabulary) that does not belong
+            // on an edit screen. The raw exception text rides in the
+            // WP_Error's data slot, which record_save_error() logs but never
+            // surfaces.
+            $this->record_save_error(
+                $post_id,
+                $model_name,
+                new \WP_Error(
+                    'metabox_save_exception',
+                    'Saving failed — see logs.',
+                    $e->getMessage(),
+                ),
+            );
         }
 
         // Re-add the hook after saving is complete
@@ -2006,187 +2044,6 @@ final class NTDST_MetaboxGenerator
     private function isDataModel(string $model_name): bool
     {
         return function_exists('ntdst_data') && ntdst_data()->isRegistered($model_name);
-    }
-
-    /**
-     * Remove <script> and <style> elements ENTIRELY, including their inner
-     * content, before running wp_kses_post().
-     *
-     * wp_kses_post() strips disallowed tags (script/style are not in
-     * wp_kses_allowed_html('post')) but, by KSES design, leaves each
-     * stripped tag's inner TEXT content behind — `<script>alert(1)</script>`
-     * becomes the literal text `alert(1)`, not an empty string. That is
-     * correct/safe once the value is later output through wp_kses_post()
-     * again (no executable tag remains), but it fails a stricter "the
-     * payload text itself must not survive in the stored value" contract,
-     * and is needless noise in a bio field regardless. wp_strip_all_tags()
-     * does exactly this (content-aware script/style removal) but strips ALL
-     * tags, which would defeat the wysiwyg type entirely — so we run a
-     * targeted pre-pass for just script/style, then let wp_kses_post()
-     * handle every other disallowed tag/attribute/URL scheme.
-     */
-    private static function strip_script_and_style_blocks(string $value): string
-    {
-        return (string) preg_replace('#<(script|style)\b[^>]*>.*?</\1\s*>#is', '', $value);
-    }
-
-    /**
-     * Sanitize field value based on type
-     *
-     * @param mixed $value The field value to sanitize
-     * @param string $type The field type
-     * @param array|string $field_config Full field config (for repeater sub_fields)
-     */
-    private function sanitize_field(mixed $value, string $type, mixed $field_config = []): mixed
-    {
-        switch ($type) {
-            case 'email':
-                return sanitize_email($value);
-
-            case 'integer':
-            case 'int':
-                return absint($value);
-
-            case 'float':
-            case 'decimal':
-                return floatval($value);
-
-            case 'boolean':
-            case 'bool':
-                return (bool) $value;
-
-            case 'textarea':
-            case 'longtext':
-                return sanitize_textarea_field($value);
-
-            case 'wysiwyg':
-                // Deliberately the OPPOSITE of 'textarea': preserves the
-                // WordPress "post" safe HTML subset (<p>, <a href>,
-                // <strong>, <em>, <ul>/<li>, <br>, ...) while still
-                // stripping <script>/<style> tags, on*="" event-handler
-                // attributes, and javascript: URLs. See the OUTPUT CONTRACT
-                // note in this class's docblock: consumers MUST output a
-                // wysiwyg field with wp_kses_post(), never esc_html() or a
-                // raw echo.
-                return wp_kses_post(self::strip_script_and_style_blocks((string) $value));
-
-            case 'array':
-            case 'json':
-                // If already an array, return as-is
-                if (is_array($value)) {
-                    return $value;
-                }
-
-                // If empty string, return empty array
-                if (empty($value) || trim($value) === '') {
-                    return [];
-                }
-
-                // Try to decode JSON
-                $decoded = json_decode(trim($value), true);
-
-                // Check for JSON errors. Log the failure but NOT the value
-                // itself — users may paste PII into form fields and we don't
-                // want it ending up in plaintext error logs.
-                if (json_last_error() !== JSON_ERROR_NONE) {
-                    if (function_exists('ntdst_log')) {
-                        ntdst_log('metabox')->error('JSON decode error: ' . json_last_error_msg());
-                    }
-                    return [];
-                }
-
-                return is_array($decoded) ? $decoded : [];
-
-            case 'relation':
-                // Relation field - array of post IDs
-                if (is_array($value)) {
-                    return array_map('absint', array_filter($value));
-                }
-                return !empty($value) ? [absint($value)] : [];
-
-            case 'gallery':
-                // Gallery field - array of attachment IDs
-                if (is_array($value)) {
-                    return array_map('absint', array_filter($value));
-                }
-                return !empty($value) ? [absint($value)] : [];
-
-            case 'repeater':
-                // Repeater field - array of rows, each row is an associative array
-                if (!is_array($value)) {
-                    return [];
-                }
-
-                // Get sub_fields config for type-aware sanitization
-                $sub_fields = is_array($field_config) ? ($field_config['sub_fields'] ?? []) : [];
-
-                $sanitized_rows = [];
-                foreach ($value as $row) {
-                    if (!is_array($row)) {
-                        continue;
-                    }
-
-                    $sanitized_row = [];
-                    foreach ($row as $sub_field => $sub_value) {
-                        // Get sub-field type from config
-                        $sub_field_config = $sub_fields[$sub_field] ?? 'text';
-                        $sub_field_type = is_array($sub_field_config) ? ($sub_field_config['type'] ?? 'text') : $sub_field_config;
-
-                        // Type-aware sanitization for sub-fields
-                        switch ($sub_field_type) {
-                            case 'float':
-                            case 'decimal':
-                                $sanitized_row[$sub_field] = floatval($sub_value);
-                                break;
-                            case 'number':
-                            case 'integer':
-                                $sanitized_row[$sub_field] = intval($sub_value);
-                                break;
-                            case 'url':
-                                $sanitized_row[$sub_field] = esc_url_raw($sub_value);
-                                break;
-                            case 'textarea':
-                                $sanitized_row[$sub_field] = sanitize_textarea_field($sub_value);
-                                break;
-                            case 'image':
-                            case 'file':
-                                // An unselected picker stores nothing, not 0:
-                                // `0` reads as a real attachment id to every
-                                // consumer that does absint($row['file']).
-                                $attachment_id = absint($sub_value);
-                                $sanitized_row[$sub_field] = ($attachment_id > 0 && get_post_type($attachment_id) === 'attachment')
-                                    ? $attachment_id
-                                    : '';
-                                break;
-                            default:
-                                $sanitized_row[$sub_field] = sanitize_text_field($sub_value);
-                                break;
-                        }
-                    }
-
-                    // Only add row if it has data (check for non-empty, non-zero values)
-                    $has_data = false;
-                    foreach ($sanitized_row as $v) {
-                        if ($v !== '' && $v !== null) {
-                            $has_data = true;
-                            break;
-                        }
-                    }
-                    if ($has_data) {
-                        $sanitized_rows[] = $sanitized_row;
-                    }
-                }
-
-                return $sanitized_rows;
-
-            case 'url':
-                return esc_url_raw($value);
-
-            case 'text':
-            case 'string':
-            default:
-                return sanitize_text_field($value);
-        }
     }
 }
 

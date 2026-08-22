@@ -43,13 +43,20 @@ fi
 #         retires it, in the one file where nobody would look for it.
 #         (Same line-anchored exemption PackageBootIntegrityTest applies, which
 #         pins these rows per symbol.)
+# v5.0.0 field-types: the metabox's own sanitize_field() and its nested
+#         sub-field switch — the SECOND vocabulary on the write side. The
+#         edit screen now unslashes and hands on: a Data model cleans inside
+#         update(), a post type without one goes straight to
+#         NTDST_FieldTypes::get(). Pinned as `sanitize_field(` with the paren,
+#         not bare: the name is a plausible one for a future unrelated helper,
+#         and the CALL is what would fatal.
 # v5.0.0 field-types: restSubFields() and restSchemaFor() — the two PUBLIC
 #         reads of the field description, 0 shipped readers. What a field
 #         publishes is asked once, by registerRestMeta() through the private
 #         schemaFor(); a second public way to ask it is a second exposure a
 #         consumer can assemble beside the convergence point (INV-1). Neither
 #         name is part of any other word, so both are pinned bare.
-REMOVED=$(grep -rnE "ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|restSubFields|restSchemaFor|signed_int" \
+REMOVED=$(grep -rnE "ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int" \
     --include='*.php' . \
     | grep -v /vendor/ \
     | grep -vE "^(\./)?tests/|^(\./)?specs/" \
