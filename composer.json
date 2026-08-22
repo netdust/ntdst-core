@@ -39,6 +39,11 @@
             "dealerdirect/phpcodesniffer-composer-installer": true
         }
     },
+    "extra": {
+        "branch-alias": {
+            "dev-main": "5.0.x-dev"
+        }
+    },
     "scripts-descriptions": {
         "syntax": "php -l over every shipped file. Catches a parse error, nothing else.",
         "lint": "The fleet Standard tier: PSR-12 + WordPress.Security + WordPress.DB + PHPCompatibilityWP. NOT yet in `gate` \u2014 see docs/gate.md.",
