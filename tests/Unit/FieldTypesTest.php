@@ -96,6 +96,21 @@ final class FieldTypesTest extends TestCase
         ],
     ];
 
+    /** A repeater whose declared cell name is not its own sanitize_key(). */
+    private const CAMEL_CASE_CELL = [
+        'sub_fields' => [
+            'subTitle' => ['type' => 'int'],
+        ],
+    ];
+
+    /** A repeater whose cells sanitize junk to '' — a row of nothing. */
+    private const JUNK_CELLS = [
+        'sub_fields' => [
+            'link'  => ['type' => 'url'],
+            'title' => ['type' => 'text'],
+        ],
+    ];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -166,7 +181,7 @@ final class FieldTypesTest extends TestCase
 
     protected function tearDown(): void
     {
-        // testDateNormalizesInTheSitesTimezone() moves the process clock.
+        // testDateKeepsBothHalvesOnOneClock() moves the process clock.
         date_default_timezone_set('UTC');
         Monkey\tearDown();
         parent::tearDown();
@@ -618,11 +633,17 @@ final class FieldTypesTest extends TestCase
     }
 
     /**
-     * A date is normalized in the SITE's timezone: strtotime() reads the
-     * posted string in it, so the formatter must write in it too. Paired with
-     * gmdate(), every site east of UTC loses a day on each save.
+     * Both halves of the date read the SAME clock. strtotime() parses in the
+     * process timezone, so the formatter must write in the process timezone —
+     * gmdate() reads a different clock and loses a day east of UTC.
+     *
+     * WordPress forces the process clock to UTC (wp-settings.php:73), so the
+     * pairing only shows itself once something moves that clock: a plugin, a
+     * WP-CLI command, or a consumer that calls date_default_timezone_set().
+     * The test moves it, because a mismatch that only a plugin can trigger is
+     * still a stored date that drifts.
      */
-    public function testDateNormalizesInTheSitesTimezone(): void
+    public function testDateKeepsBothHalvesOnOneClock(): void
     {
         date_default_timezone_set('Europe/Brussels');
 
@@ -762,6 +783,61 @@ final class FieldTypesTest extends TestCase
         // No sub_fields at all: every cell is text, which is what a repeater
         // without a declared vocabulary has always stored.
         $this->assertSame([['a' => 'text:x']], $this->sanitize('repeater', [['a' => '<b>x</b>']], []));
+    }
+
+    /**
+     * A cell is sanitized by the type its DECLARATION names, whatever the
+     * declared key looks like. The stored key is the sanitized one, so a
+     * declaration whose name is not already its own sanitize_key() —
+     * 'subTitle' — must still be found; otherwise the cell silently falls
+     * through to text and an int field stores 'text:12'.
+     *
+     * The second pass is the register_post_meta() re-save: it arrives with
+     * the SANITIZED key, so the declaration must be reachable from that key
+     * too, or the type is lost on every REST write (FR-2: every sanitizer is
+     * idempotent).
+     */
+    public function testACellIsFoundByItsDeclarationWhateverTheKeysCasing(): void
+    {
+        $once = $this->sanitize('repeater', [['subTitle' => '12<b>']], self::CAMEL_CASE_CELL);
+
+        $this->assertSame([['subtitle' => 12]], $once);
+        $this->assertSame(
+            $once,
+            $this->sanitize('repeater', $once, self::CAMEL_CASE_CELL),
+            'the re-save arrives with the sanitized key and must still find the declaration',
+        );
+    }
+
+    /**
+     * A row of nothing but junk drops on the FIRST pass. A row survives when
+     * any POSTED cell is not '' / null AND any SANITIZED cell is not '' /
+     * null: '0' and 'false' are answers (they sanitize to 0 and false), but a
+     * refused URL is not — it sanitizes to '', and keeping the row means the
+     * second pass drops it, so sanitize(sanitize(x)) !== sanitize(x) and the
+     * REST re-save deletes a row the edit screen just showed.
+     */
+    public function testAJunkOnlyRowDropsOnTheFirstPass(): void
+    {
+        $rows = [
+            ['link' => 'javascript:x', 'title' => ''],
+            ['link' => 'https://netdust.be/x', 'title' => ''],
+        ];
+
+        $once = $this->sanitize('repeater', $rows, self::JUNK_CELLS);
+
+        $this->assertSame([['link' => 'url:https://netdust.be/x', 'title' => '']], $once);
+        $this->assertSame(
+            $once,
+            $this->sanitize('repeater', $once, self::JUNK_CELLS),
+            'a row kept on pass 1 and dropped on pass 2 is a row the REST re-save deletes',
+        );
+
+        // The falsy answers are still answers — 0 and false are not nothing.
+        $this->assertSame(
+            [['qty' => 0, 'featured' => false, 'title' => '']],
+            $this->sanitize('repeater', [['qty' => '0', 'featured' => '', 'title' => '']], self::FALSY_CELLS),
+        );
     }
 
     /**
