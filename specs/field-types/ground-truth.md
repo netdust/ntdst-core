@@ -9,7 +9,7 @@ Canonical mapping used below (FR-3, D4): `integer`→`int` · `signed_int`→`in
 · `double`→`float` · `boolean`→`bool` · `wysiwyg`→`html` · `content`→`html`
 · `person`→`relation` · `post_relation`→`relation` · `datetime`→`date`.
 (`string`, `number`, `decimal`, `longtext` are in the 13-name retired list
-but no hit below is one of them — they map `string`→`text`, `number`→`float`,
+but no hit below is one of them; `themes/` directories on daan and stride were also grepped — 0 hits — — they map `string`→`text`, `number`→`int` (the registry's message table: the metabox rendered `number` as a step-1 integer),
 `decimal`→`float`, `longtext`→`textarea` per FR-2/D4 if ever found.)
 
 ---
