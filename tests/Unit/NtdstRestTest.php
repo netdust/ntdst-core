@@ -388,9 +388,11 @@ final class NtdstRestTest extends TestCase
      *
      * This row used to live in nonCallablePermissionProvider() and assert that
      * `'ntdst_no_such_permission_function'` refuses the route. It cannot any
-     * more: this class now accepts `'public'`, `'logged_in'` or a capability
-     * slug, and a capability slug is byte-identical to a typo'd function name.
-     * There is nothing to tell them apart with.
+     * more: this class accepts `'logged_in'` or a capability slug, and a
+     * capability slug is byte-identical to a typo'd function name. There is
+     * nothing to tell them apart with. (`'public'` is NOT in that list — Stefan
+     * dropped the string on 2026-08-22; ->public() is the one way to anonymous,
+     * and the string refuses its route. Pinned in NtdstRestDefaultsTest.)
      *
      * What CAN be asserted is the property that makes the ambiguity safe — an
      * unrecognised string becomes `current_user_can($string)`, which is false

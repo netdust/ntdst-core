@@ -11,11 +11,23 @@
 // package and its consumers moves from "refused" to "logged in":
 //
 //   absent / null  → the STRING 'is_user_logged_in'
-//   ->public()     → the STRING '__return_true'
-//   'public'       → the STRING '__return_true'
+//   ->public()     → the STRING '__return_true' — the ONE way to anonymous
+//   'public'       → REFUSED: the route does not register at all
 //   'logged_in'    → the STRING 'is_user_logged_in'
 //   a capability   → a closure that answers current_user_can($cap)
 //   a callable     → as given
+//
+// THE STRING 'public' NO LONGER OPENS ANYTHING (Stefan, 2026-08-22, "drop the
+// string"). ->public() is the named exception in D2a; ['permission' => 'public']
+// was a SECOND SPELLING of that same decision, and one decision with two doors
+// is how a route ends up anonymous without anybody deciding it. The value is
+// now unusable, and an unusable permission refuses its route like any other:
+// absent from register_rest_route(), one _doing_it_wrong pointing at ->public(),
+// one ntdst_log('api')->error(). Refusal beats a silently-denying capability
+// check because a route that quietly 403s reads, in production, exactly like a
+// route that was never declared. The threat-model property this file pins is
+// stronger than the spelling: NO string a consumer can pass may ever resolve to
+// '__return_true'. The anonymous marker is settable only by ->public().
 //
 // WHY THE TWO SHORTHANDS MUST REGISTER AS LITERAL STRINGS AND NOT AS CLOSURES:
 // `rest_get_server()->get_routes()` is the only place a site can read back what
@@ -34,9 +46,10 @@
 // does not exist, rather than existing and denying. A 403 test would pass
 // against a registered route, which is the weaker property. A write verb
 // (POST, PUT, PATCH, DELETE) registers only when it NAMES a capability or
-// hands over a callable of its own; absent, 'logged_in' and 'public' — however
-// they arrive, per-route, through defaults() or through ->public() — are all
-// refused with exactly one _doing_it_wrong.
+// hands over a callable of its own; absent, 'logged_in' and ->public() —
+// however they arrive, per-route or through defaults() — are all refused with
+// exactly one _doing_it_wrong. The string 'public' is refused on every verb,
+// read or write, because the VALUE is unusable and not because of the verb.
 //
 // WHAT "PENDING" MEANS, AND WHY BOTH ORDERS ARE HERE (threat model item 5):
 // register_rest_route() is _doing_it_wrong before rest_api_init and the hook
@@ -456,16 +469,221 @@ final class NtdstRestDefaultsTest extends TestCase
         $this->assertSame([], $this->wrongs, 'public() on a GET is a supported declaration, not a refusal.');
     }
 
-    public function testPublicSpelledAsAnOptionOnAGetRegistersAsTheSameString(): void
+    public function testTheStringPublicOnAGetRefusesTheRouteAndPointsAtPublicMethod(): void
     {
-        ntdst_rest('pub2/v1')->get('/open', fn() => [], ['permission' => 'public']);
+        // AMENDED by the independent test-author under Stefan's Class D ruling
+        // of 2026-08-22 ("drop the string"), spec FR-4 revision 3 + the ledger
+        // entry. This case used to assert the opposite — that the option string
+        // registered the same '__return_true' that ->public() does. That WAS
+        // the finding: two spellings of one decision, one of them reachable
+        // from any array a consumer builds at runtime.
+        //
+        // Nothing is relaxed here. The route was pinned OPEN and is now pinned
+        // ABSENT, which is the closed end of the same axis, and three new
+        // assertions come with it: the refusal is loud, it names the one door
+        // that still works, and it survives into a production log where
+        // _doing_it_wrong() is silent (core's doing_it_wrong_trigger_error
+        // filter is false inside a REST request).
+        //
+        // The sibling is the anti-blast-radius control: one unusable value
+        // refuses ITS OWN declaration, never the namespace around it.
+        $rest = ntdst_rest('pub2/v1');
+        $rest->get('/sibling', fn() => ['ok' => true]);
+        $rest->get('/open', fn() => ['ok' => true], ['permission' => 'public']);
 
         $this->fireRestApiInit();
 
+        $this->assertNotContains(
+            '/pub2/v1/open',
+            $this->routeKeys(),
+            "'public' as an option value must NEVER be handed to register_rest_route() — ->public() is the one door.",
+        );
+        $this->assertCount(
+            0,
+            $this->registrationsFor('/pub2/v1/open'),
+            'zero registrations for the refused route — not one that registers and then denies.',
+        );
+        $this->assertCount(
+            1,
+            $this->wrongs,
+            'the refusal is loud and fires _doing_it_wrong exactly once: ' . $this->wrongsText(),
+        );
+        $this->assertStringContainsString(
+            'public()',
+            implode(' | ', $this->wrongMessages()),
+            'the message must point at the replacement the author is supposed to write. Reported: '
+                . implode(' | ', $this->wrongMessages()),
+        );
+        $this->assertCount(
+            1,
+            $this->logMessages('api', 'error'),
+            '_doing_it_wrong is invisible inside a REST request, so a refusal that DESTROYS a route '
+                . 'must also reach the log at error, exactly once.',
+        );
+
+        $this->assertContains(
+            '/pub2/v1/sibling',
+            $this->routeKeys(),
+            'control: the sibling route in the same namespace still registers.',
+        );
         $this->assertSame(
+            'is_user_logged_in',
+            $this->permissionCallbackOf('/pub2/v1/sibling'),
+            'and it keeps the internal default — the refusal does not leak onto its neighbours.',
+        );
+    }
+
+    // =====================================================================
+    // CLASS D — the string is gone, and no string can reach the marker
+    // (Stefan 2026-08-22 "drop the string"; FR-4 rev 3; ledger threat model:
+    //  the only anonymous resolution is a marker ONLY public() can set)
+    // =====================================================================
+
+    public function testTheStringPublicOnAWriteVerbIsRefusedExactlyOnce(): void
+    {
+        // WHY: two rules meet on one line — the value is unusable, and the
+        // write names no capability. The author gets told ONE thing, at the
+        // value that is actually wrong. Two reports for one declaration teaches
+        // a reader to skim the log, and skimming is how the NEXT refusal (the
+        // one that matters) gets missed. The outcome is identical to the GET
+        // case, which is the point: the refusal is about the VALUE, and a verb
+        // cannot make an unusable permission usable.
+        $rest = ntdst_rest('pubw/v1');
+        $rest->post('/control', fn() => ['written' => true], ['permission' => 'edit_posts']);
+        $rest->post('/wipe', fn() => ['deleted' => true], ['permission' => 'public']);
+
+        $this->fireRestApiInit();
+
+        $this->assertContains('/pubw/v1/control', $this->routeKeys(), 'control: a named capability still registers.');
+        $this->assertNotContains(
+            '/pubw/v1/wipe',
+            $this->routeKeys(),
+            "'public' on a write verb must not register — not as anonymous, not as anything.",
+        );
+        $this->assertCount(
+            1,
+            $this->wrongs,
+            'ONE declaration, ONE refusal — not one per rule it breaks: ' . $this->wrongsText(),
+        );
+        $this->assertStringContainsString(
+            'public()',
+            implode(' | ', $this->wrongMessages()),
+            'and the one report is the one about the unusable value. Reported: '
+                . implode(' | ', $this->wrongMessages()),
+        );
+    }
+
+    /** @return array<string, array{0: string}> spellings a consumer reaches for when 'public' stops working */
+    public static function nearMissPublicSpellingProvider(): array
+    {
+        return [
+            'capitalised' => ['Public'],
+            'padded'      => [' public '],
+        ];
+    }
+
+    /**
+     * @dataProvider nearMissPublicSpellingProvider
+     */
+    public function testANearMissSpellingOfPublicIsACapabilityThatDenies(string $written): void
+    {
+        // WHY: FR-4 revision 3 — ANY unrecognised string is a capability. That
+        // rule is what makes dropping 'public' safe to reason about: there is
+        // exactly one recognised opening (->public()), one recognised posture
+        // ('logged_in'), one refused word ('public'), and everything else is a
+        // capability that current_user_can() answers false for.
+        //
+        // The failure this forbids is normalisation. A wrapper that trims or
+        // lower-cases before matching hands ' public ' the meaning of 'public'
+        // — and if the string ever comes back, so does the second door. Worse,
+        // silent normalisation makes a capability slug with an accidental space
+        // mean something entirely different from what is written. What is
+        // written is what is asked.
+        ntdst_rest('nearmiss/v1')->get('/probe', fn() => ['ok' => true], ['permission' => $written]);
+
+        $this->fireRestApiInit();
+
+        $callback = $this->permissionCallbackOf('/nearmiss/v1/probe');
+
+        $this->assertNotSame(
             '__return_true',
-            $this->permissionCallbackOf('/pub2/v1/open'),
-            "'public' as an option registers the same literal '__return_true' that public() does.",
+            $callback,
+            "'{$written}' resolved to the anonymous marker — a near miss must never open a route.",
+        );
+        $this->assertIsCallable($callback, "'{$written}' is a string, so it is a capability, so it is a gate.");
+        $this->assertFalse(
+            (bool) $callback(null),
+            "'{$written}' admitted the caller — the sentinel holds only manage_options.",
+        );
+        $this->assertContains(
+            $written,
+            $this->capsAsked,
+            "the capability is asked EXACTLY as written — no trim, no case folding. Asked: "
+                . implode(', ', $this->capsAsked),
+        );
+    }
+
+    /** @return array<string, array{0: string}> strings a consumer might hope resolve to "anyone" */
+    public static function anonymousMarkerCandidateProvider(): array
+    {
+        return [
+            'the dropped word'         => ['public'],
+            'the resolved function'    => ['__return_true'],
+            'a guessed marker'         => ['__ntdst_public'],
+            'a namespaced marker'      => ['ntdst:public'],
+            'a shouted marker'         => ['__NTDST_PUBLIC__'],
+            'the word with the arrow'  => ['->public()'],
+        ];
+    }
+
+    /**
+     * @dataProvider anonymousMarkerCandidateProvider
+     */
+    public function testNoStringAConsumerCanPassEverResolvesToTheAnonymousMarker(string $candidate): void
+    {
+        // WHY: this is the Class D threat model itself, and it outlives the
+        // spelling. Dropping 'public' only helps if the thing it used to mean
+        // cannot be NAMED from outside. The anonymous marker must be settable
+        // by exactly one gesture — ->public(), on a declaration, in the file
+        // that publishes the route — and never by a value that arrives inside
+        // an options array. Options arrays get built from config, from
+        // constants, from merges, from a variable that came from somewhere
+        // else; a marker reachable that way is a marker an attacker or an
+        // accident can set.
+        //
+        // Two outcomes are legal per candidate, and the case accepts either:
+        // the declaration is REFUSED (absent, reported), or it registers a gate
+        // that DENIES. The single illegal outcome is anonymity. Whatever the
+        // implementation picks as its internal marker, this provider must keep
+        // failing to reach it.
+        ntdst_rest('marker/v1')->get('/probe', fn() => ['ok' => true], ['permission' => $candidate]);
+
+        $this->fireRestApiInit();
+
+        $registrations = $this->registrationsFor('/marker/v1/probe');
+
+        if ($registrations === []) {
+            $this->assertNotSame(
+                [],
+                $this->wrongs,
+                "'{$candidate}' was dropped in silence — an unusable permission refuses out loud.",
+            );
+
+            return;
+        }
+
+        $callback = $registrations[0]['permission_callback'] ?? null;
+
+        $this->assertNotSame(
+            '__return_true',
+            $callback,
+            "'{$candidate}' reached the anonymous marker from an options array. "
+                . 'Only ->public() may open a route (FR-4 rev 3, Class D threat model).',
+        );
+        $this->assertIsCallable($callback, "'{$candidate}' registered something that is not even a gate.");
+        $this->assertFalse(
+            (bool) $callback(null),
+            "'{$candidate}' admitted an anonymous caller — no option value may open a route.",
         );
     }
 
