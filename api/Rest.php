@@ -92,32 +92,6 @@ final class NTDST_Rest
      */
     private static array $limits = [];
 
-    /**
-     * Every route that actually registered, with the permission it DECLARED.
-     *
-     * `NTDST_Actions` had one property nothing else replaces: a site's whole
-     * anonymous surface was a single list (`ntdst/api/public_actions`), and a
-     * test could assert on it. Routes scatter that decision across
-     * registrations, so without this, "is anything on this site reachable
-     * anonymously?" stops being a question code can answer.
-     *
-     * A closure is never resolved away, and that is the point. A closure
-     * permission is opaque: `fn() => true` and a real capability check have the
-     * same type. Filing a closure as merely "not public" would let a site's own
-     * "nothing is anonymous" test pass over a wide-open route, which is worse
-     * than no introspection at all. Closures are recorded as `callable` and
-     * surfaced by `opaqueSurface()` so they must be answered for, not skipped.
-     *
-     * The two shorthands ARE normalized, because there the resolution loses
-     * nothing: 'public' and ->public() are one posture and file as `public`,
-     * absent and 'logged_in' are one posture and file as `logged_in`. Leaving
-     * an unnamed route unfiled would hide it, and filing it as `callable` would
-     * bill a knowable route to the list of ones somebody still has to read.
-     *
-     * @var array<string, array{namespace: string, route: string, methods: list<string>, permission: string}>
-     */
-    private static array $surface = [];
-
     public function __construct(private string $namespace) {}
 
     public static function forNamespace(string $namespace): self
@@ -303,7 +277,8 @@ final class NTDST_Rest
      * The two shorthands resolve to the core functions as STRINGS (see the
      * INTERNAL/ANONYMOUS constants). A capability is the one case that must be
      * a closure, because core has no function that names it — so a capability
-     * route is opaque in get_routes() and the surface registry says so.
+     * route reads as opaque in get_routes(), and a site that wants to answer
+     * for it has to read the route's declaration.
      */
     private function permission(mixed $permission): mixed
     {
@@ -336,8 +311,7 @@ final class NTDST_Rest
      */
     private function registerOne(string $route, string $methods, $handler, array $options): void
     {
-        $declared   = $options['permission'] ?? null;
-        $permission = $this->permission($declared);
+        $permission = $this->permission($options['permission'] ?? null);
 
         if ($permission === null) {
             $this->refuse($route, $methods, '"permission" must be a callable, a capability, "logged_in" or "public"');
@@ -409,25 +383,6 @@ final class NTDST_Rest
             'callback'            => $handler,
             'permission_callback' => $literal ? $permission : $this->guard($permission, $route, $methods, $options),
         ]);
-
-        // Recorded HERE, below every refusal path: a route the wrapper turned
-        // away never registered, and must not read as surface.
-        //
-        // A shorthand is filed by its RESOLVED posture, so the default and its
-        // spelled-out twin are one entry type — and so an unnamed route reads as
-        // 'logged_in' rather than joining the closures under 'callable', which
-        // would report a knowable route as unknowable.
-        self::$surface[$this->key($route, $methods)] = [
-            'namespace'  => $this->namespace,
-            'route'      => $route,
-            'methods'    => $this->verbs($methods),
-            'permission' => match (true) {
-                $permission === self::ANONYMOUS          => 'public',
-                $permission === self::INTERNAL           => 'logged_in',
-                is_string($declared) && $declared !== '' => $declared,
-                default                                  => 'callable',
-            },
-        ];
     }
 
     /**
@@ -632,58 +587,6 @@ final class NTDST_Rest
         ['limit' => $limit, 'window' => $window] = self::$limits[$key];
 
         return NTDST_RateLimiter::attempt('ntdst_rest_' . md5($key . '|' . self::bucket()), $limit, $window, $request);
-    }
-
-    /**
-     * Every route registered through this wrapper, with its declared permission.
-     *
-     * @return list<array{namespace: string, route: string, methods: list<string>, permission: string}>
-     */
-    public static function surface(): array
-    {
-        return array_values(self::$surface);
-    }
-
-    /**
-     * The routes a site declared ANONYMOUS. This is the list `public_actions`
-     * used to be, and the reason to assert on it is the same: anonymous reach
-     * is the one property worth being able to check in one place.
-     *
-     * @return list<array{namespace: string, route: string, methods: list<string>, permission: string}>
-     */
-    public static function publicSurface(): array
-    {
-        return array_values(array_filter(
-            self::$surface,
-            static fn (array $r): bool => $r['permission'] === 'public',
-        ));
-    }
-
-    /**
-     * The routes whose permission is a CALLABLE, and therefore unknowable here.
-     *
-     * Read this together with `publicSurface()` or the pair lies to you. A
-     * closure may be a careful capability check or it may be `fn() => true`,
-     * and nothing at this layer can tell them apart. Reporting it as merely
-     * "not public" would let a site assert "we expose nothing anonymously" and
-     * be wrong. So it gets its own list, and a site's surface test answers for
-     * both: no route declares public, AND these callables are ones somebody
-     * has read.
-     *
-     * @return list<array{namespace: string, route: string, methods: list<string>, permission: string}>
-     */
-    public static function opaqueSurface(): array
-    {
-        return array_values(array_filter(
-            self::$surface,
-            static fn (array $r): bool => $r['permission'] === 'callable',
-        ));
-    }
-
-    /** Drop the recorded surface. For tests; a process registers routes once. */
-    public static function forgetSurface(): void
-    {
-        self::$surface = [];
     }
 
     /**

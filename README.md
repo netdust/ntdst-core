@@ -151,6 +151,22 @@ add_filter('rest_pre_dispatch', function ($result, $server, $request) {
 is gone, and `true` when the route declared no limit — nothing to spend is not
 a refusal.
 
+**Asserting your anonymous surface.** `surface()`, `publicSurface()`,
+`opaqueSurface()` and `forgetSurface()` are gone. WordPress already keeps the
+register every route lands in, and a second copy of it can only disagree with
+the original. Ask the server instead:
+
+```php
+$routes    = rest_get_server()->get_routes('my/v1');
+$anonymous = array_filter($routes, fn ($h) => in_array('__return_true', array_column($h, 'permission_callback'), true));
+// assert $anonymous === [] in a test
+```
+
+`get_routes()` maps each route to a LIST of handlers — one per method group —
+so the filter reads all of them, not the first. A capability route registers a
+closure and reads as opaque there; this finds the routes that named themselves
+anonymous, which is the property worth pinning.
+
 **Retired options no longer take your endpoint away.** An option that never
 existed still refuses the route. `cors` and `before_dispatch` are *ignored*,
 with one `_doing_it_wrong` naming the replacement, and the route registers. An
@@ -165,6 +181,7 @@ author who wrote them when they worked keeps their endpoint.
 | `corsFor($route)` | gone — one site policy |
 | `corsDecisionFor($route, $origin)` | `corsDecisionFor($origin)` |
 | `chargePreflight` | gone — `OPTIONS` is unmetered; bill it yourself with `charge()` if you need to |
+| `surface()` / `publicSurface()` / `opaqueSurface()` / `forgetSurface()` | `rest_get_server()->get_routes($ns)` — WordPress's own register |
 
 ### 4.4.2
 

@@ -21,7 +21,7 @@ use PHPUnit\Framework\TestCase;
 final class PackageBootIntegrityTest extends TestCase
 {
     /**
-     * Symbols v3.0.0 removed. Nothing shipped may still call them.
+     * Symbols v3.0.0 and v5.0.0 removed. Nothing shipped may still call them.
      *
      * @return array<string, array{0: string}>
      */
@@ -38,6 +38,14 @@ final class PackageBootIntegrityTest extends TestCase
             // framework, and no functional consumer anywhere on the fleet.
             'NTDST_SectorRegistry' => ['NTDST_SectorRegistry'],
             'ntdst_sectors' => ['ntdst_sectors'],
+            // v5.0.0 — the NTDST_Rest surface registry. WordPress records every
+            // route it registers, so a second registry was a copy that could
+            // disagree with the original. rest_get_server()->get_routes() is
+            // the list now, and README shows the assertion over it.
+            'publicSurface' => ['publicSurface'],
+            'opaqueSurface' => ['opaqueSurface'],
+            'forgetSurface' => ['forgetSurface'],
+            'NtdstRestSurfaceTest' => ['NtdstRestSurfaceTest'],
         ];
     }
 
@@ -89,7 +97,7 @@ final class PackageBootIntegrityTest extends TestCase
         $this->assertSame(
             [],
             $hits,
-            "{$symbol} was removed in v3.0.0 but is still referenced in shipped code:\n" . implode("\n", $hits),
+            "{$symbol} was removed but is still referenced in shipped code:\n" . implode("\n", $hits),
         );
     }
 

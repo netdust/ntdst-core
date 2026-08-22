@@ -16,19 +16,23 @@ if [ -n "$BAD" ]; then
     exit 1
 fi
 
-# v3.0.0 removed the v2 routing facades. A deleted symbol with a surviving
+# Symbols removed across v3.0.0 and v5.0.0. A deleted symbol with a surviving
 # caller is a RUNTIME fatal that no other gate step can see: `composer lint` is
 # php -l (syntax only, never resolves a name) and the unit suite does not load
 # every shipped file. Cluster A shipped two such fatals with a 155/155 green
 # suite — admin/RelationField.php called ntdst_api_action(), and core/Theme.php
 # guarded on ntdst_router() so a required mixin silently stopped registering.
 # This grep is what makes the next rename fail loudly instead.
-REMOVED=$(grep -rnE "ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints" \
+#
+# v3.0.0: the v2 routing facades.
+# v5.0.0: the NTDST_Rest surface registry — WordPress's get_routes() is the
+#         registry now — and the test file that asserted on it.
+REMOVED=$(grep -rnE "ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest" \
     --include='*.php' . \
     | grep -v /vendor/ | grep -v '^\./tests/' | grep -v '^\./specs/' \
     | grep -vE ':[0-9]+: *(\*|//|#|/\*)' || true)
 if [ -n "$REMOVED" ]; then
-    echo "Shipped code still references a symbol removed in v3.0.0:"
+    echo "Shipped code still references a symbol removed in v3.0.0 or v5.0.0:"
     echo "$REMOVED"
     exit 1
 fi
