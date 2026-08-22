@@ -48,6 +48,13 @@ final class RestInternalByDefaultTest extends TestCase
 {
     use MockeryPHPUnitIntegration;
 
+    // The rest_api_init harness — the hook states, WP_Hook's live iteration,
+    // WordPress's allow-list and the statics reset — lives in ONE place
+    // (tests/Support/RestApiInitHarness.php), shared with NtdstRestDefaultsTest
+    // and NtdstRestCorsTest. Three hand-copies meant a fix to one of them fixed
+    // a third of the suite.
+    use RestApiInitHarness;
+
     /** The consumer's namespace — the one a site declares once and never repeats. */
     private const NS = 'ntdst-baseline/v1';
 
@@ -64,18 +71,8 @@ final class RestInternalByDefaultTest extends TestCase
     /** The one cross-origin consumer the module declares. */
     private const ORIGIN = NtdstFeatureBaselineModule::ORIGIN;
 
-    /**
-     * What get_allowed_http_origins() builds before the filter runs, for a site
-     * whose home and admin share a host. Every list assertion is exact against
-     * this: WordPress's entries, in WordPress's order, then what was declared.
-     */
-    private const WP_DEFAULTS = ['http://site.test', 'https://site.test'];
-
     /** The fake WP route table: '/ns/route' => every arg-array register_rest_route() received. */
     private array $routeTable = [];
-
-    /** Callbacks hung on a WP hook, keyed by hook then priority. */
-    private array $hooked = [];
 
     /** Every _doing_it_wrong() call: [function, message, version]. */
     private array $wrongs = [];
@@ -86,43 +83,23 @@ final class RestInternalByDefaultTest extends TestCase
     /** Capabilities the sentinel user holds. Empty = a logged-in nobody. */
     private array $heldCaps = [];
 
-    /** Every origin the code put to is_allowed_http_origin(), in order. */
-    private array $askedWordPress = [];
-
-    /** did_action('rest_api_init') — 0 before the hook, 1 from the moment it starts. */
-    private int $restApiInitDid = 0;
-
-    /** doing_action('rest_api_init') — true only WHILE the callbacks run. */
-    private bool $restApiInitDoing = false;
-
     protected function setUp(): void
     {
         parent::setUp();
         Monkey\setUp();
 
-        $this->routeTable       = [];
-        $this->hooked           = [];
-        $this->wrongs           = [];
-        $this->capsAsked        = [];
-        $this->heldCaps         = [];
-        $this->askedWordPress   = [];
-        $this->restApiInitDid   = 0;
-        $this->restApiInitDoing = false;
+        $this->routeTable = [];
+        $this->wrongs     = [];
+        $this->capsAsked  = [];
+        $this->heldCaps   = [];
 
         $_SERVER = ['REMOTE_ADDR' => '203.0.113.9'];
 
-        // tests/bootstrap.php defines add_filter as a REAL recording function
-        // for the whole suite, and ntdst_log as a REAL recorder. Both are
-        // process-wide, so a previous test file's mounts and entries would
-        // otherwise be read as this test's evidence.
-        foreach (['rest_api_init', 'allowed_http_origins', 'allowed_http_origin', 'rest_pre_serve_request'] as $hook) {
-            unset($GLOBALS['_ntdst_test_filters'][$hook], $GLOBALS['_ntdst_test_filters_at'][$hook]);
-        }
-
-        $GLOBALS['_ntdst_test_log']         = [];
-        $GLOBALS['_ntdst_test_http_origin'] = '';
-
-        $this->resetRestStatics();
+        // Resets every static the class declares (by reflection), clears the
+        // process-wide recorders tests/bootstrap.php defines, puts WordPress's
+        // own CORS emitter back on the bus where core mounts it, and says this
+        // is a REST request.
+        $this->resetRestHarness();
 
         // WP core's registrar. Recording it is how ABSENCE becomes observable:
         // a route the wrapper refuses never reaches this stub.
@@ -167,7 +144,10 @@ final class RestInternalByDefaultTest extends TestCase
             $this->hooked[(string) $hook][(int) $priority][] = $cb;
             return true;
         });
-        Functions\when('remove_filter')->justReturn(true);
+        Functions\when('remove_filter')->alias(function ($hook, $cb = null, $priority = 10) {
+            $this->forgetRecordedFilter($hook, $cb);
+            return true;
+        });
         Functions\when('remove_action')->justReturn(true);
 
         Functions\when('did_action')->alias(fn($hook = null) => $this->restApiInitDid);
@@ -213,9 +193,7 @@ final class RestInternalByDefaultTest extends TestCase
 
     protected function tearDown(): void
     {
-        foreach (['rest_api_init', 'allowed_http_origins', 'allowed_http_origin', 'rest_pre_serve_request'] as $hook) {
-            unset($GLOBALS['_ntdst_test_filters'][$hook], $GLOBALS['_ntdst_test_filters_at'][$hook]);
-        }
+        $this->forgetRecordedHooks();
 
         Monkey\tearDown();
         parent::tearDown();
@@ -224,21 +202,6 @@ final class RestInternalByDefaultTest extends TestCase
     // =====================================================================
     // Harness
     // =====================================================================
-
-    /** Clear the per-process caches so each case starts on a clean site. */
-    private function resetRestStatics(): void
-    {
-        $reflection = new ReflectionClass(NTDST_Rest::class);
-
-        foreach ($reflection->getProperties(ReflectionProperty::IS_STATIC) as $property) {
-            if (!$property->hasDefaultValue()) {
-                continue;
-            }
-
-            $property->setAccessible(true);
-            $property->setValue(null, $property->getDefaultValue());
-        }
-    }
 
     /**
      * The two boot orders a WordPress module can have. Both are real; the
@@ -261,80 +224,6 @@ final class RestInternalByDefaultTest extends TestCase
         (new NtdstFeatureBaselineModule(self::NS))->boot($insideRestApiInit);
 
         $this->fireRestApiInit();
-    }
-
-    /**
-     * Every callback mounted on rest_api_init, keyed by priority, read FRESH —
-     * two recorders exist (this file's add_action stub and the real add_filter
-     * from tests/bootstrap.php), because in WordPress add_action IS add_filter.
-     *
-     * @return array<int, list<callable>>
-     */
-    private function restApiInitCallbacks(): array
-    {
-        $byPriority = $this->hooked['rest_api_init'] ?? [];
-
-        foreach (($GLOBALS['_ntdst_test_filters_at']['rest_api_init'] ?? []) as $priority => $callback) {
-            $priority = (int) $priority;
-
-            if (in_array($callback, $byPriority[$priority] ?? [], true)) {
-                continue; // recorded by both stubs; run it once
-            }
-
-            $byPriority[$priority][] = $callback;
-        }
-
-        ksort($byPriority);
-
-        return $byPriority;
-    }
-
-    /**
-     * Fire rest_api_init once, the way WP_Hook::apply_filters() fires it:
-     * did_action() becomes 1 BEFORE the callbacks run, doing_action() is true
-     * only while they run, the callback list is re-read after every callback
-     * (WP walks $this->callbacks live), and a callback mounted at a priority
-     * the iteration has already passed never runs.
-     */
-    private function fireRestApiInit(): void
-    {
-        $this->restApiInitDid   = 1;
-        $this->restApiInitDoing = true;
-
-        $ran             = [];
-        $currentPriority = null;
-
-        while (true) {
-            $next = null;
-
-            foreach ($this->restApiInitCallbacks() as $priority => $callbacks) {
-                if ($currentPriority !== null && $priority < $currentPriority) {
-                    continue; // already passed — WordPress will not go back for it
-                }
-
-                foreach ($callbacks as $index => $callback) {
-                    if (isset($ran[$priority . ':' . $index])) {
-                        continue;
-                    }
-
-                    $next = [$priority, $index, $callback];
-                    break 2;
-                }
-            }
-
-            if ($next === null) {
-                break;
-            }
-
-            [$priority, $index, $callback] = $next;
-
-            $ran[$priority . ':' . $index] = true;
-            $currentPriority               = $priority;
-
-            $callback(rest_get_server());
-        }
-
-        $this->restApiInitDoing = false;
     }
 
     /** @return list<array<string, mixed>> every registration WordPress received for a route */
@@ -434,67 +323,6 @@ final class RestInternalByDefaultTest extends TestCase
     private function wrongMessages(): array
     {
         return array_map(static fn(array $w) => $w[1], $this->wrongs);
-    }
-
-    /**
-     * Entries the real ntdst_log() recorder took, filtered by channel + level.
-     * tests/bootstrap.php stores [channel, level, message].
-     *
-     * @return list<string>
-     */
-    private function logMessages(string $channel, string $level): array
-    {
-        return array_values(array_map(
-            static fn(array $entry): string => (string) ($entry[2] ?? ''),
-            array_filter(
-                $GLOBALS['_ntdst_test_log'] ?? [],
-                static fn(array $entry): bool => ($entry[0] ?? '') === $channel && ($entry[1] ?? '') === $level,
-            ),
-        ));
-    }
-
-    /**
-     * Stub is_allowed_http_origin() — WordPress returns THE ORIGIN when it
-     * allows and an EMPTY STRING when it does not, never a bool.
-     */
-    private function wordPressAllowsOnly(string ...$allowed): void
-    {
-        Functions\when('is_allowed_http_origin')->alias(
-            function ($origin = null) use ($allowed) {
-                $this->askedWordPress[] = $origin;
-                return in_array($origin, $allowed, true) ? (string) $origin : '';
-            },
-        );
-    }
-
-    /**
-     * WordPress's own allow-list after the site's filters ran.
-     *
-     * @return list<string>
-     */
-    private function allowList(): array
-    {
-        $this->assertArrayHasKey(
-            'allowed_http_origins',
-            $GLOBALS['_ntdst_test_filters'] ?? [],
-            'cors() must add the declared origins to WordPress\'s own list (FR-6, INV-5).',
-        );
-
-        $list = ($GLOBALS['_ntdst_test_filters']['allowed_http_origins'])(self::WP_DEFAULTS);
-
-        $this->assertIsArray($list, 'The allowed_http_origins filter must return the list, not a scalar.');
-
-        return array_values($list);
-    }
-
-    /** @return list<string> the same list, without requiring anything be mounted */
-    private function allowListIfMounted(): array
-    {
-        $list = isset($GLOBALS['_ntdst_test_filters']['allowed_http_origins'])
-            ? ($GLOBALS['_ntdst_test_filters']['allowed_http_origins'])(self::WP_DEFAULTS)
-            : self::WP_DEFAULTS;
-
-        return array_values((array) $list);
     }
 
     // =====================================================================
@@ -784,6 +612,44 @@ final class RestInternalByDefaultTest extends TestCase
         );
     }
 
+    public function testAPublicCallOnAHeldHandleAfterTheHookCannotChangeThePublishedSurface(): void
+    {
+        // WHY: threat row #5 at the site level. A module keeps what a verb
+        // returned and publishes it later — from a callback, from a filter, or
+        // simply further down the file than the hook it fires on. By then
+        // WordPress holds the route and its permission_callback; nothing the
+        // framework does can change it. The author's line says the endpoint is
+        // anonymous and the site serves it internal, and the only thing
+        // standing between that mismatch and a support ticket is a refusal
+        // loud enough to read.
+        $held = ntdst_rest(self::NS)->get('/health', static fn() => ['ok' => true]);
+
+        $this->fireRestApiInit();
+
+        $held->public();
+
+        $this->assertSame(
+            'is_user_logged_in',
+            $this->permissionCallbackOf(self::HEALTH),
+            'the published route keeps the permission it registered with.',
+        );
+        $this->assertSame(
+            [],
+            $this->anonymousRoutes(),
+            'the anonymous surface a site can read back did not change, because it cannot.',
+        );
+        $this->assertCount(
+            1,
+            $this->registrationsFor(self::HEALTH),
+            'and nothing was registered a second time behind WordPress.',
+        );
+        $this->assertNotSame(
+            [],
+            $this->wrongs,
+            'a public() that can no longer do anything must SAY so — silence here reads as success.',
+        );
+    }
+
     // =====================================================================
     // CORS through the feature (FR-6, SC-6, threat row #9)
     // =====================================================================
@@ -799,7 +665,7 @@ final class RestInternalByDefaultTest extends TestCase
         $this->bootModule($inside);
 
         $this->assertSame(
-            [...self::WP_DEFAULTS, self::ORIGIN],
+            [...$this->wpDefaultOrigins, self::ORIGIN],
             $this->allowList(),
             'WordPress\'s entries first, in WordPress\'s order, then the one declared origin.',
         );
@@ -875,7 +741,7 @@ final class RestInternalByDefaultTest extends TestCase
         ntdst_rest('other-plugin/v1')->cors(['*']);
 
         $this->assertSame(
-            [...self::WP_DEFAULTS, self::ORIGIN],
+            [...$this->wpDefaultOrigins, self::ORIGIN],
             $this->allowListIfMounted(),
             "'*' must add nothing — not itself, not a widening of anyone else's list.",
         );

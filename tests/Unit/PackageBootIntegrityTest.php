@@ -21,38 +21,52 @@ use PHPUnit\Framework\TestCase;
 final class PackageBootIntegrityTest extends TestCase
 {
     /**
-     * Symbols v3.0.0 and v5.0.0 removed. Nothing shipped may still call them.
+     * Every symbol a release REMOVED, with the release that removed it.
      *
-     * @return array<string, array{0: string}>
+     * The version is part of the row, not decoration: when this test fails,
+     * the one thing the reader needs is which upgrade deleted the name they
+     * are still calling — that is what tells them whether to fix the caller or
+     * to pin the older package. The failure message says it out loud.
+     *
+     * The FR-5 rows carry the CALL SHAPES as well as the bare names.
+     * `surface` on its own is an ordinary English word this codebase uses in
+     * prose ("the exposure surface", "typos surface immediately"), so the
+     * removed method is pinned as the three ways PHP can reach it — a static
+     * call, an instance call, and the property.
+     *
+     * @return array<string, array{0: string, 1: string}>
      */
     public static function removedSymbolProvider(): array
     {
         return [
-            'ntdst_api_action' => ['ntdst_api_action'],
-            'ntdst_router' => ['ntdst_router'],
-            'ntdst_route' => ['ntdst_route'],
-            'ntdst_endpoints' => ['ntdst_endpoints'],
-            'NTDST_Router' => ['NTDST_Router'],
-            'NTDST_Endpoints' => ['NTDST_Endpoints'],
+            'ntdst_api_action' => ['ntdst_api_action', '3.0.0'],
+            'ntdst_router' => ['ntdst_router', '3.0.0'],
+            'ntdst_route' => ['ntdst_route', '3.0.0'],
+            'ntdst_endpoints' => ['ntdst_endpoints', '3.0.0'],
+            'NTDST_Router' => ['NTDST_Router', '3.0.0'],
+            'NTDST_Endpoints' => ['NTDST_Endpoints', '3.0.0'],
             // The sector system left the package: product domain, not
             // framework, and no functional consumer anywhere on the fleet.
-            'NTDST_SectorRegistry' => ['NTDST_SectorRegistry'],
-            'ntdst_sectors' => ['ntdst_sectors'],
+            'NTDST_SectorRegistry' => ['NTDST_SectorRegistry', '3.0.0'],
+            'ntdst_sectors' => ['ntdst_sectors', '3.0.0'],
             // v5.0.0 — the NTDST_Rest surface registry. WordPress records every
             // route it registers, so a second registry was a copy that could
             // disagree with the original. rest_get_server()->get_routes() is
             // the list now, and README shows the assertion over it.
-            'publicSurface' => ['publicSurface'],
-            'opaqueSurface' => ['opaqueSurface'],
-            'forgetSurface' => ['forgetSurface'],
-            'NtdstRestSurfaceTest' => ['NtdstRestSurfaceTest'],
+            'publicSurface' => ['publicSurface', '5.0.0'],
+            'opaqueSurface' => ['opaqueSurface', '5.0.0'],
+            'forgetSurface' => ['forgetSurface', '5.0.0'],
+            'NtdstRestSurfaceTest' => ['NtdstRestSurfaceTest', '5.0.0'],
+            'Rest::surface' => ['::surface(', '5.0.0'],
+            'Rest->surface' => ['->surface(', '5.0.0'],
+            'Rest $surface' => ['$surface', '5.0.0'],
         ];
     }
 
     /**
      * @dataProvider removedSymbolProvider
      */
-    public function testNoShippedFileReferencesARemovedSymbol(string $symbol): void
+    public function testNoShippedFileReferencesARemovedSymbol(string $symbol, string $removedIn): void
     {
         $root = dirname(__DIR__, 2);
         $hits = [];
@@ -97,7 +111,8 @@ final class PackageBootIntegrityTest extends TestCase
         $this->assertSame(
             [],
             $hits,
-            "{$symbol} was removed but is still referenced in shipped code:\n" . implode("\n", $hits),
+            "{$symbol} was removed in v{$removedIn} but is still referenced in shipped code:\n"
+                . implode("\n", $hits),
         );
     }
 
