@@ -14,6 +14,29 @@ brief does not restate them; it cites them.
 
 ---
 
+## 0. Direction — what the plan is measured against
+
+`docs/direction-2026-08-22-kanal-benchmark.md` — Stefan's benchmark of core +
+baseline against a Kanal-class site. Three sentences of it govern tomorrow:
+
+- **Core stays mostly where it is.** It is the machinery: DI, lifecycle, data, REST,
+  responses, admin fields, relations, scheduler, mail, security. "Don't turn it
+  into Kanal-core."
+- **Capabilities grow in baseline, after being earned** on real sites — events,
+  forms, newsletter, imports, sync, search. Not before. The frozen specs (A9) are
+  exactly those; they stay frozen.
+- **The test of the foundation** is what an agent has to say while building a
+  site: "I need an Event model" is fine; "I need a secure recurring-job system" or
+  "a generic REST router" is a foundation failure.
+
+So the plan's success criterion is not "core has more"; it is "an agent composing
+`Data → Rest → Response → Scheduler` for a site never has to build a surface
+core should own, and never finds two surfaces for one job". The direction's
+header lists the three facts in it that 2026-08-21 changed (public shape removed;
+Actions → Rest; RelationField must follow).
+
+---
+
 ## 1. State tonight — verified
 
 ### ntdst-core
@@ -171,6 +194,21 @@ that replaces it: `ntdst_rest('ns/v1')->post('/thing', $handler, ['permission'
 => …, 'limit' => …])`, `X-WP-Nonce` with the `wp_rest` nonce (A5), rate limit via
 the existing `charge()`. Also goes: `/get_nonce`, `assets/js/ntdst-api.js`, the
 `ntdst_actions()` boot line, the Actions tests. `publicSurface()` keeps A7.
+
+**`Actions.php` has consumers inside core** — found 2026-08-22 00:58, missed
+yesterday because consumers were counted in sites only:
+
+| file | dependency | becomes |
+|---|---|---|
+| `admin/RelationField.php:47` | `ntdst_actions()->register('relation_search', …)` — the admin autocomplete | a `ntdst_rest('ntdst/v1')->get('/relation/search', …)` route, permission = the same `edit_others_posts`-of-target check it has now |
+| `admin/MetaboxGenerator.php:88` | the JS it emits calls the `relation_search` action | calls the route with `X-WP-Nonce` |
+| `core/Theme.php:36,60` | docblock still describes `apiAction()` → `ntdst_actions()->register()`; the method itself is already gone (only rossi / ludoluykx on old core call it) | docblock rewritten |
+| `core/Pages.php:13–20` | docblock describes the command/resource split | rewritten |
+| `ntdst-core.php:49,75` | boot line and the JS docblock | removed |
+
+This is the real size of D2: not a delete, a migration of core's own admin
+surface onto `Rest`. It also answers the direction's §2 ("RelationField uses the
+action system") — it will use the REST system, same property.
 
 **D3 — Same major, or a 6.0.0?** 5.0.0 is unreleased; nobody has taken it. Two
 majors in one week is worse than one larger one. Recommendation: all of this is
