@@ -265,14 +265,30 @@ final class NTDST_Rest
         add_filter('allowed_http_origins', [self::class, 'filterAllowedOrigins'], 10, 1);
         add_filter('allowed_http_origin', [self::class, 'filterAllowedOrigin'], 10, 2);
 
-        if (self::timing() === 'before') {
+        // The swap is SCHEDULED for priority 15 whenever 15 is still ahead:
+        // before the hook, and inside it at any priority below 15 — WP_Hook
+        // picks up a callback added at a priority it has not reached yet.
+        //
+        // Swapping EARLIER than 15 would be a no-op, because WordPress does not
+        // mount rest_send_cors_headers() before the request either: it is added
+        // by rest_api_default_filters(), itself a rest_api_init callback at
+        // priority 10 (wp-includes/rest-api.php). A cors() called at priority 5
+        // — an ordinary place for a consumer to declare — would remove a
+        // handler that is not on the bus yet, and core would mount it five
+        // priorities later: the reflect-any-origin emitter running for the whole
+        // request, over an allow-list this same call has already widened.
+        $timing   = self::timing();
+        $priority = self::hookPriority();
+
+        if ($timing === 'before' || ($timing === 'inside' && $priority !== null && $priority < 15)) {
             add_action('rest_api_init', [self::class, 'mountCors'], 15);
 
             return $this;
         }
 
-        // Inside the hook past priority 15, or after it has finished: there is
-        // no hook left to schedule the swap on, so it happens now.
+        // Inside the hook at 15 or later, or after it has finished: 15 is behind
+        // us and WP_Hook never walks backwards, so nothing scheduled there would
+        // run. Core has mounted its emitter by now, so the swap happens here.
         self::mountCors();
 
         return $this;
