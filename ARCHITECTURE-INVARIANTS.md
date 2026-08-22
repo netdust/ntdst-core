@@ -49,7 +49,7 @@ projecting through `restFields()`; any `public_fields` / `public_shape` /
 **Deliberate exceptions:**
 - A model with no `label` registers no post type and therefore no meta, and warns once per model.
 - A post type that is not itself in REST (`show_in_rest` absent or false) still registers its meta — WordPress emits none of it — and warns once per model.
-- `json` and any partially-declared repeater are **not publishable at all**, and each warns once per model. Half a repeater is not half published: WordPress validates the stored row against the closed schema, so the value reads back `null`, a write carrying the undeclared key is refused 400, and a legal write drops that key from storage.
+- `json`, any partially-declared repeater, and a repeater that has no `sub_fields` are **not publishable at all**, and each warns once per model. Half a repeater is not half published: WordPress validates the stored row against the closed schema, so the value reads back `null`, a write carrying the undeclared key is refused 400, and a legal write drops that key from storage.
 - A scalar registers `show_in_rest => true` rather than a schema, so `format` (email, uri) is advisory only. A `format` in the schema would validate stored legacy values and read them back as `null`; the model's sanitizer, not the schema, is what enforces the shape (DD-9).
 **Status:** established by Cluster 1 (T02–T03); code holds at `b52b855`; flips to
 holds-today at the release commit (FR-16).
