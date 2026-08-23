@@ -83,8 +83,10 @@ final class NTDST_Template_Loader
      *
      * Defense-in-depth: isInside() ensures the resolved file lives within the
      * base it matched, so a user-influenced name cannot traverse out
-     * (`../../../../etc/passwd`). The registry is read LIVE here, which is what
-     * eliminates the old seed-once ordering hazard.
+     * (`../../../../etc/passwd`). Every branch returns and caches the REALPATH
+     * it verified, so the path the caller includes is the path the guard
+     * resolved. The registry is read LIVE here, which is what eliminates the
+     * old seed-once ordering hazard.
      *
      * @param list<string> $extraPaths Searched first, never cached.
      */
@@ -116,15 +118,26 @@ final class NTDST_Template_Loader
             $path = rtrim($path, '/');
             $file = $path . '/' . $template;
             if (file_exists($file) && self::isInside($file, $path)) {
-                return $file;
+                // Hand back the path that was VERIFIED. isInside() decides on
+                // realpath($file); returning the raw join gives the caller a
+                // different string to include() than the one the guard
+                // resolved — a symlink swapped in between the two is included
+                // unchecked. realpath() cannot fail here: isInside() has just
+                // resolved this file.
+                return (string) realpath($file);
             }
         }
 
         foreach (self::searchPaths() as $path) {
             $file = $path . '/' . $template;
             if (file_exists($file) && self::isInside($file, $path)) {
-                self::$template_cache[$key] = $file;
-                return $file;
+                // The verified path again — and it is what gets CACHED, so
+                // 'card' and './card' store one canonical value rather than
+                // two spellings of one file.
+                $real = (string) realpath($file);
+                self::$template_cache[$key] = $real;
+
+                return $real;
             }
         }
 
@@ -145,8 +158,11 @@ final class NTDST_Template_Loader
         // breakage that is miserable to diagnose (2026-06-12, questionnaire
         // field rendering).
         if ($located) {
-            self::$template_cache[$key] = $located;
-            return $located;
+            // isInsideTheme() resolved it just above, so realpath() holds.
+            $real = (string) realpath($located);
+            self::$template_cache[$key] = $real;
+
+            return $real;
         }
 
         return null;

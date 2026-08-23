@@ -242,7 +242,7 @@ final class TemplateLoaderTest extends TestCase
 
         $this->assertSame(
             $this->registered . '/single-gig.php',
-            $picked,
+            $this->assertCanonical($picked, 'what the picker hands WordPress is canonical too'),
             "The registry answers for the most specific candidate WordPress offered.",
         );
     }
@@ -314,8 +314,14 @@ final class TemplateLoaderTest extends TestCase
         $this->writeTemplate($this->registered, 'gig-card.php');
         NTDST_Template_Loader::addPath($this->registered);
 
-        $this->assertSame($this->registered . '/gig-card.php', NTDST_Template_Loader::locate('gig-card'));
-        $this->assertSame($this->registered . '/gig-card.php', NTDST_Template_Loader::locate('gig-card.php'));
+        $this->assertSame(
+            $this->registered . '/gig-card.php',
+            $this->assertCanonical(NTDST_Template_Loader::locate('gig-card'), 'registry hit, no extension'),
+        );
+        $this->assertSame(
+            $this->registered . '/gig-card.php',
+            $this->assertCanonical(NTDST_Template_Loader::locate('gig-card.php'), 'registry hit, with extension'),
+        );
     }
 
     public function testLocateRefusesANameThatTraversesOutOfTheRegisteredDirectory(): void
@@ -341,7 +347,10 @@ final class TemplateLoaderTest extends TestCase
         // Positive control — the guard refuses the traversal, not everything.
         $this->resetLoader();
         NTDST_Template_Loader::addPath($this->root);
-        $this->assertSame($this->root . '/passwd.php', NTDST_Template_Loader::locate('passwd'));
+        $this->assertSame(
+            $this->root . '/passwd.php',
+            $this->assertCanonical(NTDST_Template_Loader::locate('passwd'), 'the positive control resolves canonically'),
+        );
     }
 
     public function testThePickerRefusesATraversingCandidateToo(): void
@@ -369,7 +378,10 @@ final class TemplateLoaderTest extends TestCase
 
         $this->assertSame(
             $this->registered . '/parts/hero.php',
-            NTDST_Template_Loader::locateInCustomPaths('/theme/parts/hero.php', 'parts/hero.php'),
+            $this->assertCanonical(
+                NTDST_Template_Loader::locateInCustomPaths('/theme/parts/hero.php', 'parts/hero.php'),
+                'theme_file_path answers with a canonical path',
+            ),
         );
     }
 
@@ -437,7 +449,7 @@ final class TemplateLoaderTest extends TestCase
 
         $this->assertSame(
             $extra . '/invoice.php',
-            NTDST_Template_Loader::locate('invoice', [$extra]),
+            $this->assertCanonical(NTDST_Template_Loader::locate('invoice', [$extra]), 'the $extraPaths hit'),
         );
 
         // Per-call directories never populate the shared cache.
@@ -508,8 +520,99 @@ final class TemplateLoaderTest extends TestCase
     }
 
     // -----------------------------------------------------------------------
+    // The verified path IS the returned path
+    // -----------------------------------------------------------------------
+
+    /**
+     * A registered directory spelled the long way, and a name carrying './',
+     * both resolve to the canonical file (R2-2).
+     *
+     * Both spellings pass isInside() today — it compares realpaths — and both
+     * used to be RETURNED and CACHED verbatim, so the loader handed out a path
+     * whose components it had never re-resolved and stored one file under two
+     * keys with two different values.
+     */
+    public function testAResolutionIsTheCanonicalPathThatWasVerified(): void
+    {
+        $noisy = $this->root . '/registered/../registered';
+        $this->writeTemplate($this->registered, 'card.php');
+        NTDST_Template_Loader::addPath($noisy);
+
+        $this->assertSame(
+            $this->registered . '/card.php',
+            $this->assertCanonical(
+                NTDST_Template_Loader::locate('card'),
+                'a registered directory spelled with /../ must still resolve to the real file',
+            ),
+        );
+
+        $this->assertSame(
+            $this->registered . '/card.php',
+            $this->assertCanonical(
+                NTDST_Template_Loader::locate('./card'),
+                "a './' in the name must not survive into the returned path",
+            ),
+        );
+
+        $this->assertCount(
+            1,
+            array_unique(array_values($this->cachedEntries())),
+            'Two spellings of one name cache ONE file: the cached value is the canonical path.',
+        );
+    }
+
+    /** The per-call $extraPaths branch resolves canonically too. */
+    public function testAPerCallExtraPathResolvesCanonically(): void
+    {
+        $extra = $this->root . '/per-call';
+        mkdir($extra);
+        $this->writeTemplate($extra, 'invoice.php');
+
+        $this->assertSame(
+            $extra . '/invoice.php',
+            $this->assertCanonical(
+                NTDST_Template_Loader::locate('./invoice', [$this->root . '/per-call/../per-call']),
+                'the $extraPaths loop returns what it verified',
+            ),
+        );
+    }
+
+    /** And so does WordPress's own locate_template() fallthrough. */
+    public function testTheThemeFallthroughResolvesCanonically(): void
+    {
+        $theme = $this->root . '/theme';
+        $this->writeTemplate($theme, 'header.php');
+        $this->themeDir = $this->root . '/theme/../theme';
+
+        $this->assertSame(
+            $theme . '/header.php',
+            $this->assertCanonical(
+                NTDST_Template_Loader::locate('header'),
+                "locate_template()'s answer is bounded by isInsideTheme(), so it is returned canonical too",
+            ),
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
+
+    /**
+     * The path handed back is the path that was VERIFIED (R2-2).
+     *
+     * isInside() decides on realpath($file), but the RAW concatenation used to
+     * be what locate() returned and cached. Two different strings for one
+     * decision is a seam: whatever the caller finally include()s was never the
+     * thing the guard resolved, and one file cached under several spellings.
+     * A resolution is canonical exactly when it is its own realpath.
+     */
+    private function assertCanonical(?string $path, string $why): string
+    {
+        $this->assertNotNull($path, $why . ' — nothing resolved at all');
+        $this->assertSame(realpath((string) $path), $path, $why);
+
+        return (string) $path;
+    }
 
     /**
      * The shared resolved-template cache, read back through reflection.
