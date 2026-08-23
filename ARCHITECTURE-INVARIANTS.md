@@ -47,14 +47,15 @@ field, and `registerRestMeta()` needs no per-field `try/catch`.
 `api/Data.php`; a route handler returning a row or `getMeta()` bag without
 projecting through `restFields()`; any `public_fields` / `public_shape` /
 `PUBLIC_SHAPE`-style allow-list; a `private`, `hidden` or `exposed` key on a field.
-**Mechanical check:** `grep -rn "register_post_meta\|register_meta(" --include=*.php . | grep -vE "^(\./)?api/Data\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → empty. (The trailing filter drops COMMENT lines: prose may name `register_post_meta()` — `api/FieldTypes.php` says the sanitizer must be idempotent because that function runs it again — and a docblock is not a second caller.) (The `-E` form and the optional `./` are load-bearing: GNU grep prints `./api/Data.php` but ugrep prints `api/Data.php`, so an anchored `^./` exclusion silently matched nothing and the check passed for the wrong reason.) Second: `grep -rn "show_in_rest" --include=*.php api/Data.php` → every hit is `declaresRest()` itself (`:122`, the ONE reader), a docblock (`:128`, `:1811`), a WARNING STRING that names the key it is telling the author about (`:223`, `:266`, `:1834`, `:1954` — four literals, none of them a test), or an ARG being written to `register_post_meta()` / `register_taxonomy()` (`:206`, `:2006`). No second READER of the declaration. `grep -rn "public_fields\|public_shape\|publicRow" --include=*.php . | grep -vE "(^|/)vendor/|(^|/)tests/"` → empty. (`tests/` is excluded for a reason, not for convenience: `tests/Unit/DataDropsExposureTest.php` is the test that ENFORCES this ban, and it has to name the banned vocabulary in order to forbid it. Without the exclusion the check reports its own enforcement as the violation.) The `show_in_rest` check has one hit that is NOT about a field: `NTDST_Data_Manager::register()` reads `$args['show_in_rest']` of the POST TYPE, to warn when a declaration can reach no route. That is a different key on a different thing, not a second reader.
+**Mechanical check:** `grep -rn "register_post_meta\|register_meta(" --include=*.php . | grep -vE "^(\./)?api/Data\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → empty. (The trailing filter drops COMMENT lines: prose may name `register_post_meta()` — `api/FieldTypes.php` says the sanitizer must be idempotent because that function runs it again — and a docblock is not a second caller.) (The `-E` form and the optional `./` are load-bearing: GNU grep prints `./api/Data.php` but ugrep prints `api/Data.php`, so an anchored `^./` exclusion silently matched nothing and the check passed for the wrong reason.) Second: `grep -rn "show_in_rest" --include=*.php api/Data.php` → ten hits, and every one is `declaresRest()` itself (`:122`, the ONE reader), a docblock (`:128`, `:1932`), a WARNING STRING that names the key it is telling the author about (`:223`, `:266`, `:1955`, `:2075` — four literals, none of them a test), or an ARG being written to `register_post_meta()` / `register_taxonomy()` (`:206`, `:2127`). The tenth is `:2071`, the post-type read named under exceptions. No second READER of the declaration. `grep -rn "public_fields\|public_shape\|publicRow" --include=*.php . | grep -vE "(^|/)vendor/|(^|/)tests/"` → empty. (`tests/` is excluded for a reason, not for convenience: `tests/Unit/DataDropsExposureTest.php` is the test that ENFORCES this ban, and it has to name the banned vocabulary in order to forbid it. Without the exclusion the check reports its own enforcement as the violation.) The `show_in_rest` check has one hit that is NOT about a field: `NTDST_Data_Manager::register()` reads `$args['show_in_rest']` of the POST TYPE, to warn when a declaration can reach no route. That is a different key on a different thing, not a second reader.
 **Deliberate exceptions:**
 - A model with no `label` registers no post type and therefore no meta, and warns once per model.
 - A post type that is not itself in REST (`show_in_rest` absent or false) still registers its meta — WordPress emits none of it — and warns once per model.
 - `json`, `array`, any partially-declared repeater, and a repeater that has no `sub_fields` are **not publishable at all**, and each warns once per model. Half a repeater is not half published: WordPress validates the stored row against the closed schema, so the value reads back `null`, a write carrying the undeclared key is refused 400, and a legal write drops that key from storage.
 - A scalar registers `show_in_rest => true` rather than a schema, so `format` (email, uri) is advisory only. A `format` in the schema would validate stored legacy values and read them back as `null`; the model's sanitizer, not the schema, is what enforces the shape (DD-9).
 **Status:** established by Cluster 1 (T02–T03); code holds at `42d7090`; flips to
-holds-today at the release commit (FR-16).
+holds-today at the release commit (FR-16). Checks re-run verbatim at `96560c5`:
+(1) empty, (2) the ten hits above, (3) empty.
 
 ## INV-2 — One HTTP surface: every route registers through `ntdst_rest()`
 
@@ -67,9 +68,9 @@ caller of `register_rest_route()` in the package.
 an `ntdst/api_data/` or `ntdst/api/` dispatch filter; a route whose permission
 is decided somewhere other than its registration.
 **Mechanical check:** `grep -rn "register_rest_route(\|wp_ajax_\|ntdst/api_data\|ntdst_actions" --include=*.php --include=*.js . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → the hits Status names, and nothing else. (The comment filter is INV-1's, for INV-1's reason: `core/Theme.php`, `core/Pages.php` and `api/Actions.php` all NAME the v2 dispatcher in docblocks that explain what replaced it, and a docblock is not a second door.)
-**Status:** established by phase 3. Today the live hits are all of them, and
-there are seven: `ntdst-core.php:95` (`ntdst_actions()` booted at load),
-`admin/RelationField.php:47` (`ntdst_actions()->register()`), and
+**Status:** established by phase 3. Re-run verbatim at `96560c5`: the live hits are
+all of them, and there are seven — `ntdst-core.php:96` (`ntdst_actions()` booted
+at load), `admin/RelationField.php:45` (`ntdst_actions()->register()`), and
 `api/Actions.php:63`, `:132`, `:147`, `:716`, `:717` — the `ntdst/api_data/`
 filter prefix, the two `register_rest_route()` calls this invariant forbids
 outside `api/Rest.php`, and the `ntdst_actions()` accessor. All leave with
@@ -105,6 +106,8 @@ handler body instead of on the route; a second permission registry; a
 **Status:** established by Cluster 2 (T04–T06); code holds at `d91e117` for
 routes through `ntdst_rest()`; `Actions.php:132,147` + `$public_actions` register
 their own routes outside it until phase 3; flips to holds-today at FR-16.
+Re-run verbatim at `96560c5`: six hits, all in `api/Actions.php` at the lines above,
+and seven comment lines dropped.
 
 ## INV-4 — CSRF and nonces are WordPress's; core mints nothing
 
@@ -278,8 +281,9 @@ under "INV-8 — every hit the field-type check returns". They live there once.
 A second copy here is the same defect this invariant is about: two lists of the
 same thing, free to disagree.
 
-**Status:** established by field-types Clusters A–C, re-pinned by core-trim T13.
-(A) 51 hits / (B) 1, all named; code holds at `3b41562` — both commands were
+**Status:** established by field-types Clusters A–C, re-pinned at the core-trim
+Cluster D gate.
+(A) 51 hits / (B) 1, all named; code holds at `96560c5` — both commands were
 re-run verbatim there. The count moved from 59 to 51 because core-trim DELETED
 code, not because the check was relaxed: `services/Logger.php` has no hit left
 (−8: five field declarations, one `orderby` value, two `url` payload keys) and
@@ -349,9 +353,12 @@ Three details are load-bearing, and each was got wrong first:
 README's `#### Extension points` table (the human home) and its reason in
 `bin/zero-readers.sh`'s `EXCEPTIONS` array (the machine home). This document
 kept a third copy and it went stale; the two homes above are the list.
-**Status:** established by core-trim Clusters B and C. Holds at `3b41562` —
-stdout empty and exit 0, with all twelve consumer roots present and 28 advisory
-method candidates on stderr. The file and line totals the run prints are NOT
+**Status:** established by core-trim Clusters B and C; the script's reader
+definition, stem rule and README scoping were corrected at the Cluster D gate.
+Holds at `96560c5` — stdout empty and exit 0, with all thirteen consumer roots
+present and 28 advisory method candidates on stderr. Twelve of the nineteen
+`EXCEPTIONS` rows are load-bearing: drop one and a finding appears. The seven
+inert rows are named under `## Deliberate exceptions`. The file and line totals the run prints are NOT
 recorded here: they move whenever a consumer repository does, and a status line
 that goes stale on somebody else's commit teaches a reader to skip it.
 
@@ -427,9 +434,13 @@ reviewer can read.
 - **A `conditional` entry's condition must be a Closure or an array.** Anything
   else is refused. A string condition would be a callable name resolved at boot
   — the same guess, in a different key.
-**Status:** established by core-trim T01 (FR-1). Holds at `3b41562` — the four
-commands above were run verbatim and returned `0`/`0`, empty, one file, and the
-single gated `ntdst_set($class)`.
+**Status:** established by core-trim T01 (FR-1); check (2) was widened at the
+Cluster D gate, from one shape to five. Holds at `96560c5` — the four commands above
+were run verbatim and returned `0` for both loading files, empty, one file
+(`core/Bootstrap.php`), and the single gated `ntdst_set($class)` at
+`core/Bootstrap.php:501` behind `class_exists()` at `:408`. (2) was also run
+against a scratch file holding the exact line 5.0.0 deleted,
+`$relativePath = str_replace('\\', '/', $class) . '.php';` — one hit.
 
 ---
 
