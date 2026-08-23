@@ -198,12 +198,39 @@ fi
 #         `ntdst_mail_before_send`, `_sent`, `_template_paths` and
 #         `_attachment_bases`. README is not swept by this line (*.php only),
 #         so the migration table needs no exemption here.
-REMOVED=$(grep -rnE "NTDST_Mailer|ntdst_mail|ntdst_send_mail|ntdst_send_queued_mail|ntdst_notify|ntdst_notification|ntdst_wrap_email_in_layout|ntdst_wrap_all_emails|ntdst_email_layout_paths|NTDST_Scheduler|ntdst_scheduler|ntdst_schedule_recurring|ntdst_clear_recurring|ntdst_model_create_before|ntdst_model_create_after|ntdst_model_update_before|ntdst_model_update_after|ntdst_model_delete_before|ntdst_model_delete_after|log_entry|ntdst_log_database_enabled|addHandler|removeHandler|setMinLevel|setBatchingEnabled|ntdst_log_debug|ntdst_log_info|ntdst_log_error|getFormattedPosts|ntdst_get_formatted_posts|ntdst_make|callableReflections|wireMixins|templatePath|getPostMeta|getPostTerms|attachTerms|syncTerms|detachTerms|whereDate|orWhere|discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
+# The two families are named separately because the retired-TYPE one is the
+# only one whose names collide with WordPress's own vocabulary: a REST route
+# declares ['type' => 'string', 'required' => true], which is JSON Schema and
+# not a field declaration — the same distinction api/FieldTypes.php's schema
+# rows already carry. So a line that shows it IS a REST `args` schema (a
+# `type` beside a `required`, a `sanitize_callback`, a `validate_callback`, an
+# `items` or an `enum`) is exempt from the TYPE family ONLY. A line that also
+# names one of the removed functions, classes, hooks or `signed_int` still
+# fires, whatever else is written on it — which is what keeps this exemption
+# from becoming a way to smuggle a retired name past the guard. It is also
+# why the two must be written on ONE LINE each: a bare `'type' => 'string'`
+# on a line of its own is indistinguishable from the retired declaration.
+# Mirrors PackageBootIntegrityTest::REST_ARG_SCHEMA_LINE; the shapes are the
+# contract, not the file they were found in.
+REMOVED_SYMBOLS="NTDST_Mailer|ntdst_mail|ntdst_send_mail|ntdst_send_queued_mail|ntdst_notify|ntdst_notification|ntdst_wrap_email_in_layout|ntdst_wrap_all_emails|ntdst_email_layout_paths|NTDST_Scheduler|ntdst_scheduler|ntdst_schedule_recurring|ntdst_clear_recurring|ntdst_model_create_before|ntdst_model_create_after|ntdst_model_update_before|ntdst_model_update_after|ntdst_model_delete_before|ntdst_model_delete_after|log_entry|ntdst_log_database_enabled|addHandler|removeHandler|setMinLevel|setBatchingEnabled|ntdst_log_debug|ntdst_log_info|ntdst_log_error|getFormattedPosts|ntdst_get_formatted_posts|ntdst_make|callableReflections|wireMixins|templatePath|getPostMeta|getPostTerms|attachTerms|syncTerms|detachTerms|whereDate|orWhere|discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int"
+RETIRED_TYPES="'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'"
+REST_ARG_SCHEMA_LINE="'type' *=> *'[a-z_]+'.*'(required|sanitize_callback|validate_callback|items|enum)' *=>|'(required|sanitize_callback|validate_callback|items|enum)' *=>.*'type' *=> *'[a-z_]+'"
+
+REMOVED_RAW=$(grep -rnE "${REMOVED_SYMBOLS}|${RETIRED_TYPES}" \
     --include='*.php' . \
     | grep -v /vendor/ \
     | grep -vE "^(\./)?tests/|^(\./)?specs/" \
     | grep -vE "^(\./)?api/FieldTypes\.php:[0-9]+: *('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)' *=> *'(int|float|bool|text|textarea|html|date|relation)',|\['type' *=> *'(integer|number|boolean|string|array)'.*\], *'[a-z_]+', *(true|false),)$" \
     | grep -vE ':[0-9]+: *(\*|//|#|/\*)' || true)
+
+# Kept: every line that trips a NON-type name, plus every line that is not a
+# REST `args` schema. What that subtracts is exactly the type-only hit on a
+# schema line.
+REMOVED=""
+if [ -n "$REMOVED_RAW" ]; then
+    REMOVED=$( { printf '%s\n' "$REMOVED_RAW" | grep -E "$REMOVED_SYMBOLS" || true; \
+                 printf '%s\n' "$REMOVED_RAW" | grep -vE "$REST_ARG_SCHEMA_LINE" || true; } | sort -u)
+fi
 if [ -n "$REMOVED" ]; then
     echo "Shipped code still references a symbol removed in v3.0.0 or v5.0.0:"
     echo "$REMOVED"

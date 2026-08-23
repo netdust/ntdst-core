@@ -60,16 +60,15 @@ final class NTDST_RelationField
                 => $this->mayPickFromAll((array) $request->get_param('post_type')),
             'rate_limit'  => 60,
             'rate_window' => 60,
+            // ONE LINE EACH, and that is load-bearing: `string` is also a
+            // RETIRED field-type name, and the pin that keeps it out of shipped
+            // code exempts a line only when the line ITSELF shows it is a REST
+            // `args` schema — a `type` beside a `required`, a `sanitize_callback`
+            // or an `items`. Split across lines, the bare `'type' => 'string'`
+            // is indistinguishable from the retired declaration and fires.
             'args'        => [
-                'search' => [
-                    'type'              => 'string',
-                    'required'          => true,
-                    'sanitize_callback' => 'sanitize_text_field',
-                ],
-                'post_type' => [
-                    'type'  => 'array',
-                    'items' => ['type' => 'string'],
-                ],
+                'search'    => ['type' => 'string', 'required' => true, 'sanitize_callback' => 'sanitize_text_field'],
+                'post_type' => ['type' => 'array', 'items' => ['type' => 'string']],
             ],
         ]);
 
