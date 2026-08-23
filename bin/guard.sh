@@ -343,11 +343,17 @@ declare -A METHOD_PINS=(
     # are: `json`, `render` and `addPath` are ordinary words this codebase and
     # README write constantly, and `addPath` names a SURVIVOR in another file
     # (NTDST_Template_Loader::addPath()). A method can only come back where it
-    # is DECLARED. The five distinctive ones (jsonPayload, renderError,
+    # is DECLARED. The SIX distinctive ones (jsonPayload, renderError,
     # getErrorHtml, commitRenderStatus, getMimeType, registerMimeType) sit in
     # BOTH homes on purpose: this line fails on a fresh checkout with no
     # vendor/, the provider's rows fail on a README that never told the adopter.
-    ["api/Response.php"]="apiSuccess apiError apiSuccessResponse apiErrorResponse addPath json render renderError getErrorHtml commitRenderStatus getMimeType registerMimeType"
+    #
+    # `jsonPayload` is named here in full (A1). The `json` row already prefix-
+    # matches it, so the pin is the same either way — but a comment that calls
+    # a name a both-homes example while the list it points at does not carry
+    # it is a list nobody can check, and the day `json` leaves this row
+    # jsonPayload would leave with it, silently.
+    ["api/Response.php"]="apiSuccess apiError apiSuccessResponse apiErrorResponse addPath json jsonPayload render renderError getErrorHtml commitRenderStatus getMimeType registerMimeType"
 
     # FR-10 / INV-5: the loader picks from WordPress's candidate list and
     # writes no list of its own. templateInclude() hand-listed
@@ -393,7 +399,13 @@ declare -A METHOD_PINS=(
     # PackageBootIntegrityTest — the sweep that also answers for README — so
     # they sit in both homes on purpose: this file fails on a fresh checkout
     # with no vendor/, that one fails with a README that never told the adopter.
-    ["core/Pages.php"]="redirect handleTemplateInclude resolveRouteResult commitOk renderResponse preventRedirectForRoutes"
+    #
+    # `compilePattern` is the seventh, and the only RENAME (A2): 5bee797 took
+    # the private URL-to-regex compiler to compileRule(), which builds a
+    # REWRITE rule instead of a regex the router re-matches itself. A file that
+    # declares compilePattern() again has the old shape back. It owes README no
+    # migration row — it was never public — so it is pinned here only.
+    ["core/Pages.php"]="redirect handleTemplateInclude resolveRouteResult commitOk renderResponse preventRedirectForRoutes compilePattern"
 )
 for PIN_FILE in $(printf '%s\n' "${!METHOD_PINS[@]}" | sort); do
     PIN_METHODS="${METHOD_PINS[$PIN_FILE]}"
