@@ -412,6 +412,114 @@ final class MetaboxGeneratorRenderTest extends TestCase
         );
     }
 
+    // -------------------------------------------- promise 6 (Cluster C feature)
+
+    /**
+     * A hostile STORED value goes through every control and breaks out of none.
+     *
+     * Written for the Cluster C feature gate, independently of T06 (threat rows
+     * #1 and #5). The value is the classic attribute break-out — a quote to close
+     * the attribute, a bracket to close the tag, then a script — and it is put
+     * where a stored value actually lands: a `text`, an `email`, a `url`, a
+     * `date`, a `number`, a `select` OPTION (value and label both), a `json`
+     * textarea, a `html` field, and a repeater CELL. A row cell matters on its
+     * own here: before this cluster the row had its own switch, so a cell could
+     * be escaped by a different rule than the top-level field of the same type.
+     *
+     * `wp_editor()` is the one exception, and it is deliberate: it is HANDED the
+     * markup un-escaped, because escaping it there is what turns stored content
+     * into visible soup and stores the soup back on the next save. So the test
+     * asserts the value was PASSED to the editor and never echoed into the page
+     * around it.
+     */
+    public function testEveryControlEscapesAHostileValue(): void
+    {
+        $hostile = '"><script>x</script>';
+        $escaped = htmlspecialchars($hostile, ENT_QUOTES);
+
+        $handedToTheEditor = null;
+        Functions\when('wp_editor')->alias(static function ($content, $editor_id, $settings = []) use (&$handedToTheEditor) {
+            $handedToTheEditor = $content;
+            echo '<!--wp_editor:' . $editor_id . '-->';
+        });
+
+        $this->meta = [
+            'venue_city' => $hostile,
+            'contact'    => $hostile,
+            'homepage'   => $hostile,
+            'starts_on'  => $hostile,
+            'capacity'   => $hostile,
+            'status'     => $hostile,
+            'payload'    => $hostile,
+            'body'       => $hostile,
+            'slots'      => [['label' => $hostile, 'qty' => $hostile, 'photo' => 0]],
+        ];
+
+        $html = $this->render([
+            'venue_city' => 'text',
+            'contact'    => 'email',
+            'homepage'   => 'url',
+            'starts_on'  => 'date',
+            'capacity'   => 'int',
+            'status'     => ['type' => 'select', 'options' => [$hostile => $hostile]],
+            'payload'    => 'json',
+            'body'       => 'html',
+            'slots'      => [
+                'type'       => 'repeater',
+                'sub_fields' => ['label' => 'text', 'qty' => 'int', 'photo' => 'image'],
+            ],
+        ]);
+
+        $this->assertStringNotContainsString(
+            $hostile,
+            $html,
+            'The stored value must never reach the page as it is stored: an unescaped `"` closes the '
+                . 'attribute and an unescaped `<` opens a tag, and the edit screen runs as an administrator.',
+        );
+        $this->assertStringNotContainsString(
+            '<script>x</script>',
+            $html,
+            'And the payload itself must not survive anywhere in the markup.',
+        );
+
+        // Every control that carries the value in an attribute neutralises both
+        // characters, under its own name — top level AND inside the row.
+        foreach ([
+            'ntdst_fields[venue_city]',
+            'ntdst_fields[contact]',
+            'ntdst_fields[homepage]',
+            'ntdst_fields[starts_on]',
+            'ntdst_fields[capacity]',
+            'ntdst_fields[slots][0][label]',
+            'ntdst_fields[slots][0][qty]',
+        ] as $name) {
+            $this->assertStringContainsString(
+                'name="' . $name . '" value="' . $escaped . '"',
+                $html,
+                "The control named `{$name}` must emit the hostile value with `\"` and `<` neutralised.",
+            );
+        }
+
+        $this->assertStringContainsString(
+            '<option value="' . $escaped . '"',
+            $html,
+            'A `select` OPTION is an attribute too — and its keys come from the declaration, which a '
+                . 'site or a filter can write.',
+        );
+        $this->assertStringContainsString(
+            $escaped,
+            $html,
+            'The `json` textarea holds the value as TEXT: `<` escaped, or the textarea ends early.',
+        );
+
+        $this->assertSame(
+            $hostile,
+            $handedToTheEditor,
+            'wp_editor() is handed the value UN-escaped by design — escaping it there is what turns '
+                . 'stored content into soup and saves the soup back.',
+        );
+    }
+
     // ------------------------------------------------------------- harness
 
     /** A generator with no hooks mounted — this file drives the entry directly. */
