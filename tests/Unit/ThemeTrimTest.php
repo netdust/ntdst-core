@@ -178,10 +178,7 @@ final class ThemeTrimTest extends TestCase
             $ctor->getEndLine() - $ctor->getStartLine() + 1,
         );
 
-        return implode('', array_filter(
-            $body,
-            static fn(string $line) => preg_match('#^\s*(\*|//|\#|/\*)#', $line) !== 1,
-        ));
+        return implode('', self::stripComments($body));
     }
 
     /**
@@ -222,14 +219,7 @@ final class ThemeTrimTest extends TestCase
      */
     public function testTheClassFileCallsNoneOfTheMixinHelpers(): void
     {
-        $source = file_get_contents(__DIR__ . '/../../core/Theme.php');
-        $this->assertIsString($source);
-
-        $code = array_filter(
-            explode("\n", $source),
-            static fn(string $line) => preg_match('#^\s*(\*|//|\#|/\*)#', $line) !== 1,
-        );
-        $code = implode("\n", $code);
+        $code = $this->themeCode();
 
         foreach (['ntdst_data(', 'ntdst_response(', 'ntdst_log(', 'ntdst_mail('] as $helper) {
             $this->assertStringNotContainsString(
@@ -336,8 +326,21 @@ final class ThemeTrimTest extends TestCase
         $source = file_get_contents(__DIR__ . '/../../core/Theme.php');
         $this->assertIsString($source);
 
-        return implode("\n", array_filter(
-            explode("\n", $source),
+        return implode("\n", self::stripComments(explode("\n", $source)));
+    }
+
+    /**
+     * The one comment-stripper: drop every line that opens a comment or
+     * continues a docblock. Both source readers above filter the same way, so
+     * the predicate lives here once.
+     *
+     * @param  list<string> $lines
+     * @return list<string>
+     */
+    private static function stripComments(array $lines): array
+    {
+        return array_values(array_filter(
+            $lines,
             static fn(string $line) => preg_match('#^\s*(\*|//|\#|/\*)#', $line) !== 1,
         ));
     }
