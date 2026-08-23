@@ -115,41 +115,39 @@ final class NTDST_RelationField implements NTDST_Service_Meta
             );
         }
 
+        // The four defaults below `posts_per_page` are the ones
+        // `ntdst_get_formatted_posts()` applied to this call before core-trim
+        // FR-4 removed it — the Data layer's second query API, a global that
+        // returned rows without naming a model, and therefore without the
+        // schema that says what the rows mean. It also built a permalink, an
+        // excerpt and two thumbnail URLs for twenty rows on every keystroke,
+        // none of which ever reached the screen. They are restated INLINE so
+        // this literal is the whole query: one place to read what WordPress is
+        // asked, and the picker's result set does not change with the removal.
         $args = [
-            's'              => $search,
-            'post_type'      => $allowed,
-            'posts_per_page' => 20,
-        ];
-
-        // Attachments are stored `post_status = 'inherit'`, never `publish`,
-        // and the layer defaults to `publish` — so without this a relation
-        // field scoped to `attachment` renders a picker that can never return
-        // a result. Added alongside `publish` rather than replacing it, so a
-        // mixed search still finds the published rows of other types.
-        if (in_array('attachment', $allowed, true)) {
-            $args['post_status'] = ['publish', 'inherit'];
-        }
-
-        // The picker needs an id and a label and nothing else — metabox-fields.js
-        // reads `id` and `title` off each row and discards the rest.
-        //
-        // This used to call `ntdst_get_formatted_posts()`, the Data layer's
-        // second query API, which core-trim FR-4 removed: a global that returned
-        // rows without naming a model, and therefore without the schema that
-        // says what the rows mean. It also built a permalink, an excerpt and two
-        // thumbnail URLs for twenty rows on every keystroke, none of which ever
-        // reached the screen.
-        //
-        // The four defaults below are the ones that helper applied to this call,
-        // restated so the picker's result set does not change with its removal:
-        // `$args` is merged LAST because it already decides `post_status` for
-        // the attachment case above.
-        $query = new \WP_Query(array_merge([
+            's'                   => $search,
+            'post_type'           => $allowed,
+            'posts_per_page'      => 20,
             'post_status'         => 'publish',
             'orderby'             => 'date',
             'order'               => 'DESC',
             'ignore_sticky_posts' => true,
-        ], $args));
+        ];
+
+        // Attachments are stored `post_status = 'inherit'`, never `publish`,
+        // and the default above is `publish` — so without this a relation
+        // field scoped to `attachment` renders a picker that can never return
+        // a result. Added alongside `publish` rather than replacing it, so a
+        // mixed search still finds the published rows of other types. It
+        // OVERWRITES the default, which is why it is written after it.
+        if (in_array('attachment', $allowed, true)) {
+            $args['post_status'] = ['publish', 'inherit'];
+        }
+
+        $query = new \WP_Query($args);
+
+        // The picker needs an id and a label and nothing else — metabox-fields.js
+        // reads `id` and `title` off each row and discards the rest.
 
         return ['results' => array_map(
             static fn($post): array => [

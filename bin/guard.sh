@@ -165,7 +165,13 @@ fi
 #         is a substring of another — and mirror PackageBootIntegrityTest's rows
 #         exactly. That sweep also reads README.md and exempts its migration
 #         ROWS; this one greps *.php only, so it needs no exemption.
-REMOVED=$(grep -rnE "ntdst_model_create_before|ntdst_model_create_after|ntdst_model_update_before|ntdst_model_update_after|ntdst_model_delete_before|ntdst_model_delete_after|log_entry|ntdst_log_database_enabled|addHandler|removeHandler|setMinLevel|setBatchingEnabled|ntdst_log_debug|ntdst_log_info|ntdst_log_error|getFormattedPosts|ntdst_get_formatted_posts|getPostTerms|attachTerms|syncTerms|detachTerms|whereDate|orWhere|discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
+# v5.0.0 FR-4: `getPostMeta` is the ninth read-helper row and landed a gate
+#         later than its eight siblings, so this copy was short one name. Bare,
+#         like the provider's row: WordPress's own get_post_meta() is
+#         snake_case, and getPostMetaFromCache() — the accessor josworld calls,
+#         and the one KNOWN outside reader of the removed static — does not ship
+#         in core.
+REMOVED=$(grep -rnE "ntdst_model_create_before|ntdst_model_create_after|ntdst_model_update_before|ntdst_model_update_after|ntdst_model_delete_before|ntdst_model_delete_after|log_entry|ntdst_log_database_enabled|addHandler|removeHandler|setMinLevel|setBatchingEnabled|ntdst_log_debug|ntdst_log_info|ntdst_log_error|getFormattedPosts|ntdst_get_formatted_posts|getPostMeta|getPostTerms|attachTerms|syncTerms|detachTerms|whereDate|orWhere|discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
     --include='*.php' . \
     | grep -v /vendor/ \
     | grep -vE "^(\./)?tests/|^(\./)?specs/" \
@@ -184,16 +190,8 @@ fi
 # row for cannot arrive misspelled. A consumer reads the hook name off the
 # source; two conventions in one package means every listener is a guess.
 #
-# SCOPE. SC-4 names `api core admin services`. `services` is NOT swept yet, and
-# that is deliberate rather than an oversight: services/Mailer.php carries
-# eight `ntdst_`-underscore hooks (ntdst_mail_attachment_bases,
-# ntdst_mail_before_send, ntdst_mail_sent, ntdst_mail_template_paths,
-# ntdst_notification, ntdst_notification_<event>, ntdst_email_layout_paths,
-# ntdst_wrap_all_emails) and FR-10/T10 DELETES that file with the rest of the
-# Mailer trim. Renaming hooks in a file that is about to go would be work
-# thrown away, and sweeping `services` today would fail this gate on a file
-# this cluster does not own. T10 adds `services` to this line when Mailer.php
-# is gone; SC-4 is not met until it does.
+# SCOPE. SC-4 also names `services`, which T10 adds to this line when it deletes
+# services/Mailer.php and the eight `ntdst_` hooks that file still carries.
 HOOKSPELLING=$(grep -rn "do_action('ntdst_\|apply_filters('ntdst_\|do_action(\"ntdst_\|apply_filters(\"ntdst_" api core admin || true)
 if [ -n "$HOOKSPELLING" ]; then
     echo "Hook spelled ntdst_ instead of ntdst/ (FR-11: core's convention is ntdst/...):"

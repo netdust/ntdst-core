@@ -18,7 +18,11 @@
 // The old names are pinned with `->never()`. A rename that ADDS the new
 // do_action beside the old one would satisfy every positive assertion in this
 // file while leaving the duplicate spelling core-trim exists to remove — the
-// negative half is what makes this a rename rather than an addition.
+// negative half is what makes this a rename rather than an addition. It rides
+// in the SAME case as the positive half, on the same single write: one call
+// per path, both halves observed on it, which is what "renamed" means. Split
+// across two cases the negative half runs a second write to assert on — twice
+// the setup for a claim the first write already carries.
 //
 // HOW IT OBSERVES. Through the public write path only — create(), update(),
 // delete(). WordPress's writers are stubbed to SUCCEED (wp_insert_post,
@@ -136,54 +140,35 @@ final class DataModelHooksTest extends TestCase
 
     // --------------------------------------------------------------- create
 
-    public function testCreateFiresCreatingThenCreatedWithTheSameArguments(): void
+    public function testCreateFiresCreatingThenCreatedAndNoRetiredName(): void
     {
         Actions\expectDone('ntdst/model/creating')->once()->ordered()->with('p', ['headline' => 'hello']);
         Actions\expectDone('ntdst/model/created')->once()->ordered()->with('p', 42, ['headline' => 'hello']);
+        $this->expectNoRetiredHook();
 
         $this->model()->create(['headline' => 'hello']);
     }
 
     // --------------------------------------------------------------- update
 
-    public function testUpdateFiresUpdatingThenUpdatedWithTheSameArguments(): void
+    public function testUpdateFiresUpdatingThenUpdatedAndNoRetiredName(): void
     {
         Actions\expectDone('ntdst/model/updating')->once()->ordered()->with('p', 7, ['headline' => 'edited']);
         Actions\expectDone('ntdst/model/updated')->once()->ordered()->with('p', 7, ['headline' => 'edited']);
+        $this->expectNoRetiredHook();
 
         $this->model()->update(7, ['headline' => 'edited']);
     }
 
     // --------------------------------------------------------------- delete
 
-    public function testDeleteFiresDeletingThenDeletedWithTheSameArguments(): void
+    public function testDeleteFiresDeletingThenDeletedAndNoRetiredName(): void
     {
         Actions\expectDone('ntdst/model/deleting')->once()->ordered()->with('p', 7);
         Actions\expectDone('ntdst/model/deleted')->once()->ordered()->with('p', 7);
-
-        $this->model()->delete(7, true);
-    }
-
-    // ------------------------------------------- the retired six never fire
-
-    public function testCreateNeverFiresARetiredHookName(): void
-    {
-        $this->expectNoRetiredHook();
-
-        $this->model()->create(['headline' => 'hello']);
-    }
-
-    public function testUpdateNeverFiresARetiredHookName(): void
-    {
-        $this->expectNoRetiredHook();
-
-        $this->model()->update(7, ['headline' => 'edited']);
-    }
-
-    public function testDeleteNeverFiresARetiredHookName(): void
-    {
         $this->expectNoRetiredHook();
 
         $this->model()->delete(7, true);
     }
+
 }

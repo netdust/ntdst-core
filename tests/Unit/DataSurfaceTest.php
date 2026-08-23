@@ -288,6 +288,65 @@ final class DataSurfaceTest extends TestCase
         $this->assertSame('probe', $args['post_type'], "The model's own type is what is queried.");
     }
 
+    /**
+     * A post with NO terms is served from the warm cache, and never falls
+     * through to the SQL path.
+     *
+     * `readPostTerms()` reads WordPress's `<taxonomy>_relationships` cache —
+     * which WP_Query primed on the read above — and then decided whether to
+     * trust it by asking whether it had COLLECTED anything: `if (!empty($terms))
+     * return $terms;`. An empty result is indistinguishable from a cache miss
+     * under that test, so every post that genuinely has no terms took the
+     * hand-written three-way JOIN, on every read, forever. A gallery whose
+     * artworks are untagged pays a query per row to be told again that there is
+     * nothing to tell.
+     *
+     * The cache HIT is the thing to read: `wp_cache_get()` answers `false` on a
+     * miss and an array — possibly an empty one — on a hit. When every taxonomy
+     * of the type answered, the answer is complete, and `[]` is a real answer.
+     *
+     * Counted rather than asserted-absent: `$wpdb` is a global, so the only
+     * honest way to say "the SQL path did not run" is to hand the layer a
+     * recorder and read the count. Two reads are made, because the claim is
+     * about a WARM cache staying warm, not about a single lucky call.
+     */
+    public function testAPostWithNoTermsIsServedFromTheCacheAndNeverReachesTheSqlPath(): void
+    {
+        $this->seedOnePost(false);
+
+        $wpdb = new class {
+            public string $term_relationships = 'wp_term_relationships';
+            public string $term_taxonomy = 'wp_term_taxonomy';
+            public string $terms = 'wp_terms';
+            public int $reads = 0;
+
+            public function prepare(string $sql, ...$args): string { return $sql; }
+
+            public function get_results(string $sql): array
+            {
+                ++$this->reads;
+
+                return [];
+            }
+        };
+        $GLOBALS['wpdb'] = $wpdb;
+
+        $rows = $this->model()->withTerms()->get();
+        $this->model()->withTerms()->get();
+
+        $this->assertSame(
+            [],
+            $rows[0]['terms'],
+            'A post with no terms carries an empty terms bag — the cache said so.',
+        );
+        $this->assertSame(
+            0,
+            $wpdb->reads,
+            'A warm relationship cache that answers "no terms" is a HIT, not a miss: '
+                . 'the SQL fallback must not run.',
+        );
+    }
+
     // -- harness --------------------------------------------------------------
 
     private function model(): NTDST_Data_Model
@@ -300,7 +359,7 @@ final class DataSurfaceTest extends TestCase
      * term warm in the taxonomy relationship cache — the state WP_Query leaves
      * behind on any real read, which is the state the row formatter reads.
      */
-    private function seedOnePost(): void
+    private function seedOnePost(bool $with_terms = true): void
     {
         $GLOBALS['_ntdst_test_wp_query_posts'] = [
             (object) [
@@ -332,13 +391,17 @@ final class DataSurfaceTest extends TestCase
 
         // Core primes both caches on the query above; the formatter reads them
         // rather than issuing SQL of its own.
-        Functions\when('wp_cache_get')->alias(static function ($id = null, $group = '') {
+        Functions\when('wp_cache_get')->alias(function ($id = null, $group = '') use ($with_terms) {
             if ($group === 'post_meta') {
                 return [self::PREFIX . 'title' => ['a probe row']];
             }
 
+            // A HIT either way. An untagged post's relationship cache holds an
+            // empty array, which is an answer — not the `false` of a miss.
             if ($group === 'genre_relationships') {
-                return [(object) ['term_id' => 7, 'name' => 'Jazz', 'slug' => 'jazz']];
+                return $with_terms
+                    ? [(object) ['term_id' => 7, 'name' => 'Jazz', 'slug' => 'jazz']]
+                    : [];
             }
 
             return false;

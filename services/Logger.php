@@ -32,7 +32,7 @@ defined('ABSPATH') || exit;
 
 require_once __DIR__ . '/../core/LogLevel.php';
 
-class NTDST_Logger
+final class NTDST_Logger
 {
     /** 0=debug, 1=info, 2=warning, 3=error, 4=critical */
     protected int $min_level = 0;
@@ -48,8 +48,27 @@ class NTDST_Logger
 
     protected static bool $shutdownRegistered = false;
 
-    public function __construct(protected readonly string $channel = 'app')
+    /**
+     * The sink's own name, and half of the FILENAME every line lands in —
+     * sanitized on the way in, never on the way out. See the constructor.
+     */
+    protected readonly string $channel;
+
+    public function __construct(string $channel = 'app')
     {
+        // CONTAINMENT. The channel comes from the CALLER — ntdst_log($channel)
+        // takes whatever it is handed — and is pasted straight into
+        // `<channel>-<Y-m-d>.log`. So a channel is a path fragment, and
+        // `../../evil` would place a log file outside WP_CONTENT_DIR/logs:
+        // outside the directory the .htaccess and the Nginx deny rule protect,
+        // which is this file's whole containment story. sanitize_key() is the
+        // same reduction WordPress applies to any key it will trust — lowercase,
+        // then everything outside [a-z0-9_-] dropped — so `../../evil` becomes
+        // `evil` and the line still lands, inside logs/. A channel that reduces
+        // to nothing falls back to the default rather than naming `-<date>.log`.
+        $channel = sanitize_key($channel);
+        $this->channel = $channel !== '' ? $channel : 'app';
+
         // Set minimum level based on environment
         $this->min_level = (defined('WP_DEBUG') && WP_DEBUG) ? LogLevel::Debug->value : LogLevel::Warning->value;
 
@@ -98,7 +117,18 @@ class NTDST_Logger
 
     /**
      * PERFORMANCE: Flush all batched logs to files
-     * Called on shutdown to write all collected logs at once
+     * Called on shutdown to write all collected logs at once.
+     *
+     * FAILS SOFT, for the same reason log() does and with more at stake: this
+     * runs from register_shutdown_function(), so an uncaught Throwable here is
+     * a fatal at the very end of a request that had already succeeded — the
+     * response sent, and then a fatal, caused by a log line. Every debug, info
+     * and warning core writes leaves through this method.
+     *
+     * The batch is taken and CLEARED before the first write, so a failure
+     * drains it either way: a batch left in place is re-attempted by the next
+     * flush in the same process, which turns one broken directory into one
+     * error_log line per flush.
      */
     public static function flushBatchedLogs(): void
     {
@@ -106,23 +136,41 @@ class NTDST_Logger
             return;
         }
 
-        $dir = self::logDir();
-
-        foreach (self::$batchedLogs as $filename => $entries) {
-            file_put_contents($dir . '/' . $filename, implode('', $entries), FILE_APPEND | LOCK_EX);
-        }
-
+        $batch = self::$batchedLogs;
         self::$batchedLogs = [];
+
+        try {
+            $dir = self::logDir();
+
+            foreach ($batch as $filename => $entries) {
+                file_put_contents($dir . '/' . $filename, implode('', $entries), FILE_APPEND | LOCK_EX);
+            }
+        } catch (\Throwable $e) {
+            error_log('Logger write failed (shutdown flush, ' . count($batch) . ' file(s)): ' . $e->getMessage());
+        }
     }
 
     /**
      * Write one line to the two sinks.
      *
-     * Both writes are inside one try/catch, and that is not decoration: a site
-     * running WP_DEBUG with an error handler that promotes warnings to
-     * ErrorException turns an unwritable logs directory into a throw, and a
-     * request must never die because it tried to say something. The fallback
-     * bypasses ntdst_log() to avoid recursion.
+     * WHAT THE try/catch COVERS: everything this method does after the level
+     * gate — the timestamp, the file write for an error, and the append to the
+     * batch for everything below it. It exists because a site running WP_DEBUG
+     * with an error handler that promotes warnings to ErrorException turns an
+     * unwritable logs directory into a THROW, and a request must never die
+     * because it tried to say something. It is not a catch-all for programmer
+     * error: nothing above the gate can throw, and the fallback reports rather
+     * than swallows.
+     *
+     * WHAT THE ORDER BUYS. For an error or worse, error_log() is written FIRST
+     * and the file second. Both writes were once inside this block with the
+     * file first, and that ordering meant a throwing file write ate the
+     * error_log copy as well — the message the caller was trying to report
+     * vanished from BOTH sinks at the moment a site could least afford it. So
+     * the sink that cannot fail (PHP's own) goes first, and the fallback line
+     * carries the ORIGINAL message beside the exception.
+     *
+     * The fallback bypasses ntdst_log() to avoid recursion.
      */
     protected function log(int $level, string $message, array $context = []): void
     {
@@ -133,20 +181,20 @@ class NTDST_Logger
         $message = $this->interpolate($message, $context);
         $label = LogLevel::tryFrom($level)?->label() ?? 'UNKNOWN';
         $suffix = !empty($context) ? ' ' . json_encode($context) : '';
+        $body = "{$this->channel}.{$label}: {$message}{$suffix}";
 
         try {
-            $line = '[' . current_time('Y-m-d H:i:s') . "] {$this->channel}.{$label}: {$message}{$suffix}\n";
-
             if ($level >= LogLevel::Error->value) {
-                $this->writeToLogFile($line);
                 error_log("[{$this->channel}] {$label}: {$message}{$suffix}");
+                $this->writeToLogFile('[' . current_time('Y-m-d H:i:s') . "] {$body}\n");
 
                 return;
             }
 
-            self::$batchedLogs[$this->channel . '-' . date('Y-m-d') . '.log'][] = $line;
+            self::$batchedLogs[$this->channel . '-' . date('Y-m-d') . '.log'][]
+                = '[' . current_time('Y-m-d H:i:s') . "] {$body}\n";
         } catch (\Throwable $e) {
-            error_log('Logger write failed: ' . $e->getMessage());
+            error_log("Logger write failed ({$body}): " . $e->getMessage());
         }
     }
 

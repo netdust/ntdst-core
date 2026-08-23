@@ -184,6 +184,25 @@ final class LoggerSurfaceTest extends TestCase
         );
     }
 
+    /**
+     * The class is `final`.
+     *
+     * The plan's Interfaces section pins it, and the reason is this file's own
+     * subject: the Logger's contract is "two sinks, decided by the channel and
+     * the environment, and there is no runtime way to add a third". The handler
+     * API was deleted to make that true — and a subclass overriding
+     * `writeToLogFile()` or `log()` re-opens exactly the door that deletion
+     * closed, without any of the four names the guard sweeps.
+     */
+    public function testTheClassIsFinal(): void
+    {
+        $this->assertTrue(
+            (new ReflectionClass('NTDST_Logger'))->isFinal(),
+            'NTDST_Logger must be final: an overridable log() or writeToLogFile() re-opens the '
+                . 'runtime-sink door FR-5 closed, under a name no guard sweeps.',
+        );
+    }
+
     // ── 2. The global helpers ────────────────────────────────────────────────
 
     /**
@@ -342,10 +361,14 @@ final class LoggerSurfaceTest extends TestCase
      * stated: a fresh PHP process requires the shipped file — no Composer, no
      * WordPress, no api/Data.php, no `apply_filters`, no `do_action`, no
      * `register_post_type` — and calls the real `ntdst_log('probe')->error()`.
-     * Two WordPress functions are defined, `current_time()` and `wp_mkdir_p()`,
-     * because those are the file handler's declared WordPress dependencies.
-     * Anything else the Logger reaches for is undefined, so reaching for it is
-     * a fatal and this test reads the exit code.
+     * THREE WordPress functions are defined and no others: `current_time()`,
+     * `wp_mkdir_p()` and `sanitize_key()` — the file handler's declared
+     * WordPress dependencies, each one a wp-includes primitive that exists
+     * before any plugin loads, which is what lets this file be required FIRST.
+     * (`sanitize_key()` is the third because the constructor reduces the channel
+     * with it; see the containment note there.) Anything else the Logger reaches
+     * for is undefined, so reaching for it is a fatal and this test reads the
+     * exit code.
      *
      * That is the load-order promise as a behaviour rather than as a diff:
      * ntdst-core.php requires this file FIRST, before api/ and admin/, and a
@@ -382,6 +405,11 @@ final class LoggerSurfaceTest extends TestCase
             function wp_mkdir_p(string $target): bool
             {
                 return is_dir($target) || mkdir($target, 0777, true);
+            }
+
+            function sanitize_key($key)
+            {
+                return (string) preg_replace('/[^a-z0-9_\-]/', '', strtolower((string) $key));
             }
 
             require $argv[2] . '/services/Logger.php';
@@ -437,6 +465,199 @@ final class LoggerSurfaceTest extends TestCase
 
         $this->assertFileExists($seamLog, 'The error must reach error_log().');
         $this->assertStringContainsString('[probe] ERROR: probe {"k":"v"}', (string) file_get_contents($seamLog));
+    }
+
+    // ── 7. The write moment ──────────────────────────────────────────────────
+
+    /**
+     * A `warning()` reaches the channel file ONLY after the batch is flushed.
+     *
+     * The batched half of the write moment, which every assertion above misses:
+     * they all log an ERROR, and an error deliberately SKIPS the batch (during
+     * an incident the line has to be on disk before the request that produced it
+     * can die). So the path that carries every debug, info and warning core
+     * writes — collect now, one `file_put_contents` per file on shutdown — was
+     * exercised by nothing, and a flush that quietly dropped its entries would
+     * have passed this file.
+     *
+     * Both halves are asserted: absent BEFORE (it really is batched, not written
+     * and re-read) and one formatted line AFTER (the batch really is written,
+     * with the same format the immediate path produces).
+     */
+    public function testAWarningReachesTheChannelFileOnlyAfterTheBatchIsFlushed(): void
+    {
+        $file = $this->logDir . '/probe-' . date('Y-m-d') . '.log';
+
+        (new NTDST_Logger('probe'))->warning('batched', ['k' => 'v']);
+
+        $this->assertFileDoesNotExist(
+            $file,
+            'A warning is BATCHED — nothing may be on disk before the flush.',
+        );
+
+        NTDST_Logger::flushBatchedLogs();
+
+        $this->assertFileExists($file, 'flushBatchedLogs() must write the batch to the channel file.');
+        $this->assertSame(
+            ['[' . self::STAMP . '] probe.WARNING: batched {"k":"v"}'],
+            file($file, FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES),
+            'The batched line carries the same format as the immediate one.',
+        );
+    }
+
+    // ── 8. The failure path: a write that throws ─────────────────────────────
+
+    /**
+     * A file write that THROWS still leaves the original message in error_log.
+     *
+     * The regression this pins: `log()` puts both sinks in one try block, so the
+     * ORDER inside it decides what survives a failure. With the file write
+     * first, an unwritable logs directory throws before `error_log()` runs, the
+     * catch reports the EXCEPTION, and the message the caller was trying to
+     * report — the payload of the incident — is gone from both sinks. An error
+     * is the level a site is least able to lose.
+     *
+     * So error_log() goes FIRST for error and critical, and the fallback line
+     * carries the original message beside the exception:
+     * `Logger write failed (<channel>.<LABEL>: <message>): <exception>`.
+     *
+     * THE THROW IS REAL, not injected: the logs path is a FILE where the
+     * directory should be, which is what `logDir()` meets on a site whose
+     * uploads directory was restored badly, and the error handler that promotes
+     * the warning to an ErrorException is the one WP_DEBUG sites run — the exact
+     * condition `log()`'s own docblock names as the reason for the try/catch.
+     */
+    public function testAFileWriteThatThrowsStillLeavesTheOriginalMessageInErrorLog(): void
+    {
+        $this->breakTheLogsDirectory();
+
+        try {
+            $this->throwOnWarnings();
+
+            (new NTDST_Logger('probe'))->error('the payload', ['k' => 'v']);
+        } finally {
+            restore_error_handler();
+        }
+
+        $sink = (string) file_get_contents($this->sink);
+
+        $this->assertStringContainsString(
+            '[probe] ERROR: the payload {"k":"v"}',
+            $sink,
+            'error_log() must be written BEFORE the file write, so a throwing file write cannot eat it.',
+        );
+        $this->assertStringContainsString(
+            'Logger write failed (probe.ERROR: the payload {"k":"v"}):',
+            $sink,
+            'The fallback line must carry the ORIGINAL message, not just the exception.',
+        );
+    }
+
+    /**
+     * The shutdown flush fails soft, exactly like `log()` does.
+     *
+     * `flushBatchedLogs()` is registered with `register_shutdown_function()`, so
+     * an uncaught Throwable in it surfaces as a fatal at the very end of a
+     * request that had otherwise succeeded — a response already sent, then a
+     * fatal, and the cause is a LOG LINE. Every request that wrote a debug, info
+     * or warning line goes through this method.
+     *
+     * The batch must also be DRAINED on failure: a batch left in place is
+     * re-attempted by the next flush in the same process, so one broken
+     * directory would multiply into one error_log line per flush.
+     */
+    public function testAShutdownFlushThatCannotWriteFallsBackToErrorLogAndNeverThrows(): void
+    {
+        (new NTDST_Logger('probe'))->warning('batched', ['k' => 'v']);
+
+        $this->breakTheLogsDirectory();
+
+        try {
+            $this->throwOnWarnings();
+
+            NTDST_Logger::flushBatchedLogs();
+        } finally {
+            restore_error_handler();
+        }
+
+        $this->assertStringContainsString(
+            'Logger write failed',
+            (string) file_get_contents($this->sink),
+            'A shutdown flush that cannot write must fall back to error_log() instead of throwing.',
+        );
+
+        $before = count(file($this->sink, FILE_SKIP_EMPTY_LINES));
+        NTDST_Logger::flushBatchedLogs();
+
+        $this->assertCount(
+            $before,
+            file($this->sink, FILE_SKIP_EMPTY_LINES),
+            'A failed flush must DRAIN the batch — a second flush has nothing left to fail on.',
+        );
+    }
+
+    // ── 9. The channel name cannot leave the logs directory ──────────────────
+
+    /**
+     * The channel is sanitized in the constructor, so the filename it builds
+     * cannot walk out of WP_CONTENT_DIR/logs.
+     *
+     * `ntdst_log($channel)` takes its argument from the CALLER, and the channel
+     * is pasted straight into `<channel>-<Y-m-d>.log`. A channel of
+     * `../../evil` therefore names a path outside the logs directory — outside
+     * the directory the .htaccess and the Nginx deny rule protect, which is the
+     * whole of this file's containment story. `sanitize_key()` reduces it to
+     * `evil`, and the line lands at `logs/evil-<Y-m-d>.log`: sanitized, not
+     * refused, so a caller with a sloppy channel name still gets its log.
+     */
+    public function testATraversingChannelNameCannotWriteOutsideTheLogsDirectory(): void
+    {
+        // The path the UNSANITIZED channel actually names: the filename is
+        // `<channel>-<Y-m-d>.log` pasted onto the logs directory, so `../../evil`
+        // resolves two levels ABOVE it — outside WP_CONTENT_DIR entirely.
+        $escaped = dirname($this->logDir, 2) . '/evil-' . date('Y-m-d') . '.log';
+        @unlink($escaped);
+
+        (new NTDST_Logger('../../evil'))->error('probe', []);
+        NTDST_Logger::flushBatchedLogs();
+
+        $this->assertFileDoesNotExist(
+            $escaped,
+            'A channel name must never place a log file outside WP_CONTENT_DIR/logs.',
+        );
+        $this->assertFileExists(
+            $this->logDir . '/evil-' . date('Y-m-d') . '.log',
+            'sanitize_key() reduces the channel to `evil`; the line still lands, inside logs/.',
+        );
+    }
+
+    // ── The two failure harnesses ────────────────────────────────────────────
+
+    /**
+     * Put a FILE where the logs directory should be.
+     *
+     * Every write under it then fails at the filesystem level — `logDir()`'s
+     * own .htaccess write first — which is a real, un-mocked failure of the
+     * thing the Logger actually does, rather than a mocked one.
+     */
+    private function breakTheLogsDirectory(): void
+    {
+        self::removeTree($this->logDir);
+        file_put_contents($this->logDir, 'not a directory');
+    }
+
+    /**
+     * The WP_DEBUG error handler: promote a PHP warning to an ErrorException.
+     *
+     * This is the site configuration `log()`'s docblock names — an error handler
+     * that turns an unwritable logs directory into a throw. The caller restores
+     * the handler in a `finally`.
+     */
+    private function throwOnWarnings(): void
+    {
+        set_error_handler(static function (int $severity, string $message, string $file = '', int $line = 0): bool {
+            throw new ErrorException($message, 0, $severity, $file, $line);
+        });
     }
 
     // ── Loading the shipped source ───────────────────────────────────────────

@@ -1657,8 +1657,19 @@ class NTDST_Data_Model
         $taxonomies = get_object_taxonomies($post_type);
         $terms = [];
 
+        // Did the cache answer for EVERY taxonomy of this type? wp_cache_get()
+        // says `false` on a miss and an array — possibly EMPTY — on a hit, so
+        // "no terms" and "not cached" are different answers and only this flag
+        // can tell them apart. A type with no taxonomies at all answers
+        // nothing, so it is not a complete answer either.
+        $cache_answered = $taxonomies !== [];
+
         foreach ($taxonomies as $taxonomy) {
             $wp_cached = wp_cache_get($post_id, "{$taxonomy}_relationships");
+            if ($wp_cached === false || !is_array($wp_cached)) {
+                $cache_answered = false;
+            }
+
             if ($wp_cached !== false && is_array($wp_cached)) {
                 foreach ($wp_cached as $term) {
                     if (!is_object($term)) {
@@ -1676,7 +1687,12 @@ class NTDST_Data_Model
             }
         }
 
-        if (!empty($terms)) {
+        // An EMPTY bag from a complete cache is a real answer, and returning it
+        // is the point: the old test was `if (!empty($terms))`, which cannot
+        // distinguish "this post has no terms" from "nothing was cached" — so
+        // every untagged post took the three-way JOIN below on every single
+        // read, forever, to be told again that there is nothing to tell.
+        if ($cache_answered || !empty($terms)) {
             return $terms;
         }
 
