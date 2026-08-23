@@ -196,6 +196,12 @@ final class PackageBootIntegrityTest extends TestCase
             // table ends up.
             'ntdst_service_' => ['ntdst_service_', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
             'getServiceConfig' => ['getServiceConfig', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            // The fifth accessor. FR-2 names five and the four rows around this
+            // one pinned four, so `getServices()` — the read-only copy of the
+            // whole registry, and the widest of the five — could come back
+            // without a single test noticing. `discoverServices` does not cover
+            // it: neither name contains the other.
+            'getServices' => ['getServices', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
             'getBootedServices' => ['getBootedServices', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
             'hasService' => ['hasService', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
             'isBooted' => ['isBooted', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
