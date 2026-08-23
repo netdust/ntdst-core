@@ -24,6 +24,28 @@ defined('ABSPATH') || exit;
 final class NTDST_RelationField
 {
     /**
+     * The most post types one search may name.
+     *
+     * `post_type[]` is caller-controlled and WordPress parses a JSON body on
+     * ANY method, so `max_input_vars` bounds nothing here: an anonymous GET can
+     * carry `{"post_type":[100000 strings]}`. The gate walks the list entry by
+     * entry — a `get_post_type_object()` and a `current_user_can()` each — and
+     * the rate limiter charges only callers the permission ADMITS, so an
+     * unbounded list is unbounded work bought for free.
+     *
+     * The bound is stated TWICE on purpose. `maxItems` on the arg is the cheap
+     * refusal: `has_valid_params()` runs before the permission, so an abusive
+     * list is a 400 with no framework work behind it. WordPress validates
+     * `items` before `maxItems` though, so the schema alone still walks the
+     * list once — hence the same cap inside mayPickFromAll(), read off the
+     * REQUESTED list before any normalising, so nothing shrinks it first.
+     *
+     * Twenty is a picker pointed at a wide model, with room. It is not a
+     * plausible hand-written search.
+     */
+    private const MAX_REQUESTED_TYPES = 20;
+
+    /**
      * Takes nothing. This used to demand a theme object it never dereferenced
      * — a dependency that did no work, but forced the bootstrap below to
      * resolve one out of the container purely to satisfy this signature, and to
@@ -68,7 +90,7 @@ final class NTDST_RelationField
             // is indistinguishable from the retired declaration and fires.
             'args'        => [
                 'search'    => ['type' => 'string', 'required' => true, 'sanitize_callback' => 'sanitize_text_field'],
-                'post_type' => ['type' => 'array', 'items' => ['type' => 'string']],
+                'post_type' => ['type' => 'array', 'maxItems' => self::MAX_REQUESTED_TYPES, 'items' => ['type' => 'string']],
             ],
         ]);
 
@@ -214,9 +236,12 @@ final class NTDST_RelationField
     /**
      * May the current caller pick from EVERY requested type?
      *
-     * The route's permission, and the only way in. Three refusals, one per way
+     * The route's permission, and the only way in. Four refusals, one per way
      * a gate like this fails open:
      *
+     *  0. TOO MANY REQUESTED. The bound is read off the raw list before any
+     *     other line runs, so an abusive list costs one `count()`. See
+     *     MAX_REQUESTED_TYPES.
      *  1. NOTHING REQUESTED. A loop over an empty list answers true unless the
      *     emptiness is checked first, so a caller who simply omits `post_type`
      *     would be admitted to a handler asked to search nothing — or, one hand
@@ -232,6 +257,14 @@ final class NTDST_RelationField
      */
     private function mayPickFromAll(array $requested): bool
     {
+        // FIRST, and on the RAW list: the cap has to be read before anything
+        // walks or reshapes the request, or the work it refuses is already
+        // done. See MAX_REQUESTED_TYPES for why the arg's `maxItems` does not
+        // cover this on its own.
+        if (count($requested) > self::MAX_REQUESTED_TYPES) {
+            return false;
+        }
+
         $types = $this->normalizeTypes($requested);
 
         if ($types === []) {
