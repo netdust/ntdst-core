@@ -288,6 +288,103 @@ final class CoreTrimClusterDFeatureTest extends TestCase
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // 3b. INV-9 — the table promises a symbol EXISTS (cluster-3 fix wave F5)
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * SPLIT RED — cluster-3 fix wave F5. The implementer greens it without
+     * weakening an assertion.
+     *
+     * Every row of `#### Extension points` names something the package still
+     * ships.
+     *
+     * The table's promise is stronger than "a hook nothing reads is fine": it
+     * says the reader is somebody else's code, which is only a defence if OUR
+     * code still fires the hook, still declares the function, still ships the
+     * interface. A row whose symbol is gone is an invitation to write a
+     * listener that can never be called, published in the one document that
+     * exists to be trusted — and `bin/zero-readers.sh` reads the same table to
+     * decide what it may exempt, so a dead row silences the sweep as well.
+     *
+     * It asks EVERY kind, not only the hooks. The hook-only sibling above is
+     * blind twice over: it skips the `function`, `method` and `interface` rows
+     * by their Kind cell, and its stem match is vacuous — the package fires
+     * `ntdst/{$name}/fields`, whose stem is `ntdst/`, and `ntdst/` is a prefix
+     * of every documented hook there could ever be. So it answers "fired" for
+     * anything the table names. This case asks for a SITE instead: a
+     * non-comment line, in shipped code, that spells the symbol.
+     */
+    public function testEveryDocumentedExtensionPointSymbolHasAShippedCodeSite(): void
+    {
+        $rows = $this->extension_point_rows();
+
+        $this->assertGreaterThanOrEqual(
+            18,
+            count($rows),
+            "README's `#### Extension points` table lost rows, or the parse stopped matching its shape.",
+        );
+
+        $dead = [];
+
+        foreach ($rows as [$symbol, $kind]) {
+            $needle  = $this->extension_point_needle($symbol, $kind);
+            $command = 'grep -rnF -e ' . escapeshellarg($needle) . ' --include=*.php ' . self::PACKAGE
+                . ' | grep -vE ' . escapeshellarg(':[0-9]+: *(\*|//|#|/\*)') . ' || true';
+
+            if ($this->lines($this->run_check($command)['out']) === []) {
+                $dead[] = $symbol . ' (' . $kind . ', searched for "' . $needle . '")';
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $dead,
+            "README publishes these extension points and the package no longer ships one line that spells them. "
+            . "A consumer who writes the listener gets silence, and bin/zero-readers.sh exempts the name on the "
+            . "strength of the row:\n" . implode("\n", $dead),
+        );
+    }
+
+    /**
+     * SPLIT RED sibling — the sweep must NOTICE a dead exemption itself.
+     *
+     * The test above is the document's side of it. This is the script's: an
+     * EXCEPTIONS row is a promise that a published symbol is being kept, and a
+     * row for a symbol the package no longer contains exempts nothing while
+     * reading like a decision. The script already refuses an exemption README
+     * does not carry (`undocumented-exception`); the mirror image — an
+     * exemption whose symbol is gone from the code — currently passes in
+     * silence, which is how four of them survived a release.
+     *
+     * Driven on a MIRROR with a row planted in both homes (the script's array
+     * and README's table, so the existing `undocumented-exception` check is
+     * satisfied and cannot be what fails). The planted symbol is spelled
+     * nowhere in the package.
+     */
+    public function testAnExemptionForASymbolThePackageNoLongerShipsIsAFinding(): void
+    {
+        $planted = 'ntdst/planted/never_fired';
+        $mirror  = $this->make_mirror_with_a_planted_dead_exception($planted);
+        $run     = $this->run_bash('bash ' . escapeshellarg($mirror . '/bin/zero-readers.sh'), $mirror);
+
+        $this->assertStringContainsString(
+            $planted,
+            $run['out'],
+            "An exemption for a symbol the package does not ship must be a FINDING ON STDOUT naming it. stdout:\n"
+            . $run['out'] . "\nstderr:\n" . $run['err'],
+        );
+        $this->assertStringContainsString(
+            'inert-exception:',
+            $run['out'],
+            "The finding must say WHAT is wrong — the exemption is inert, not undocumented. stdout:\n" . $run['out'],
+        );
+        $this->assertNotSame(
+            0,
+            $run['code'],
+            "Every line on stdout is a finding and fails the gate; this one exited 0. stdout:\n" . $run['out'],
+        );
+    }
+    // ─────────────────────────────────────────────────────────────────────────
     // 4. README ↔ code — the migration tables, read backwards
     // ─────────────────────────────────────────────────────────────────────────
 
@@ -326,6 +423,111 @@ final class CoreTrimClusterDFeatureTest extends TestCase
     // helpers — shell, README parsing, code queries
     // ─────────────────────────────────────────────────────────────────────────
 
+    /**
+     * Every row of `#### Extension points` as [symbol, kind], all kinds.
+     *
+     * A cell may name two spellings of one point (`creating`, `created`), and
+     * each is a promise of its own.
+     *
+     * @return list<array{0: string, 1: string}>
+     */
+    private function extension_point_rows(): array
+    {
+        $rows = [];
+
+        foreach ($this->readme_section('#### Extension points') as $line) {
+            if (!str_starts_with($line, '|') || str_starts_with($line, '|---')) {
+                continue;
+            }
+
+            $cells = array_map('trim', explode('|', trim($line, '|')));
+            $kind  = strtolower((string) end($cells));
+
+            if (!in_array($kind, ['action', 'filter', 'function', 'method', 'interface', 'class'], true)) {
+                continue; // the header row
+            }
+
+            preg_match_all('/`([^`]+)`/', $cells[0], $m);
+            foreach ($m[1] as $symbol) {
+                $rows[] = [$symbol, $kind];
+            }
+        }
+
+        $this->assertNotEmpty($rows, "README's `#### Extension points` table has no readable row");
+
+        return $rows;
+    }
+
+    /**
+     * The literal a shipped-code site would spell.
+     *
+     * A hook is searched by its STEM, because the fired spelling interpolates
+     * (`ntdst/service/{$slug}/config`); a method by its declaration, because a
+     * bare name is receiver-blind either way; a function and an interface by
+     * their name.
+     */
+    private function extension_point_needle(string $symbol, string $kind): string
+    {
+        if ($kind === 'action' || $kind === 'filter') {
+            return $this->stem($symbol);
+        }
+
+        if (str_contains($symbol, '::')) {
+            return 'function ' . rtrim(substr($symbol, strpos($symbol, '::') + 2), '()') . '(';
+        }
+
+        return rtrim($symbol, '()');
+    }
+
+    /**
+     * A mirror of the package whose sweep carries one exemption for a symbol
+     * nothing ships — planted in the script AND in README's table, so the
+     * only thing wrong with it is that the symbol is gone.
+     */
+    private function make_mirror_with_a_planted_dead_exception(string $planted): string
+    {
+        $mirror = sys_get_temp_dir() . '/zero-readers-inert-' . getmypid();
+        $parent = dirname(self::$repo);
+
+        $this->run_bash('rm -rf ' . escapeshellarg($mirror) . ' && mkdir -p ' . escapeshellarg($mirror . '/bin')
+            . ' && cp -a api core admin services support ntdst-core.php README.md ' . escapeshellarg($mirror));
+
+        $script = (string) file_get_contents(self::$repo . '/bin/zero-readers.sh');
+        // the roots are relative to the package root and the mirror sits
+        // elsewhere, so they become absolute — every one of them still there.
+        $script = preg_replace('#^(\s*)\.\./#m', '$1' . $parent . '/', $script) ?? $script;
+        $script = str_replace(
+            "EXCEPTIONS=(\n",
+            "EXCEPTIONS=(\n    '" . $planted . "|planted by the test — README extension-point table'\n",
+            $script,
+        );
+
+        $this->assertStringContainsString($planted, $script, 'the exemption row did not plant');
+        file_put_contents($mirror . '/bin/zero-readers.sh', $script);
+
+        $readme = (string) file_get_contents(self::$repo . '/README.md');
+        $anchor = "#### Extension points";
+        $head   = substr($readme, 0, strpos($readme, $anchor));
+        $tail   = substr($readme, strlen($head));
+        $tail   = preg_replace(
+            '/^\|---\|---\|---\|$/m',
+            "|---|---|---|\n| `" . $planted . "` | planted by the test | filter |",
+            $tail,
+            1,
+        ) ?? $tail;
+
+        $this->assertStringContainsString($planted, $tail, "the README row did not plant — the table shape moved");
+        file_put_contents($mirror . '/README.md', $head . $tail);
+
+        $this->assertSame(
+            0,
+            $this->run_bash('grep -rF -e ' . escapeshellarg($planted) . ' --include=*.php ' . self::PACKAGE
+                . ' | wc -l')['out'] <=> "0\n",
+            'control: the planted symbol must be spelled nowhere in the package',
+        );
+
+        return $mirror;
+    }
     /** @return array{out: string, err: string, code: int} */
     private function run_bash(string $command, ?string $cwd = null): array
     {

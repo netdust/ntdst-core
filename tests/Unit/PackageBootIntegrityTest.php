@@ -604,6 +604,224 @@ final class PackageBootIntegrityTest extends TestCase
     }
 
     /**
+     * SPLIT RED — cluster-3 fix wave F1. Written by the independent
+     * test-author; the implementer greens it without weakening an assertion.
+     *
+     * `required` ALONE does not make a line WordPress's vocabulary.
+     *
+     * The exemption above says a line is a REST `args` schema when it carries a
+     * `'type' => '<name>'` beside one of WordPress's own arg keys. `required`
+     * is not one of WordPress's own words: the field registry spells it too, so
+     * `'title' => ['type' => 'string', 'required' => true],` — a FIELD
+     * declaration wearing a retired type name — reads as exempt and walks past
+     * the pin. The discriminator has to be a key only a route writes:
+     * `sanitize_callback`, `validate_callback`, `items` or `enum`.
+     *
+     * The three exempt lines below are admin/RelationField.php:70-71 as
+     * shipped, plus an `enum` sibling, so the narrowing cannot be done by
+     * deleting the exemption: the two lines the package really ships must stay
+     * out of the hits.
+     */
+    public function testARequiredFlagAloneDoesNotExemptAFieldDeclaration(): void
+    {
+        $rows = self::removedSymbolProvider();
+
+        $this->assertArrayHasKey('retired type string', $rows, "removedSymbolProvider() must pin 'retired type string'.");
+
+        [$symbol, , $exceptPath, $exceptLine] = $rows['retired type string'] + [2 => '', 3 => ''];
+
+        $lines = [
+            // admin/RelationField.php:70-71 as shipped — still exempt.
+            "                'search'    => ['type' => 'string', 'required' => true, 'sanitize_callback' => 'sanitize_text_field'],",
+            "                'post_type' => ['type' => 'array', 'items' => ['type' => 'string']],",
+            // WordPress's `enum`, the fourth discriminator — still exempt.
+            "                'status'    => ['type' => 'string', 'enum' => ['publish', 'draft']],",
+            // A FIELD declaration that says `required`. This is the hit.
+            "        'title' => ['type' => 'string', 'required' => true],",
+        ];
+
+        $root = sys_get_temp_dir() . '/ntdst-sweep-required-' . getmypid() . '-' . uniqid();
+        mkdir($root . '/admin', 0777, true);
+        file_put_contents($root . '/admin/RelationField.php', implode("\n", ['<?php', ...$lines, '']));
+
+        try {
+            $hits = $this->sweep($root, $symbol, $exceptPath, $exceptLine);
+
+            $this->assertCount(
+                1,
+                $hits,
+                "`required` is the registry's word too, so it cannot be what tells a route's args from a field "
+                    . "declaration. Exactly the `'title'` line must fire, and the two shipped arg lines must not:\n"
+                    . implode("\n", $hits),
+            );
+            $this->assertStringContainsString(
+                'admin/RelationField.php:' . (count($lines) + 1),
+                $hits[0],
+                "The field declaration that says `'required' => true` is the one line that fires.",
+            );
+        } finally {
+            unlink($root . '/admin/RelationField.php');
+            rmdir($root . '/admin');
+            rmdir($root);
+        }
+    }
+
+    /**
+     * SPLIT RED — cluster-3 fix wave F1, the shell half.
+     *
+     * bin/guard.sh carries the same rule as a `grep -E` alternation, and the
+     * two homes are a mirror by hand. There is no subprocess seam for guard.sh
+     * anywhere in tests/, so this half is asserted on the SOURCE line: the
+     * discriminator set must lose `required` and keep the other four. Losing
+     * the whole exemption would be the other way to make `required` stop
+     * exempting, and it would fire on the two lines the package ships — hence
+     * the second half of the assertion.
+     */
+    public function testTheShellGuardDoesNotExemptOnRequiredAlone(): void
+    {
+        $guard = (string) file_get_contents(dirname(__DIR__, 2) . '/bin/guard.sh');
+
+        $this->assertSame(
+            1,
+            preg_match('/^REST_ARG_SCHEMA_LINE=.*$/m', $guard, $matched),
+            'bin/guard.sh must declare REST_ARG_SCHEMA_LINE on one line.',
+        );
+
+        $this->assertStringNotContainsString(
+            'required',
+            $matched[0],
+            "bin/guard.sh's REST arg-schema exemption still accepts `required` as the discriminator. "
+                . "A field declaration spells `required` too, so the shell home exempts "
+                . "`'title' => ['type' => 'string', 'required' => true],` exactly as the PHP mirror did.",
+        );
+
+        foreach (['sanitize_callback', 'validate_callback', 'items', 'enum'] as $keyword) {
+            $this->assertStringContainsString(
+                $keyword,
+                $matched[0],
+                "Narrowing the exemption is not deleting it: `{$keyword}` is a key only a route writes, and "
+                    . 'admin/RelationField.php:70-71 must stay exempt.',
+            );
+        }
+    }
+
+    /**
+     * SPLIT RED — cluster-3 fix wave F4.
+     *
+     * No migration row hands an adopter an option `ntdst_rest()` refuses.
+     *
+     * Two shapes, and both are a row that reads as an instruction. The first is
+     * `'permission_callback' => …` written INSIDE an `ntdst_rest()` call: the
+     * option is not in the declaration's known set, so the route refuses and
+     * never registers — the adopter follows README and loses the endpoint. The
+     * second is a `Now` cell that OFFERS `'__return_true'` as the value of a
+     * permission: on this framework a permission string is a CAPABILITY, so
+     * `'__return_true'` becomes `current_user_can('__return_true')` and answers
+     * 403 forever (INV-3).
+     *
+     * The `publicSurface()` row is the shape that must stay: it DESCRIBES
+     * reading WordPress's own register back and filtering on a
+     * `permission_callback` that is `'__return_true'`. It states a fact about
+     * WordPress's route table; it does not assign the value in a declaration.
+     * That is why the second check reads the ASSIGNMENT and not the word.
+     */
+    public function testNoReadmeMigrationRowSpellsARefusedRestOption(): void
+    {
+        $lines = explode("\n", $this->readmeText());
+
+        $refused = [];
+        foreach ($lines as $index => $line) {
+            if (str_contains($line, 'ntdst_rest(') && preg_match("/'permission_callback' *=>/", $line) === 1) {
+                $refused[] = 'README.md:' . ($index + 1) . ' — ' . trim($line);
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $refused,
+            "`permission_callback` is not an `ntdst_rest()` option: the declaration refuses an unknown option and "
+                . "the route never registers. The row must offer `['permission' => '<capability>']` or a callable:\n"
+                . implode("\n", $refused),
+        );
+
+        $offered = [];
+        $inVersion = false;
+        foreach ($lines as $index => $line) {
+            if (preg_match('/^### /', $line) === 1) {
+                $inVersion = str_starts_with($line, '### 5.0.0');
+
+                continue;
+            }
+            if (!$inVersion || !str_starts_with(ltrim($line), '|')) {
+                continue;
+            }
+
+            $cells = array_map('trim', explode('|', trim(trim($line), '|')));
+            $now   = (string) end($cells);
+
+            if (preg_match("/=> *'__return_true'/", $now) === 1) {
+                $offered[] = 'README.md:' . ($index + 1) . ' — ' . $now;
+            }
+        }
+
+        $this->assertSame(
+            [],
+            $offered,
+            "A `Now` cell assigns `'__return_true'` as a permission. On this framework a permission is a "
+                . "CAPABILITY name, so that resolves to `current_user_can('__return_true')` — 403 forever, for "
+                . "everybody, on a route the row says is public. The public spelling is `->public()` (INV-3):\n"
+                . implode("\n", $offered),
+        );
+    }
+
+    /**
+     * SPLIT RED — cluster-3 fix wave F4, the structure list.
+     *
+     * `api/` no longer holds an Actions layer, so the bullet an adopter reads
+     * first must not name one. A structure list that names a deleted file is
+     * the cheapest possible wrong instruction.
+     */
+    public function testTheApiStructureBulletNoLongerNamesActions(): void
+    {
+        $bullets = array_values(array_filter(
+            explode("\n", $this->readmeText()),
+            static fn (string $line): bool => str_starts_with(trim($line), '- `api/`'),
+        ));
+
+        $this->assertCount(1, $bullets, "README's structure list must describe `api/` exactly once.");
+        $this->assertStringNotContainsString(
+            'Actions',
+            $bullets[0],
+            'The command dispatcher left with 5.0.0. The request flow is Rest, Data, Response: ' . trim($bullets[0]),
+        );
+    }
+
+    /**
+     * SPLIT RED — cluster-3 fix wave F4, the philosophy doc.
+     *
+     * `docs/philosophy.md` still explains the permission model as an
+     * allow-list filter on a router that no longer exists. It is the document
+     * that tells a reader HOW the package decides who may call something, so a
+     * deleted model described there is a reader wiring a filter nothing reads.
+     */
+    public function testThePhilosophyDocDescribesNoDeletedPermissionModel(): void
+    {
+        $philosophy = (string) file_get_contents(dirname(__DIR__, 2) . '/docs/philosophy.md');
+
+        $this->assertSame(
+            0,
+            preg_match_all('#ntdst/api/public_actions#', $philosophy),
+            "`ntdst/api/public_actions` is deleted. Permission is stated on the route — `['permission' => …]` or "
+                . '`->public()` — and docs/philosophy.md is where a reader learns that.',
+        );
+        $this->assertSame(
+            0,
+            preg_match_all('/NTDST_Actions/', $philosophy),
+            'NTDST_Actions is deleted; the doc still settles its questions through it.',
+        );
+    }
+
+    /**
      * A markdown HEADING is not a PHP comment.
      *
      * The sweep skips a line that opens with `*`, `//`, `#` or `/*`, because a

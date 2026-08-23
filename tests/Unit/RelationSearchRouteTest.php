@@ -162,6 +162,9 @@ final class RelationSearchRouteTest extends TestCase
     /** The transient store the rate limiter writes through. */
     private array $transients = [];
 
+    /** Every capability the gate asked about, in order. */
+    private array $capChecks = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -176,6 +179,7 @@ final class RelationSearchRouteTest extends TestCase
         $this->routes = [];
         $this->caps = [];
         $this->transients = [];
+        $this->capChecks = [];
         $GLOBALS['_ntdst_test_wp_query_args'] = [];
         $GLOBALS['_ntdst_test_wp_query_posts'] = [];
 
@@ -207,7 +211,15 @@ final class RelationSearchRouteTest extends TestCase
             $this->transients[$k] = $v;
             return true;
         });
-        Functions\when('current_user_can')->alias(fn(string $cap) => in_array($cap, $this->caps, true));
+        // Recorded as well as answered: a bound on the requested list is only
+        // real if it refuses BEFORE the per-type capability loop runs, and
+        // "before" is not observable from the return value alone. The answer
+        // is unchanged.
+        Functions\when('current_user_can')->alias(function (string $cap) {
+            $this->capChecks[] = $cap;
+
+            return in_array($cap, $this->caps, true);
+        });
         Functions\when('get_post_type_object')->alias(
             static fn(string $type) => new WP_Post_Type($type, "edit_others_{$type}s"),
         );
@@ -593,6 +605,156 @@ final class RelationSearchRouteTest extends TestCase
         );
     }
 
+    // =====================================================================
+    // 1b. The requested list is BOUNDED — cluster-3 fix wave F2 (split RED)
+    // =====================================================================
+
+    /**
+     * SPLIT RED — cluster-3 fix wave F2. The implementer greens it without
+     * weakening an assertion; the constant's name is the implementer's.
+     *
+     * A `post_type[]` longer than twenty is refused, and refused BEFORE the
+     * capability loop.
+     *
+     * `post_type[]` is caller-controlled and unbounded: the gate walks it once
+     * per entry, and every entry is a `get_post_type_object()` plus a
+     * `current_user_can()`. A caller who sends ten thousand entries buys ten
+     * thousand capability resolutions per request, inside the permission
+     * callback — the cheapest place on the route to spend somebody else's CPU,
+     * and it is spent before the rate limiter has anything to charge for.
+     *
+     * So the bound is asserted TWICE: the answer is false, and the loop never
+     * ran. A cap applied after the walk still does the work it exists to
+     * refuse, and the return value alone cannot tell the two apart.
+     *
+     * Twenty is admitted in the same test, because the other way to pass the
+     * first half is a bound so tight it breaks a real picker.
+     */
+    public function testAPostTypeListLongerThanTwentyIsRefusedBeforeAnyCapabilityCheck(): void
+    {
+        $many = [];
+        for ($i = 0; $i < 21; $i++) {
+            $many[] = 'target' . $i;
+        }
+
+        $this->declareRelationsTo($many);
+        $this->caps = array_map(static fn (string $type): string => "edit_others_{$type}s", $many);
+
+        $permission = $this->permission();
+        $this->capChecks = [];
+
+        $this->assertDenied(
+            $permission(new RelationSearchRequest(['search' => 'blue', 'post_type' => $many])),
+            'Twenty-one requested types is refused. The list is caller-controlled and the gate walks it entry '
+                . 'by entry, so an unbounded list is unbounded work inside a permission callback.',
+        );
+        $this->assertSame(
+            [],
+            $this->capChecks,
+            'The bound must be checked BEFORE the per-type loop. The request was refused, and it still cost '
+                . count($this->capChecks) . ' capability resolutions to refuse it: '
+                . implode(', ', $this->capChecks),
+        );
+    }
+
+    /**
+     * SPLIT RED sibling — the boundary itself. Twenty declared targets, all
+     * editable, is a request that still works: the bound refuses abuse, not a
+     * picker pointed at a wide model.
+     */
+    public function testAPostTypeListOfExactlyTwentyIsStillAdmitted(): void
+    {
+        $twenty = [];
+        for ($i = 0; $i < 20; $i++) {
+            $twenty[] = 'target' . $i;
+        }
+
+        $this->declareRelationsTo($twenty);
+        $this->caps = array_map(static fn (string $type): string => "edit_others_{$type}s", $twenty);
+
+        $this->assertTrue(
+            ($this->permission())(new RelationSearchRequest(['search' => 'blue', 'post_type' => $twenty])),
+            'Twenty is inside the bound — the cap refuses an abusive list, not a legitimate one.',
+        );
+    }
+
+    // =====================================================================
+    // 3b. The refusals carry an HTTP status — cluster-3 fix wave F3 (split RED)
+    // =====================================================================
+
+    /**
+     * SPLIT RED — cluster-3 fix wave F3.
+     *
+     * An empty search term answers 400, not 500.
+     *
+     * A `WP_Error` returned from a REST callback with no `status` in its data
+     * is a 500: WordPress has nothing else to go on. The deleted dispatcher
+     * defaulted these to 400, so moving the picker onto a route silently turned
+     * "you sent nothing to search for" into "the server broke". It is reachable
+     * on the first keystroke: `search=<b>` survives the wire, WordPress's own
+     * `sanitize_callback` reduces it to `''`, and the handler refuses it.
+     *
+     * A 500 is not a cosmetic difference. It is logged, it alerts, and it tells
+     * the client the request was not the problem — the one thing that is
+     * certainly false here.
+     */
+    public function testAnEmptySearchTermIsAFourHundredNotAFiveHundred(): void
+    {
+        $this->declareRelationsTo(['artwork']);
+        $this->caps = ['edit_others_artworks'];
+
+        $callback = $this->route()['callback'];
+
+        $result = $callback(new RelationSearchRequest(['search' => '', 'post_type' => ['artwork']]));
+
+        $this->assertInstanceOf(WP_Error::class, $result, 'A search with no term is refused.');
+        $this->assertSame('empty_search', $result->get_error_code(), 'control: this is the empty-term refusal.');
+
+        $data = $result->get_error_data();
+
+        $this->assertIsArray(
+            $data,
+            'The WP_Error carries no data at all, so WordPress answers 500 for a request the client got wrong. '
+                . 'The refusal must carry its own status.',
+        );
+        $this->assertSame(
+            400,
+            $data['status'] ?? null,
+            'An empty search term is a bad request — 400. 500 says the server failed, and alerts on it.',
+        );
+    }
+
+    /**
+     * SPLIT RED sibling — a refused type list answers 403, not 500.
+     *
+     * Driven on the handler directly, because the route's permission refuses an
+     * empty list before the callback runs: this is the fail-safe branch behind
+     * the gate, and the status it carries is what a caller sees if anything
+     * ever reaches it. "Not allowed" is 403; the handler says so in its message
+     * and must say so in its status.
+     */
+    public function testARefusedPostTypeListIsAFourOhThreeNotAFiveHundred(): void
+    {
+        $this->declareRelationsTo(['artwork']);
+        $this->caps = ['edit_others_artworks'];
+
+        $result = $this->service()->handleRelationSearch(new RelationSearchRequest([
+            'search'    => 'blue',
+            'post_type' => [],
+        ]));
+
+        $this->assertInstanceOf(WP_Error::class, $result, 'An empty allow-list is refused, never searched.');
+        $this->assertSame('forbidden_post_type', $result->get_error_code(), 'control: this is the type refusal.');
+
+        $data = $result->get_error_data();
+
+        $this->assertIsArray($data, 'A WP_Error with no data is a 500 — the server did not fail, the caller was refused.');
+        $this->assertSame(
+            403,
+            $data['status'] ?? null,
+            'A refusal to search a type the caller may not have is 403.',
+        );
+    }
     // =====================================================================
     // harness
     // =====================================================================
