@@ -35,17 +35,18 @@ final class PackageBootIntegrityTest extends TestCase
      * call, an instance call, and the property.
      *
      * A third and fourth element EXEMPT one LINE — a path AND a pattern that
-     * line must match, both or neither. Exactly one row needs it: the field
-     * vocabulary's own table of retired names (api/FieldTypes.php) has to spell
-     * `signed_int` out in order to answer "use 'int' instead" — naming a retired
-     * type in the message that retires it is the same exemption README's
-     * `## Versions` section already gets.
+     * line must match, both or neither. Only the retired TYPE NAMES need it:
+     * the registry (api/FieldTypes.php) has to spell each retired name out in
+     * order to answer "use 'int' instead", and it writes `['type' => 'integer']`
+     * as a publish column for a live type. Naming a retired name in the entry
+     * that retires it is the same exemption README's `## Versions` section
+     * already gets.
      *
      * The pattern is what keeps that exemption honest. A whole-FILE exemption
      * would let api/FieldTypes.php grow `new NTDST_FieldType('signed_int', …)`
-     * — the retired name back in the vocabulary, in the one file this test
-     * agreed not to look at. The retirement row may say it; nothing else in
-     * that file may.
+     * — the retired name back in the registry, in the one file this test agreed
+     * not to look at. The retirement entry may say it; nothing else in that
+     * file may.
      *
      * @return array<string, array{0: string, 1: string, 2?: string, 3?: string}>
      */
@@ -116,6 +117,34 @@ final class PackageBootIntegrityTest extends TestCase
             // which is the thing INV-1 exists to prevent. Neither name is part
             // of any other word, so both are pinned bare.
             'restSubFields' => ['restSubFields', '5.0.0'],
+            // The 13 retired type NAMES, pinned by DECLARATION POSITION.
+            // Twelve of them are ordinary JSON-Schema and English words, so a
+            // bare sweep would hit 617 shipped lines and api/FieldTypes.php's
+            // own `['type' => 'integer']` publish column with them. What no
+            // shipped line may do is DECLARE a field with one, and a
+            // declaration has exactly three shapes: `'type' => '<retired>'`,
+            // the bare shorthand `=> '<retired>'`, and
+            // `new NTDST_FieldType('<retired>'`. The exemption is stated by
+            // CONTENT — a retirement entry, or a registry entry's JSON-Schema
+            // leaf — so it anchors to the ROW and not to the file: a real
+            // `new NTDST_FieldType('integer', …)` still fires inside the very
+            // file that retires the name. bin/guard.sh runs the same three
+            // shapes and the same exemption over *.php; this sweep adds
+            // README.md, where a retired name in an INSTRUCTION is a wrong
+            // instruction.
+            'retired type integer' => ["/'type' *=> *'integer'|=> *'integer'|NTDST_FieldType\\('integer'/", '5.0.0', 'api/FieldTypes.php', '/^\\s*(\'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)\'\\s*=>\\s*\'(bool|date|float|html|int|relation|text|textarea)\',|\\[\'type\' *=> *\'(integer|number|boolean|string|array)\'.*\\], *\'[a-z_]+\', *(true|false),)\\s*$/'],
+            'retired type signed_int' => ["/'type' *=> *'signed_int'|=> *'signed_int'|NTDST_FieldType\\('signed_int'/", '5.0.0', 'api/FieldTypes.php', '/^\\s*(\'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)\'\\s*=>\\s*\'(bool|date|float|html|int|relation|text|textarea)\',|\\[\'type\' *=> *\'(integer|number|boolean|string|array)\'.*\\], *\'[a-z_]+\', *(true|false),)\\s*$/'],
+            'retired type number' => ["/'type' *=> *'number'|=> *'number'|NTDST_FieldType\\('number'/", '5.0.0', 'api/FieldTypes.php', '/^\\s*(\'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)\'\\s*=>\\s*\'(bool|date|float|html|int|relation|text|textarea)\',|\\[\'type\' *=> *\'(integer|number|boolean|string|array)\'.*\\], *\'[a-z_]+\', *(true|false),)\\s*$/'],
+            'retired type double' => ["/'type' *=> *'double'|=> *'double'|NTDST_FieldType\\('double'/", '5.0.0', 'api/FieldTypes.php', '/^\\s*(\'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)\'\\s*=>\\s*\'(bool|date|float|html|int|relation|text|textarea)\',|\\[\'type\' *=> *\'(integer|number|boolean|string|array)\'.*\\], *\'[a-z_]+\', *(true|false),)\\s*$/'],
+            'retired type decimal' => ["/'type' *=> *'decimal'|=> *'decimal'|NTDST_FieldType\\('decimal'/", '5.0.0', 'api/FieldTypes.php', '/^\\s*(\'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)\'\\s*=>\\s*\'(bool|date|float|html|int|relation|text|textarea)\',|\\[\'type\' *=> *\'(integer|number|boolean|string|array)\'.*\\], *\'[a-z_]+\', *(true|false),)\\s*$/'],
+            'retired type boolean' => ["/'type' *=> *'boolean'|=> *'boolean'|NTDST_FieldType\\('boolean'/", '5.0.0', 'api/FieldTypes.php', '/^\\s*(\'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)\'\\s*=>\\s*\'(bool|date|float|html|int|relation|text|textarea)\',|\\[\'type\' *=> *\'(integer|number|boolean|string|array)\'.*\\], *\'[a-z_]+\', *(true|false),)\\s*$/'],
+            'retired type string' => ["/'type' *=> *'string'|=> *'string'|NTDST_FieldType\\('string'/", '5.0.0', 'api/FieldTypes.php', '/^\\s*(\'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)\'\\s*=>\\s*\'(bool|date|float|html|int|relation|text|textarea)\',|\\[\'type\' *=> *\'(integer|number|boolean|string|array)\'.*\\], *\'[a-z_]+\', *(true|false),)\\s*$/'],
+            'retired type longtext' => ["/'type' *=> *'longtext'|=> *'longtext'|NTDST_FieldType\\('longtext'/", '5.0.0', 'api/FieldTypes.php', '/^\\s*(\'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)\'\\s*=>\\s*\'(bool|date|float|html|int|relation|text|textarea)\',|\\[\'type\' *=> *\'(integer|number|boolean|string|array)\'.*\\], *\'[a-z_]+\', *(true|false),)\\s*$/'],
+            'retired type wysiwyg' => ["/'type' *=> *'wysiwyg'|=> *'wysiwyg'|NTDST_FieldType\\('wysiwyg'/", '5.0.0', 'api/FieldTypes.php', '/^\\s*(\'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)\'\\s*=>\\s*\'(bool|date|float|html|int|relation|text|textarea)\',|\\[\'type\' *=> *\'(integer|number|boolean|string|array)\'.*\\], *\'[a-z_]+\', *(true|false),)\\s*$/'],
+            'retired type content' => ["/'type' *=> *'content'|=> *'content'|NTDST_FieldType\\('content'/", '5.0.0', 'api/FieldTypes.php', '/^\\s*(\'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)\'\\s*=>\\s*\'(bool|date|float|html|int|relation|text|textarea)\',|\\[\'type\' *=> *\'(integer|number|boolean|string|array)\'.*\\], *\'[a-z_]+\', *(true|false),)\\s*$/'],
+            'retired type datetime' => ["/'type' *=> *'datetime'|=> *'datetime'|NTDST_FieldType\\('datetime'/", '5.0.0', 'api/FieldTypes.php', '/^\\s*(\'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)\'\\s*=>\\s*\'(bool|date|float|html|int|relation|text|textarea)\',|\\[\'type\' *=> *\'(integer|number|boolean|string|array)\'.*\\], *\'[a-z_]+\', *(true|false),)\\s*$/'],
+            'retired type person' => ["/'type' *=> *'person'|=> *'person'|NTDST_FieldType\\('person'/", '5.0.0', 'api/FieldTypes.php', '/^\\s*(\'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)\'\\s*=>\\s*\'(bool|date|float|html|int|relation|text|textarea)\',|\\[\'type\' *=> *\'(integer|number|boolean|string|array)\'.*\\], *\'[a-z_]+\', *(true|false),)\\s*$/'],
+            'retired type post_relation' => ["/'type' *=> *'post_relation'|=> *'post_relation'|NTDST_FieldType\\('post_relation'/", '5.0.0', 'api/FieldTypes.php', '/^\\s*(\'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)\'\\s*=>\\s*\'(bool|date|float|html|int|relation|text|textarea)\',|\\[\'type\' *=> *\'(integer|number|boolean|string|array)\'.*\\], *\'[a-z_]+\', *(true|false),)\\s*$/'],
             'restSchemaFor' => ['restSchemaFor', '5.0.0'],
         ];
     }
@@ -136,30 +165,64 @@ final class PackageBootIntegrityTest extends TestCase
     }
 
     /**
+     * The throwaway trees the exemption is judged on.
+     *
+     * Each case names a row of removedSymbolProvider() and the file that row's
+     * exemption has to survive: the retirement entry, the registry's own
+     * JSON-Schema line, and a `new NTDST_FieldType(<retired>)` line that would
+     * put the name back into the registry. Only the last one is a hit.
+     *
+     * @return array<string, array{0: string, 1: list<string>}>
+     */
+    public static function rowShapedExemptionProvider(): array
+    {
+        return [
+            'signed_int — pinned bare' => ['signed_int', [
+                "        'signed_int'    => 'int',",
+                "            new NTDST_FieldType('signed_int', \$cast, ['type' => 'integer'], 'number', true),",
+            ]],
+            'integer — pinned by declaration position' => ['retired type integer', [
+                "        'integer'       => 'int',",
+                "                ['type' => 'integer'], 'number', true,",
+                "            new NTDST_FieldType('integer', \$cast, ['type' => 'integer'], 'number', true),",
+            ]],
+        ];
+    }
+
+    /**
      * A retired name may be spelled by the ONE line that retires it, and by no
      * other line in that file.
      *
-     * The sweep is driven over a throwaway tree here, because the promise is
-     * about a file api/FieldTypes.php could grow, not about the file it is
-     * today: a whole-file exemption passes this and a line exemption does not.
+     * The sweep runs over a throwaway tree, because the promise is about a file
+     * api/FieldTypes.php could GROW, not about the file it is today: a
+     * whole-file exemption passes this and a row exemption does not.
+     *
+     * The symbol and the exemption are READ OFF the provider row rather than
+     * copied here. A hand-copy proves a regex this file wrote; the shipped row
+     * is what guard.sh and this suite actually run.
+     *
+     * @param list<string> $lines
+     *
+     * @dataProvider rowShapedExemptionProvider
      */
-    public function testTheRetirementLineIsExemptAndNothingElseInThatFileIs(): void
+    public function testTheRetirementLineIsExemptAndNothingElseInThatFileIs(string $row, array $lines): void
     {
+        $rows = self::removedSymbolProvider();
+
+        $this->assertArrayHasKey($row, $rows, "removedSymbolProvider() must pin '{$row}'.");
+
+        [$symbol, , $exceptPath, $exceptLine] = $rows[$row] + [2 => '', 3 => ''];
+
         $root = sys_get_temp_dir() . '/ntdst-sweep-' . getmypid() . '-' . uniqid();
         mkdir($root . '/api', 0777, true);
-        file_put_contents($root . '/api/FieldTypes.php', implode("\n", [
-            '<?php',
-            "        'signed_int'    => 'int',",
-            "            new NTDST_FieldType('signed_int', \$cast, ['type' => 'integer'], 'number', true),",
-            '',
-        ]));
+        file_put_contents($root . '/api/FieldTypes.php', implode("\n", ['<?php', ...$lines, '']));
 
         try {
-            $hits = $this->sweep($root, 'signed_int', 'api/FieldTypes.php', "/^\s*'signed_int'\s*=>\s*'int',\s*$/");
+            $hits = $this->sweep($root, $symbol, $exceptPath, $exceptLine);
 
-            $this->assertCount(1, $hits, "Exactly one line is a hit — the retirement row is exempt:\n" . implode("\n", $hits));
-            $this->assertStringContainsString('api/FieldTypes.php:3', $hits[0]);
-            $this->assertStringContainsString('new NTDST_FieldType', $hits[0], 'The vocabulary may not grow the retired name back.');
+            $this->assertCount(1, $hits, "Exactly one line is a hit — the retirement entry is exempt:\n" . implode("\n", $hits));
+            $this->assertStringContainsString('api/FieldTypes.php:' . (count($lines) + 1), $hits[0]);
+            $this->assertStringContainsString('new NTDST_FieldType', $hits[0], 'The registry may not grow the retired name back.');
         } finally {
             unlink($root . '/api/FieldTypes.php');
             rmdir($root . '/api');
@@ -170,6 +233,10 @@ final class PackageBootIntegrityTest extends TestCase
     /**
      * Every shipped line under $root that spells $symbol, except a line that
      * matches BOTH $exceptPath and $exceptLine.
+     *
+     * A $symbol beginning with `/` is a REGEX, so one row can pin the three
+     * shapes a field DECLARATION takes without three near-identical rows. A
+     * bare name stays a substring — a removed function is a substring question.
      *
      * @return list<string>
      */
@@ -214,7 +281,11 @@ final class PackageBootIntegrityTest extends TestCase
                 if ($exempt && preg_match($exceptLine, $line) === 1) {
                     continue;
                 }
-                if (str_contains($line, $symbol)) {
+                $spelled = str_starts_with($symbol, '/')
+                    ? preg_match($symbol, $line) === 1
+                    : str_contains($line, $symbol);
+
+                if ($spelled) {
                     $hits[] = str_replace($root . '/', '', $path) . ':' . ($n + 1) . ' → ' . trim($line);
                 }
             }
@@ -269,9 +340,10 @@ final class PackageBootIntegrityTest extends TestCase
      *
      * A consumer who only reads the migration table renames `integer` to `int`
      * and ships, believing nothing else moved. absint() is gone from that path,
-     * so a field that used to store 500 for -500 stores -500 — and the value
-     * saturates at PHP_INT_MAX instead of wrapping. Both halves are named, or
-     * the section is telling half a truth.
+     * so a field that used to store 500 for -500 stores -500. The overflow half
+     * is scoped: a numeric STRING saturates at PHP_INT_MAX, and an oversized
+     * float is PHP's undefined cast (FieldTypesTest pins both). All of it is
+     * named, or the section is telling half a truth.
      */
     public function testTheFieldTypesSectionStatesTheIntSignChange(): void
     {
@@ -287,24 +359,142 @@ final class PackageBootIntegrityTest extends TestCase
             $section,
             '`int` stores negatives now; a migration table alone does not say so.',
         );
-        $this->assertStringContainsString(
-            'PHP_INT_MAX',
+        $this->assertMatchesRegularExpression(
+            '/numeric string[^.]*saturates at `PHP_INT_MAX`/',
             $section,
-            'A value past the platform maximum saturates; say where it lands.',
+            'Saturation is the numeric-STRING promise; unscoped it reads as a promise for every value.',
+        );
+        $this->assertMatchesRegularExpression(
+            '/float[^.]*(undefined|clamp)/i',
+            $section,
+            'A float past the maximum is PHP\'s undefined cast — say so where the promise is made.',
+        );
+    }
+
+    /**
+     * I-2 — the section says which retired WORDS are not field types.
+     *
+     * `integer`, `string` and `boolean` are JSON-Schema words as well as
+     * retired type names. A consumer who greps for a retired name and renames
+     * every hit breaks the schema in a `register_post_meta()` description, in a
+     * `register_rest_route()` `args` block and in an ability schema — `int` and
+     * `bool` are not JSON-Schema words. On stride that shape is 94 of the 95
+     * remaining hits, so it is the section's rule, not a footnote.
+     */
+    public function testTheFieldTypesSectionSaysWhichRetiredNamesAreNotFieldTypes(): void
+    {
+        $section = $this->fieldTypesSection();
+
+        $this->assertMatchesRegularExpression(
+            '/rename only what the site DECLARES/i',
+            $section,
+            'The rename instruction has a scope, and the scope is the DECLARATION.',
+        );
+        $this->assertStringContainsString(
+            'register_post_meta',
+            $section,
+            'Name the function whose schema keeps WordPress\'s words.',
+        );
+        $this->assertStringContainsString(
+            '`args`',
+            $section,
+            'A `register_rest_route()` `args` schema is the second place a retired word is not a field type.',
+        );
+        $this->assertMatchesRegularExpression(
+            '/JSON.Schema/i',
+            $section,
+            'Say which vocabulary those words belong to instead.',
+        );
+    }
+
+    /**
+     * The section stops at the next heading, and only the retired-names table
+     * is counted.
+     *
+     * Both halves are read off a throwaway document, because the promise is
+     * about a README that GROWS — a later 5.0.0 subsection with a two-column
+     * table of backticked words must not be read as thirteen more migration
+     * rows, and a `####` sub-head inside the block must not close it early.
+     */
+    public function testTheFieldTypesSectionEndsAtTheNextHeadingAndCountsOnlyTheRetiredTable(): void
+    {
+        $readme = implode("\n", [
+            '### 5.0.0 — BREAKING',
+            '',
+            '**Field types — one registry, two names retired.**',
+            '',
+            '| Retired | Write instead |',
+            '|---|---|',
+            '| `integer` | `int` |',
+            '| `boolean` | `bool` |',
+            '',
+            '#### A sub-head does not close the block',
+            '',
+            'absint left that path.',
+            '',
+            '| Type | Control |',
+            '|---|---|',
+            '| `html` | `wysiwyg` |',
+            '',
+            '**What the registry stores differently.**',
+            '',
+            '| Type | What changed |',
+            '|---|---|',
+            '| `date` | `Y-m-d` |',
+            '',
+            '### 4.4.2',
+            '',
+        ]);
+
+        $section = $this->fieldTypesSection($readme);
+
+        $this->assertStringContainsString(
+            'absint left that path.',
+            $section,
+            'A `####` sub-head is inside the block, not the end of it.',
+        );
+        $this->assertStringNotContainsString(
+            'What the registry stores differently',
+            $section,
+            'The next `**` heading closes the block — that is the bound this docblock claims.',
+        );
+        $this->assertSame(
+            ['integer' => 'int', 'boolean' => 'bool'],
+            $this->fieldTypeRows($readme),
+            'Only the retired-names table is counted; a second two-column table in the block is not migration rows.',
         );
     }
 
     /**
      * README's "Field types" migration table, as retired => canonical.
      *
+     * ANCHORED on that table's own header row, and it stops at the first line
+     * that is not a row. The block holds other two-column tables — what the
+     * registry stores, what a read gives back — and a row of two backticked
+     * words in one of those is not an instruction to rename anything.
+     *
      * @return array<string, string>
      */
-    private function fieldTypeRows(): array
+    private function fieldTypeRows(string $readme = ''): array
     {
         $rows = [];
+        $inTable = false;
 
-        foreach (explode("\n", $this->fieldTypesSection()) as $line) {
-            if (preg_match('/^\| `([a-z_]+)` \| `([a-z_]+)` \|$/', trim($line), $m) === 1) {
+        foreach (explode("\n", $this->fieldTypesSection($readme)) as $line) {
+            $line = trim($line);
+
+            if ($line === '| Retired | Write instead |') {
+                $inTable = true;
+
+                continue;
+            }
+            if (!$inTable || str_starts_with($line, '|---')) {
+                continue;
+            }
+            if (!str_starts_with($line, '|')) {
+                break;
+            }
+            if (preg_match('/^\| `([a-z_]+)` \| `([a-z_]+)` \|$/', $line, $m) === 1) {
                 $rows[$m[1]] = $m[2];
             }
         }
@@ -315,13 +505,18 @@ final class PackageBootIntegrityTest extends TestCase
     /**
      * The "Field types" block of README's `### 5.0.0` section.
      *
-     * Anchored on the bold lead-in and closed by the next `###`/`**` heading,
-     * so a later 5.0.0 subsection that happens to spell a type name cannot be
-     * read as a migration row.
+     * Anchored on the bold lead-in and closed by the next `###` or `**`
+     * heading, so a later 5.0.0 subsection that happens to spell a type name
+     * cannot be read as part of the migration record. Sub-heads INSIDE the
+     * block are `####`, which is neither, so the block keeps its own structure.
+     *
+     * $readme is the document to read; the default is the shipped README. The
+     * bound is a promise about a file that grows, so it is provable on a
+     * throwaway document rather than only on today's text.
      */
-    private function fieldTypesSection(): string
+    private function fieldTypesSection(string $readme = ''): string
     {
-        $readme = file_get_contents(dirname(__DIR__, 2) . '/README.md');
+        $readme = $readme !== '' ? $readme : file_get_contents(dirname(__DIR__, 2) . '/README.md');
 
         $this->assertMatchesRegularExpression(
             '/^\*\*Field types — .*$/m',
@@ -329,10 +524,24 @@ final class PackageBootIntegrityTest extends TestCase
             'README\'s 5.0.0 section must lead its field-type block with `**Field types — …**`.',
         );
 
-        $from = strpos($readme, '**Field types — ');
-        $end = strpos($readme, "\n### ", $from);
+        $block = [];
 
-        return substr($readme, $from, $end === false ? null : $end - $from);
+        foreach (explode("\n", $readme) as $line) {
+            if ($block === []) {
+                if (str_starts_with($line, '**Field types — ')) {
+                    $block[] = $line;
+                }
+
+                continue;
+            }
+            if (str_starts_with($line, '### ') || str_starts_with($line, '**')) {
+                break;
+            }
+
+            $block[] = $line;
+        }
+
+        return implode("\n", $block);
     }
 
     public function testThePackageNeverClaimsToBeOlderThanWhatItShips(): void

@@ -110,8 +110,14 @@ v3. If anything of yours read the version, it was reading the wrong one.
 
 ### 5.0.0 — BREAKING
 
-`NTDST_Rest` is rewritten. The route option surface changed, so `^4.4` does not
-resolve to this.
+`NTDST_Rest` is rewritten, and `api/FieldTypes.php` is the one field-type
+registry. The route option surface changed, so `^4.4` does not resolve to this.
+Four things to check:
+
+- **Route options** — `'permission' => 'public'`, `cors`, `before_dispatch` and the `surface()` family all moved.
+- **Field types** — thirteen type names are retired, and a retired name is a fatal at `register()`.
+- **Silent breaks** — the `ntdst/metabox_saved/{model}` payload, the model constructor's arity, and `int`'s sign.
+- **Require order** — `api/FieldTypes.php` loads before `api/Data.php`.
 
 **CORS is site-wide, and declared apart from any route.**
 
@@ -133,9 +139,11 @@ to every allowed origin **unconditionally** — whatever you passed for
 able to fetch `admin-ajax.php?action=rest-nonce` with a logged-in visitor's
 cookies, read the answer cross-origin, and hold that visitor's `wp_rest` nonce.
 
-The scoping reads `wp_is_serving_rest_request()`, which WordPress added in 6.5. On an older WordPress the function is absent and the declaration widens nothing — CORS stays closed for every consumer. ntdst-core 5.0 targets WordPress 7.0; that floor is the reason.
 So the declaration is scoped to `wp_is_serving_rest_request()`; those three
-surfaces keep WordPress's defaults. A resolver is not consulted there either.
+surfaces keep WordPress's defaults, and a resolver is not consulted there
+either. WordPress added that function in 6.5. On an older WordPress it is absent
+and the declaration widens nothing — CORS stays closed for every consumer.
+ntdst-core 5.0 targets WordPress 7.0, and that floor is the reason.
 
 Credentials belong to the declaration that NAMED the origin, not to the site: a
 module that asks for them does not grant them to another module's origin, and a
@@ -244,13 +252,13 @@ author who wrote them when they worked keeps their endpoint.
 | `chargePreflight` | gone — `OPTIONS` is unmetered; bill it yourself with `charge()` if you need to |
 | `surface()` / `publicSurface()` / `opaqueSurface()` / `forgetSurface()` | `rest_get_server()->get_routes($ns)` — WordPress's own register |
 
-**Field types — one vocabulary, thirteen names retired.**
+**Field types — one registry, thirteen names retired.**
 
-A type name used to mean four things in four files: a sanitizer in the model, a
-REST leaf shape, a metabox control, and an unwritten rule about repeater rows.
-Four tables drift. `api/FieldTypes.php` is the one table now, and every reader
-asks it. Thirteen names went with the merge. A retired name is a fatal at
-`register()`, and the message names the one to write instead.
+`api/FieldTypes.php` is the registry. One entry per name says what cleans a
+value, what it publishes, what draws it, whether it may sit in a repeater row,
+and how it reads back. Every reader asks the registry. Thirteen names retired in
+the merge. A retired name is a fatal at `register()`, and the message names the
+one to write instead.
 
 | Retired | Write instead |
 |---|---|
@@ -268,58 +276,122 @@ asks it. Thirteen names went with the merge. A retired name is a fatal at
 | `person` | `relation` |
 | `post_relation` | `relation` |
 
-**Rename in the consumer BEFORE you bump core.** The rule is per PINNED core: run
-the renames against the version the site runs today, then bump. On 4.4.x every
-canonical name above already works, so the rename is a no-op release of its own.
-A site that bumps first fatals at `init`, on the first model that still declares a
-retired name. The daan wire proved that one.
+#### The breaks a rename does not carry
 
-**A site still on 3.x has one exception, and it is `signed_int`.** On 3.x, `int`
-is `absint()`, so a field that needs a sign must KEEP `signed_int` until the bump.
+Each one says nothing at runtime. A rename gets you past the fatal and leaves
+every one of these in place.
+
+- **`ntdst/metabox_saved/{model}` hands you the POSTED values.** On a Data-model
+  save the payload is what was submitted — unslashed and uncleaned. The model
+  cleaned what it STORED; the hook sees what was typed. A listener that writes
+  this payload anywhere is writing raw input. Read the cleaned value back with
+  `getMeta()`.
+- **The model constructor takes four positional arguments:**
+  `(string $post_type, array $schema = [], string $meta_prefix = '', array $scopes = [])`.
+  A subclass that calls `parent::__construct()` with the old five drops its
+  scopes, and nothing reports it.
+- **Require `api/FieldTypes.php` before `api/Data.php`** if you require core's
+  files by hand. `ntdst-core.php` already does. A model resolves every declared
+  name when it is CONSTRUCTED, so a missing registry is a fatal at construction
+  rather than at first use.
+- **`int` keeps its sign.** `absint()` left that path and `int` casts now, so
+  `-500` stores as `-500` where it used to store `500`. A discount in cents is a
+  negative int, which is why this changed. A numeric string past the platform
+  maximum saturates at `PHP_INT_MAX`. A float past it is PHP's undefined cast —
+  clamp before you store. A non-scalar stores `0`.
+- **A bare-string `html` declaration is cleaned on `updateMeta()` now.**
+  `'body' => 'html'` binds like any other declaration. That path used to store
+  the value raw.
+- **A `textarea` field that holds markup must be declared `html`.**
+  `sanitize_textarea_field()` keeps newlines, not tags — it strips every one.
+  Check any field you declared `textarea` because it was multi-line, and then
+  printed unescaped.
+- **`required`, `min`, `max` and `validate` run on `create()` and `update()`
+  only.** They are the MODEL's rules, not storage rules. A REST write goes
+  through `register_post_meta()` and never reaches them. `updateMeta()` and
+  `updateMetaBatch()` take the unregistered-key warning only. On a metabox save
+  of a Data model those rules see the RAW posted value: the metabox hands the
+  model what was typed, and the model cleans inside `update()`.
+- **Known, and not fixed in 5.0.0.** The metabox unslashes the posted values,
+  and `update_metadata()` unslashes again inside WordPress. A literal backslash
+  typed in the editor loses one level. This is 4.x behaviour too, and the fix is
+  its own cycle.
+
+#### Rename in the consumer before you bump core
+
+Do it in two releases:
+
+1. Rename every retired name against the core the site runs today. On 4.x and
+   3.x each canonical name above already resolves, so this release changes no
+   behaviour.
+2. Bump core to 5.0.0.
+
+If you bump first, the site fatals at `init` on the first model that still
+declares a retired name.
+
+Rename only what the site DECLARES. A retired name inside a
+`register_post_meta()`, a `register_rest_route()` `args` schema, or an ability
+schema is WordPress's own JSON-Schema vocabulary — `int` and `bool` are not
+JSON-Schema words, and renaming those breaks the schema. On stride that is 94 of
+the 95 remaining hits.
+
+A site still on 3.x has one exception, and it is `signed_int`. On 3.x, `int` is
+`absint()`, so a field that needs a sign must KEEP `signed_int` until the bump.
 5.0 refuses the name. Rename that field to `int` in the same commit that bumps
 core, never in the release before it.
 
-**Check every plugin, not only the theme and the mu-plugins.** A nested repo is
+Check every plugin, not only the theme and the mu-plugins. A nested repo is
 still a consumer, and a rename commit in the parent repo does not reach it.
-`stride/web/app/plugins/netdust-lti` is its own git repo: it declares retired
-names in `src/Shared/LTIDataService.php`, and it pins `'boolean'` in its tests.
-Rename it before stride's core bump.
+`stride/web/app/plugins/netdust-lti` is its own git repo: it declares `boolean`
+at `src/Shared/LTIDataService.php:284` and `integer` at `:433`. Rename both
+before stride's core bump.
 
-**`int` keeps its sign.** `absint()` left that path; `int` casts now. `-500`
-stores as `-500` where it used to store `500`. A value past the platform maximum
-saturates at `PHP_INT_MAX` rather than wrapping, and a non-scalar stores `0`. A
-discount in cents is a negative int, which is why this changed. If a field of
-yours relied on the old absolute value, clamp it in your own code.
+**What the registry stores differently.**
 
-**What else the registry stores differently.**
+| Type | What the entry does now |
+|---|---|
+| `bool` | `wp_validate_boolean()` on a scalar, and nothing else — the old non-WordPress fallback was dead code. WordPress's word makes only the exact string `"false"` false, so `'no'` and `'off'` store as `true`. A non-scalar is `false`. |
+| `float` | Refuses `INF` and `NAN`. Neither is JSON-encodable, and one overflowing post emptied a whole REST response. |
+| `date` | Stores `Y-m-d`, read and written on one clock. WordPress forces the process timezone to UTC, so `strtotime()` and `date()` agree. A year outside `0000`–`9999` is refused: `date()` writes five digits there, and the next pass reads them as a different date. Junk stores as `''`, never as text. |
+| `text`, `textarea`, `select` | Keep NUL bytes, because `sanitize_text_field()` keeps them. Core adds no rule WordPress does not have. |
+| `url` | Keeps a protocol-relative URL (`//cdn.example.com/x.png`). That is `esc_url_raw()`'s answer. |
+| `relation`, `gallery` | Drop zeros and re-index. A gap-keyed list serializes as a JSON object, and consumers read it as one. A `relation` scalar that is not an id stores `[]`, never `[0]`. |
+| `array` | Accepts the JSON string the metabox textarea posts, as well as an array. |
+| every type | The sanitizer is return-typed. A `ntdst/{model}/fields` filter that puts a callback returning `null` into one raises a `TypeError` instead of storing junk. |
 
-- `bool` is `wp_validate_boolean()` and nothing else — the old non-WordPress
-  fallback was dead code. WordPress's word means only the exact string `"false"`
-  is false, so `'no'` and `'off'` store as `true`.
-- `float` refuses `INF` and `NAN`. Neither is JSON-encodable, and one overflowing
-  post emptied a whole REST response.
-- `date` stores `Y-m-d`, read and written on one clock. WordPress forces the
-  process timezone to UTC, so `strtotime()` and `date()` agree. A year outside
-  `0000`–`9999` is refused: `date()` writes five digits there, and the next pass
-  re-parses them as a different date. Junk stores as `''`, never as text.
-- `text`, `textarea` and `select` keep NUL bytes, because
-  `sanitize_text_field()` keeps them. Core adds no rule WordPress does not have.
-- `url` keeps a protocol-relative URL (`//cdn.example.com/x.png`). That is
-  `esc_url_raw()`'s answer.
-- `relation` and `gallery` drop zeros and re-index. A gap-keyed list serializes as
-  a JSON object, and consumers read it as one. A `relation` scalar that is not an
-  id stores `[]`, never `[0]`.
-- `array` accepts the JSON string the metabox textarea posts, as well as an array.
-- `array` is not published to REST. Neither is `json`, nor a repeater that
-  declares no `sub_fields`. Each warns once per model.
-- Every sanitizer is return-typed. A `ntdst/{model}/fields` filter that puts a
-  callback returning `null` into one raises a `TypeError` instead of storing junk.
+**What a read gives back.** A read is a cast or a decode. It is never a second
+sanitization and never a lookup. The write side already ran, and a value stored
+around this model — by an importer, by WP-CLI, by the site's previous plugin —
+is not this model's to rewrite on the way out.
 
-**A declared `sanitizer` composes; it never replaces.** The registry always runs,
-and it always sees the raw input. Your callable runs on the registry's output, and
-its answer is what gets stored. So you cannot switch `wp_kses_post()` off on an
-`html` field and post markup through REST. Core claims nothing beyond that: what
-your callable then does with the cleaned value is your own code. A sanitizer that
+| Type | On read |
+|---|---|
+| `int`, `float`, `bool` | Cast; the sanitizer IS the cast a read owes. `bool` reads WordPress's word, so a foreign `'no'` or `'off'` reads `true`. Find those before you upgrade: `SELECT post_id, meta_key FROM wp_postmeta WHERE meta_value IN ('no','off')`. |
+| `json`, `array` | Come back as stored — decode only. Escape at output. |
+| `image`, `file` | Return the stored id, with no lookup. Whether the attachment still exists is the WRITE side's question: an id that resolves to no attachment stores as `0`. An attachment deleted after the write is not noticed on read. |
+| `relation`, `gallery` | Read through the same id rule that wrote the list, so a read cannot disagree with a write about what an id is. |
+| `repeater` | Reads rows and nothing else. A cell comes back as stored. No cell is re-sanitized, and nothing is unserialized. A row whose only content is `'0'` is kept, because `'0'` is an answer. |
+| `text` | A legacy array stored under a `text` key reads `''`. The DECLARED type is what a read owes, and `text` owes a string. |
+
+**What reaches `/wp/v2`.** Two facts a 4.x consumer may have assumed.
+
+`format` on `email` and `url` never reaches the REST schema. A scalar registers
+`show_in_rest => true`, and WordPress derives the schema from `type` alone. The
+`format` in the entry is advisory. The sanitizer enforces the shape — a schema
+`format` would validate stored legacy values and read them back as `null`.
+
+`array` is not published, and never was, so dropping it loses no working data.
+Its sanitizer keeps a keyed map, `rest_is_array()` refuses one, and
+`WP_REST_Meta_Fields` nulls the value. `json` is not published either, nor is a
+repeater that declares no `sub_fields`. Each warns once per model.
+
+**A declared `sanitizer` composes with the registry's; it does not replace it.**
+The registry runs first, on the raw input. Your callable then runs on the
+registry's output, and its return value is what gets stored.
+
+One guarantee follows: an `html` field is always `wp_kses_post()`'d before your
+callable sees it, on a REST write too. Core gives no further guarantee — your
+callable may return anything, and what it returns is stored. A callable that
 throws fails the request.
 
 An override must be IDEMPOTENT, like the entry it composes on.
@@ -328,70 +400,19 @@ that appends or re-encodes grows the stored value each time.
 
 A repeater sub-field may not declare a `sanitizer` at all. It is refused at
 `register()`, because nothing ever ran it: the row walk cleans each cell by its
-DECLARED TYPE and never looks for a callable. A security declaration that quietly
-does nothing is worse than none.
+DECLARED TYPE and never looks for a callable. A security declaration that
+quietly does nothing is worse than none.
 
-**Which types cannot sit in a repeater row.** `html`, `relation`, `gallery` and
-`repeater`. Each is refused at `register()`, naming the field and the sub-field.
-`repeater` is on that list, so a NESTED repeater is refused too — a table row
-cannot draw one, and the old code accepted the declaration and then white-screened
-the edit screen it had just booted cleanly for.
+**Four types cannot sit in a repeater row: `html`, `relation`, `gallery` and
+`repeater`.** A `sub_fields` declaration that names one is refused at
+`register()`. The message names the field and the sub-field.
 
-**What a read gives back.** A read is a cast or a decode, never a second
-sanitization and never a lookup. The write side already ran, and a value stored
-around this model — by an importer, by WP-CLI, by the site's previous plugin — is
-not this model's to rewrite on the way out.
+`repeater` is on the list, so a nested repeater is refused too. A table row
+cannot draw a repeater control. Before 5.0 the declaration registered, and the
+edit screen then white-screened on first render.
 
-- `int`, `float` and `bool` cast; their sanitizer IS the cast a read owes. `bool`
-  reads WordPress's word, so a foreign `'no'` or `'off'` reads `true`. If a site
-  of yours wrote those strings, find them before you upgrade:
-  `SELECT post_id, meta_key FROM wp_postmeta WHERE meta_value IN ('no','off')`.
-- `json` and `array` come back as stored — decode only. Escape at output.
-- `image` and `file` return the stored id, with no lookup. Whether the attachment
-  still exists is the WRITE side's question: an id that resolves to no attachment
-  stores as `0`. An attachment deleted after the write is not noticed on read.
-- `relation` and `gallery` read through the same id rule that wrote the list, so a
-  read cannot disagree with a write about what an id is.
-- `repeater` reads rows and nothing else. A cell comes back as stored; no cell is
-  re-sanitized, and nothing is unserialized.
-- A legacy array stored under a `text` key reads `''`. The DECLARED type is what a
-  read owes, and `text` owes a string.
-- A repeater row whose only content is `'0'` is kept. `'0'` is an answer.
-
-**What reaches `/wp/v2`.** Two facts a 4.x consumer may have assumed:
-
-- `format` on `email` and `url` never reaches the REST schema. A scalar registers
-  `show_in_rest => true`, and WordPress derives the schema from `type` alone. The
-  `format` in the table is advisory. The sanitizer enforces the shape — a schema
-  `format` would validate stored legacy values and read them back as `null`.
-- `array` was never actually published, so dropping it loses no working data. Its
-  sanitizer keeps a keyed map, `rest_is_array()` fails on one
-  (`rest-api.php:1593`), and `class-wp-rest-meta-fields.php:567` nulls the value.
-
-**Validation runs on `create()` and `update()` only.** `required`, `min`, `max`
-and `validate` are the MODEL's rules, not storage rules. A REST write goes through
-`register_post_meta()` and never reaches them; `updateMeta()` and
-`updateMetaBatch()` take the unregistered-key warning only. On a metabox save of a
-Data model those rules see the RAW posted value, because the metabox hands the
-model what was typed and the model cleans inside `update()`.
-
-**`ntdst/metabox_saved/{model}` hands you the POSTED values.** BREAKING. On a
-Data-model save the payload is what was submitted — unslashed and uncleaned. The
-model cleaned what it STORED; the hook sees what was typed. A listener that writes
-this payload anywhere is writing raw input. Read the cleaned value back with
-`getMeta()`.
-
-**A bare-string `html` declaration is cleaned on `updateMeta()` now.**
-`'body' => 'html'` binds like any other declaration. That path used to store the
-value raw.
-
-**A `textarea` field that holds markup must be declared `html`.**
-`sanitize_textarea_field()` keeps newlines, not tags — it strips every one. Check
-any field you declared `textarea` because it was multi-line and then printed
-unescaped. Stride's did.
-
-**Bridges read the vocabulary through `NTDST_FieldTypes::get()`.** It is the
-public read, and the only one.
+**Bridges read the registry through `NTDST_FieldTypes::get()`.** It is the public
+read, and the only one.
 
 ```php
 $entry = NTDST_FieldTypes::get('html');
@@ -406,28 +427,13 @@ NTDST_FieldTypes::rowKey($name);        // the key a repeater cell is stored und
 ```
 
 `get()` throws `InvalidArgumentException` for anything outside the 17, and names
-the canonical one when the argument is retired. The entry is readonly, and there
-is no filter and no registration method: a pluggable vocabulary is one a plugin
-can widen with a type whose sanitizer is a no-op.
+the canonical one when the argument is retired. The entry is readonly. There is
+no filter and no registration method: a pluggable registry is one a plugin can
+widen with a type whose sanitizer is a no-op.
 
 **`callback` is a render directive, not a type.** A field declared
-`'type' => 'callback'` draws itself, and your own code owns what it stores. It has
-no entry in the table, and both the render side and the save side skip it.
-
-**If you require core's files by hand, require `api/FieldTypes.php` before
-`api/Data.php`.** `ntdst-core.php` already does. A model resolves every declared
-type name when it is CONSTRUCTED, so a missing vocabulary is a fatal at
-construction rather than at first use.
-
-**The model constructor is
-`(string $post_type, array $schema = [], string $meta_prefix = '', array $scopes = [])`.**
-Positional. A consumer that subclasses `NTDST_Data_Model` and calls
-`parent::__construct()` passes them in that order.
-
-**Known, and not fixed in 5.0.0.** The metabox unslashes the posted values, and
-`update_metadata()` unslashes again inside WordPress, so a literal backslash typed
-in the editor loses one level. This is 4.x behaviour too. The fix is its own
-cycle.
+`'type' => 'callback'` draws itself, and your own code owns what it stores. It
+has no entry, and both the render side and the save side step past it.
 
 ### 4.4.2
 

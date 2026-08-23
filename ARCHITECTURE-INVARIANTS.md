@@ -45,7 +45,7 @@ field, and `registerRestMeta()` needs no per-field `try/catch`.
 `api/Data.php`; a route handler returning a row or `getMeta()` bag without
 projecting through `restFields()`; any `public_fields` / `public_shape` /
 `PUBLIC_SHAPE`-style allow-list; a `private`, `hidden` or `exposed` key on a field.
-**Mechanical check:** `grep -rn "register_post_meta\|register_meta(" --include=*.php . | grep -vE "^(\./)?api/Data\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → empty. (The trailing filter drops COMMENT lines: prose may name `register_post_meta()` — `api/FieldTypes.php` says the sanitizer must be idempotent because that function runs it again — and a docblock is not a second caller.) (The `-E` form and the optional `./` are load-bearing: GNU grep prints `./api/Data.php` but ugrep prints `api/Data.php`, so an anchored `^./` exclusion silently matched nothing and the check passed for the wrong reason.) Second: `grep -rn "show_in_rest" --include=*.php api/Data.php` → every hit is `declaresRest()` itself, a docblock, or an ARG being written to `register_post_meta()` / `register_taxonomy()`; no second READER of the declaration. `grep -rn "public_fields\|public_shape\|publicRow" --include=*.php . | grep -vE "(^|/)vendor/|(^|/)tests/"` → empty. (`tests/` is excluded for a reason, not for convenience: `tests/Unit/DataDropsExposureTest.php` is the test that ENFORCES this ban, and it has to name the banned vocabulary in order to forbid it. Without the exclusion the check reports its own enforcement as the violation.) The `show_in_rest` check has one hit that is NOT about a field: `NTDST_Data_Manager::register()` reads `$args['show_in_rest']` of the POST TYPE, to warn when a declaration can reach no route. That is a different key on a different thing, not a second reader.
+**Mechanical check:** `grep -rn "register_post_meta\|register_meta(" --include=*.php . | grep -vE "^(\./)?api/Data\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → empty. (The trailing filter drops COMMENT lines: prose may name `register_post_meta()` — `api/FieldTypes.php` says the sanitizer must be idempotent because that function runs it again — and a docblock is not a second caller.) (The `-E` form and the optional `./` are load-bearing: GNU grep prints `./api/Data.php` but ugrep prints `api/Data.php`, so an anchored `^./` exclusion silently matched nothing and the check passed for the wrong reason.) Second: `grep -rn "show_in_rest" --include=*.php api/Data.php` → every hit is `declaresRest()` itself (`:122`, the ONE reader), a docblock (`:128`, `:1823`), a WARNING STRING that names the key it is telling the author about (`:229`, `:272`, `:1846`, `:1966` — four literals, none of them a test), or an ARG being written to `register_post_meta()` / `register_taxonomy()` (`:206`, `:2021`). No second READER of the declaration. `grep -rn "public_fields\|public_shape\|publicRow" --include=*.php . | grep -vE "(^|/)vendor/|(^|/)tests/"` → empty. (`tests/` is excluded for a reason, not for convenience: `tests/Unit/DataDropsExposureTest.php` is the test that ENFORCES this ban, and it has to name the banned vocabulary in order to forbid it. Without the exclusion the check reports its own enforcement as the violation.) The `show_in_rest` check has one hit that is NOT about a field: `NTDST_Data_Manager::register()` reads `$args['show_in_rest']` of the POST TYPE, to warn when a declaration can reach no route. That is a different key on a different thing, not a second reader.
 **Deliberate exceptions:**
 - A model with no `label` registers no post type and therefore no meta, and warns once per model.
 - A post type that is not itself in REST (`show_in_rest` absent or false) still registers its meta — WordPress emits none of it — and warns once per model.
@@ -64,9 +64,14 @@ caller of `register_rest_route()` in the package.
 **Bypass smell:** `register_rest_route(` anywhere else; `add_action('wp_ajax_`;
 an `ntdst/api_data/` or `ntdst/api/` dispatch filter; a route whose permission
 is decided somewhere other than its registration.
-**Mechanical check:** `grep -rn "register_rest_route(\|wp_ajax_\|ntdst/api_data\|ntdst_actions" --include=*.php --include=*.js . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/"` → empty.
-**Status:** established by phase 3 (today `api/Actions.php` and
-`admin/RelationField.php:47` violate it).
+**Mechanical check:** `grep -rn "register_rest_route(\|wp_ajax_\|ntdst/api_data\|ntdst_actions" --include=*.php --include=*.js . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → the hits Status names, and nothing else. (The comment filter is INV-1's, for INV-1's reason: `core/Theme.php`, `core/Pages.php` and `api/Actions.php` all NAME the v2 dispatcher in docblocks that explain what replaced it, and a docblock is not a second door.)
+**Status:** established by phase 3. Today the live hits are all of them, and
+there are seven: `ntdst-core.php:50` (`ntdst_actions()` booted at load),
+`admin/RelationField.php:47` (`ntdst_actions()->register()`), and
+`api/Actions.php:63`, `:132`, `:147`, `:716`, `:717` — the `ntdst/api_data/`
+filter prefix, the two `register_rest_route()` calls this invariant forbids
+outside `api/Rest.php`, and the `ntdst_actions()` accessor. All leave with
+`Actions.php` in phase 3.
 
 ## INV-3 — Anonymous reach is named; internal is the default; a write names its capability
 
@@ -94,7 +99,7 @@ marks the ONE pending declaration it was chained onto, and nothing else.
 `true` unconditionally; `->public()` on a write; a capability check inside a
 handler body instead of on the route; a second permission registry; a
 `public_actions`-style list of names that may go without a gate.
-**Mechanical check:** `grep -rn "__return_true\|=> 'public'\|->public()\|public_actions" --include=*.php . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/"` → every route hit is a `GET`. Today the hits are: `services/Mailer.php:574`, a DOCBLOCK IDIOM (`add_filter('ntdst_wrap_all_emails', '__return_true')` — a filter switch, not a route permission), and `api/Actions.php`'s `$public_actions` + its `ntdst/api/public_actions` filter, which is the second permission registry this invariant forbids and which leaves with `Actions.php` in phase 3. A site asserts its anonymous surface with `rest_get_server()->get_routes($ns)` filtered on `permission_callback === '__return_true'` — WordPress's registry, not ours.
+**Mechanical check:** `grep -rn "__return_true\|=> 'public'\|->public()\|public_actions" --include=*.php . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → every route hit is a `GET`. The comment filter drops `services/Mailer.php:574`, a DOCBLOCK IDIOM (`add_filter('ntdst_wrap_all_emails', '__return_true')` — a filter switch, not a route permission), and the docblocks in `core/Theme.php` and `admin/RelationField.php` that name the filter in prose. What is left is six lines, all in `api/Actions.php`: `:104` (the `$public_actions` property), `:186`–`:187` and `:246`–`:247` (the filter read and the membership test, once per dispatch path), and `:673` (the registration helper that adds to it). That IS the second permission registry this invariant forbids, and it leaves with `Actions.php` in phase 3. A site asserts its anonymous surface with `rest_get_server()->get_routes($ns)` filtered on `permission_callback === '__return_true'` — WordPress's registry, not ours.
 **Status:** established by Cluster 2 (T04–T06); code holds at `d91e117` for
 routes through `ntdst_rest()`; `Actions.php:132,147` + `$public_actions` register
 their own routes outside it until phase 3; flips to holds-today at FR-16.
@@ -113,7 +118,7 @@ that is the invariant.
 in `api/`, `core/` or `admin/`; a route that mints or returns a nonce; a `fetch()`
 to `/wp-json/` in core's own JS that is not `wp.apiFetch`; an `Origin`/`Referer`
 check standing in for the nonce.
-**Mechanical check:** `grep -rn "wp_create_nonce\|wp_verify_nonce\|check_ajax_referer\|get_nonce\|HTTP_ORIGIN\|HTTP_REFERER" --include=*.php --include=*.js api core admin assets` → empty. `grep -rn "fetch(" assets/js` → only `wp.apiFetch`.
+**Mechanical check:** `grep -rn "wp_create_nonce\|wp_verify_nonce\|check_ajax_referer\|get_nonce\|HTTP_ORIGIN\|HTTP_REFERER" --include=*.php --include=*.js api core admin assets` → the hits Status names, and nothing else: `api/Actions.php:132`, `:134`, `:453`, `:454`, `:582`, `:592`, `:606` (core's own nonce mint and its `Origin`/`Referer` pair), `assets/js/ntdst-api.js:37`, and `admin/MetaboxGenerator.php:1866`. `grep -rn "fetch(" assets/js` → four raw `fetch()` calls in `ntdst-api.js`, none of them `wp.apiFetch`. Both leave with `Actions.php` in phase 3, except the metabox pair below.
 **Status:** established by phase 3 (today `api/Actions.php` and `assets/js/ntdst-api.js` violate it).
 One hit is NOT a violation and never was: `admin/MetaboxGenerator.php:1866`'s
 `wp_verify_nonce(wp_unslash($_POST[$nonce_name]), …)`, paired with the
@@ -161,7 +166,7 @@ phase 4); `NTDST_Pages::path()` → `add_rewrite_rule()` + the `query_vars` filt
 `redirect_canonical` filter; `exit` inside a template filter callback; a second
 way to pass data to a template (`extract()` over a caller array); a second
 `addPath`.
-**Mechanical check:** `grep -rn "is_404 = false\|redirect_canonical\|locate_template(\|extract(" --include=*.php api core` → only `NTDST_Template_Loader`, and `extract(` nowhere. `grep -rn "function addPath\|function redirect" --include=*.php api core` → one each.
+**Mechanical check:** `grep -rn "is_404 = false\|redirect_canonical\|locate_template(\|extract(" --include=*.php api core` → the hits Status names: `core/Pages.php:53` (a `redirect_canonical` filter) and `:380`, and `api/Response.php:273`, `:290`, `:311`, `:667` (two `extract()` calls over a caller array, a second `is_404 = false`, and a `locate_template()` outside the loader). `grep -rn "function addPath\|function redirect" --include=*.php api core` → two each, not one: `api/Response.php:126` + `:579` and `api/Response.php:235` + `core/Pages.php:458`. Phase 4 takes both counts to one.
 **Status:** established by phase 4 (today `core/Pages.php` and `api/Response.php` violate every clause).
 
 ## INV-7 — Throttling is one primitive, charged from the permission callback
@@ -201,27 +206,53 @@ literals, a metabox `sanitize_field()`); a default type spelled by hand; a
 per-caller copy of the row-key rule.
 **Mechanical check:** TWO commands, both run from the package root.
 
+`N` is the name list, and it is REGENERATED from the registry rather than typed:
+
+```sh
+php -r 'define("ABSPATH", __DIR__); require "api/FieldTypes.php";
+  $n = NTDST_FieldTypes::names();
+  $r = array_keys((new ReflectionClass("NTDST_FieldTypes"))->getConstant("RETIRED"));
+  $c = array_map(static fn (string $t): string => NTDST_FieldTypes::get($t)->control, $n);
+  $all = array_unique(array_merge($n, $r, $c, ["callback"])); sort($all);
+  echo implode("|", $all), "\n";'
+```
+
+That prints the list below. A type added to the registry changes it, and a list
+typed by hand would not — which is how a check goes quiet without anyone
+deciding it should.
+
 ```sh
 N='array|bool|boolean|callback|checkbox|content|date|datetime|decimal|double|email|file|float|gallery|html|image|int|integer|json|longtext|media|number|person|post_relation|relation|repeater|select|signed_int|string|text|textarea|url|wysiwyg'
 
-# (A) a switch/match head, a case, a type-name pair, a declaration, a comparison
-grep -rnE "(switch|\bmatch) *\(|case '($N)'|'($N)' *, *'|=> *'($N)'|[!=]== *'($N)'"'|[!=]== *"('"$N"')"' \
-    --include=*.php api core admin services support \
-  | grep -vE "^(\./)?api/FieldTypes\.php|(^|/)vendor/|(^|/)tests/" \
+# (A) a switch/match head, a case, a type-name pair, a MAP KEY, a declaration, a comparison
+grep -rnE "(switch|\bmatch) *\(|case '($N)'|'($N)' *, *'|'($N)' *=>|=> *'($N)'|[!=]== *'($N)'"'|[!=]== *"('"$N"')"' \
+    --include=*.php . \
+  | grep -vE "^(\./)?api/FieldTypes\.php|(^|/)vendor/|(^|/)tests/|(^|/)specs/" \
   | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"
 
 # (B) a second TABLE of them
 grep -rnE '(const|static +\??array +\$)[ A-Za-z_]*[Tt][Yy][Pp][Ee][Ss]?[A-Za-z_]* *=' \
-    --include=*.php api core admin services support \
-  | grep -vE "^(\./)?api/FieldTypes\.php|(^|/)vendor/|(^|/)tests/"
+    --include=*.php . \
+  | grep -vE "^(\./)?api/FieldTypes\.php|(^|/)vendor/|(^|/)tests/|(^|/)specs/"
 ```
 
 Every part of (A)'s form is load-bearing:
 
+- The dir list is `.` with INV-1's exclusions, not a hand-kept list of five
+  directories. A hand-kept list answers for the directories somebody remembered;
+  `ntdst-core.php` and any file added at the root were never in it. The
+  `(^|/)specs/` exclusion joins vendor and tests for the same reason those two
+  are there: a spec NAMES the retired vocabulary in order to retire it.
 - The comparison alternative is SUBJECT-AGNOSTIC. The first version pinned it to
   `$…type…` and missed `declaredType() === 'repeater'` and
   `($config['type'] ?? '') === 'image'` — the two shapes a real second vocabulary
   is written in.
+- The MAP-KEY alternative `'($N)' *=>` is what surfaces a second table written as
+  a literal map. Without it, `$sanitizers = ['int' => 'intval', 'bool' =>
+  'boolval']` returns NO hit at all — the exact bypass smell this invariant
+  names, invisible to the check that names it. It is the noisiest alternative
+  (29 of the 59 hits), because a type name is also an ordinary array key; every
+  one of those is grouped and named below.
 - `(switch|\bmatch) *\(` is restricted ONLY by the file exclusions, so a
   `match ($entry->control)` head surfaces and has to be justified. The `\b` keeps
   `preg_match(` out; without it every regex call in the package is a hit.
@@ -234,57 +265,18 @@ Every part of (A)'s form is load-bearing:
 - The last filter drops COMMENT lines, the way INV-1's does. A docblock reading
   `@param string $field Field to match (term_id, …)` is prose, not a switch.
 
-Run at `24a214c`, (A) returns **30 lines** and (B) returns **1**, and every one of
-them is named below. Anything else is a bypass.
+(A) returns **59 lines** and (B) returns **1**. Every one of them is named in
+`## Deliberate exceptions` below, grouped by WHAT it is rather than by where it
+sits. Anything else is a bypass.
 
-**Deliberate exceptions:**
-- **A `match`/`switch` head over something that is not a type name** —
-  `api/Rest.php:467` (`match (true)`), `api/Rest.php:678` (`match ($permission)`),
-  `core/LogLevel.php:17` (`match ($this)`, an enum), `api/Data.php:481`
-  (`match ($key)` over WordPress POST COLUMN names, not meta field types).
-- **`admin/MetaboxGenerator.php:940` — `match ($control)`.** The one control
-  switch, and it reads `$control` OFF the registry entry. It is the rendering half
-  of the same table, not a copy of it: a new type adds a row here and nowhere else.
-- **The `callback` render directive** — `admin/MetaboxGenerator.php:801`, `:1906`,
-  `:1945`. `callback` has no entry on purpose: the field draws itself and the
-  consumer's code owns what it stores. Both the render side and the save side must
-  step past it before they ask the registry anything, or a posted `callback` field
-  throws and kills the whole edit screen.
-- **The `media` arm** — `admin/MetaboxGenerator.php:1679` reads `image` against
-  `file` to choose the picker's library, and the picker JS at `:1762`, `:1765` and
-  `:1777` compares its own `mediaType` string. One control serves two types, and
-  which of the two is a fact only the declaration holds.
-- **CONTROL-name comparisons** — `admin/MetaboxGenerator.php:835` (`checkbox` and
-  `media` carry no native `required`), `:852` (`select` and `json` take no readonly
-  attribute), `:856` (`decimal` displays differently), `:1395` (a row cell whose
-  control is `media`), `:1955` (`relation` / `gallery` / `repeater` clear when they
-  are absent from the POST). Each asks about the CONTROL the registry entry names,
-  never about the declared type name. That is the direction this invariant wants.
-- **`admin/RelationField.php:158`, `:261`** — `=== 'relation'` selectors that pick
-  the relation fields out of a declared `fields` array. Structural, and INV-2 moves
-  this file in phase 3.
-- **`api/Data.php:285`** — `=== 'repeater'`, the one structural test: a repeater
-  publishes an OBJECT schema built from `sub_fields`, not a leaf. The table has no
-  "is structural" column, and one test is cheaper than one more column.
-- **JSON-Schema type words** — `api/Data.php:206`
-  (`in_array($type, ['array', 'object'], true)`) and `:329` (`'type' => 'array'`).
-  `array` and `object` there are JSON-SCHEMA types being written INTO a schema.
-  They are the same two words as two field types and an entirely different
-  vocabulary. This is the false-positive SHAPE to recognise, not a second table.
-- **WordPress's own vocabularies** — `api/Data.php:1222` and `:2208`, and
-  `services/Logger.php:416`. `date` there is a `WP_Query` `orderby` value and a
-  column name.
-- **`services/Logger.php:93`–`:97`** — the Logger model DECLARING its own fields by
-  canonical name. That is the vocabulary being USED, which is the thing this
-  invariant exists to make possible.
-- **(B)'s one hit — `api/Response.php:32`, `$mimeTypes`.** MIME types, not field
-  types: the `[Tt][Yy][Pp][Ee][Ss]?` fragment catches the word. It is an INV-5 item
-  (WordPress keeps that table as `wp_get_mime_types()`) and INV-5 already lists it
-  as outstanding for phase 4.
+**Deliberate exceptions:** in the file-wide `## Deliberate exceptions` section,
+under "INV-8 — every hit the field-type check returns". They live there once.
+A second copy here is the same defect this invariant is about: two lists of the
+same thing, free to disagree.
 
-**Status:** established by field-types Clusters A–C; code holds at `ba283d3` (the
-last commit that changed code). The check was run at `24a214c`: (A) 30 hits, all
-named; (B) 1 hit, named.
+**Status:** established by field-types Clusters A–C. (A) 59 hits / (B) 1, all
+named; code holds at `ba283d3` (the last commit that changed code), and the
+check was last run at the Cluster D gate-fix commit.
 
 ---
 
@@ -331,10 +323,87 @@ Things core does that WordPress also does, kept on purpose. Each names why.
   callback cannot say two things. The recursion is ours; the two cleaning functions
   are WordPress's.
 - **`=== 'repeater'` and `=== 'relation'` outside `api/FieldTypes.php`.**
-  `api/Data.php:285` asks whether a field publishes an OBJECT schema rather than a
-  leaf; `admin/RelationField.php:158` and `:261` pick the relation fields out of a
-  declared `fields` array. Both are STRUCTURAL questions about one type, not a
-  second vocabulary — the table has no "is structural" column, and adding one to
-  answer three lines is the more expensive copy. INV-8 names them and the check
-  surfaces them on every run.
+  `api/Data.php` asks whether a field publishes an OBJECT schema rather than a
+  leaf; `admin/RelationField.php` picks the relation fields out of a declared
+  `fields` array. Both are STRUCTURAL questions about one type, not a second
+  vocabulary — the registry has no "is structural" column, and adding one to
+  answer three lines is the more expensive copy. INV-8's group below names them,
+  and the check surfaces them on every run.
 - **`NTDST_RateLimiter`, `NTDST_ClientIp`.** WordPress has neither.
+- **The 13 retired type names are guarded by DECLARATION POSITION, not as bare
+  words.** `signed_int` is a distinctive token and is pinned bare
+  (`bin/guard.sh`, `removedSymbolProvider()`). The other 12 are ordinary
+  JSON-Schema and English words — a bare sweep hits 617 shipped lines, and
+  `api/FieldTypes.php` legitimately writes `['type' => 'integer']` as a publish
+  column. They are pinned as `'type' => '<retired>'`, a bare shorthand value,
+  and `new NTDST_FieldType('<retired>'`, with one line-anchored exemption for
+  the RETIRED rows and the vocabulary rows. The exemption anchors to the ROW,
+  never to the file: a real `new NTDST_FieldType('integer', …)` still fires
+  inside the file that retires the name.
+
+---
+
+### INV-8 — every hit the field-type check returns
+
+(A) returns 59 lines and (B) returns 1. Each group below says WHAT the hits are,
+not which line they sit on: a line number is stale after the next edit, and a
+reader matching 59 greps against stale numbers stops reading. Where a group has
+a test that holds it, the test is named — that is its mechanical home.
+
+- **A `match`/`switch` head over something that is not a type name** — 4 hits.
+  `api/Rest.php`'s `match (true)` refusal cause and `match ($permission)` posture
+  resolver, `core/LogLevel.php`'s `match ($this)` over an enum, and
+  `api/Data.php`'s `match ($key)` over WordPress POST COLUMN names.
+- **`admin/MetaboxGenerator.php`'s `match ($control)` head and its fifteen
+  arms** — 16 hits. The one control switch, and it reads `$control` OFF the
+  registry entry. It is the rendering half of the same entry, not a copy of it:
+  a new type adds one arm here and nothing anywhere else. Mechanical home:
+  `MetaboxGeneratorRenderTest::testNoTypeNameSwitchSurvivesInTheSource`, which
+  fails if a TYPE-name switch grows back in that file.
+- **The `callback` render directive** — 3 hits in `admin/MetaboxGenerator.php`,
+  one on the render side and two on the save side. `callback` has no entry on
+  purpose: the field draws itself and the consumer's code owns what it stores.
+  Both sides must step past it before they ask the registry anything, or a
+  posted `callback` field throws and kills the whole edit screen. Same
+  mechanical home.
+- **The `media` arm** — 4 hits in `admin/MetaboxGenerator.php`: one PHP test of
+  `image` against `file` to choose the picker's library, and three `mediaType`
+  comparisons in the picker JS it emits inline. One control serves two types,
+  and which of the two is a fact only the declaration holds. Same mechanical
+  home.
+- **CONTROL-name comparisons** — 5 hits in `admin/MetaboxGenerator.php`:
+  `checkbox` and `media` carry no native `required`; `select` and `json` take no
+  readonly attribute; `decimal` displays differently; a row cell whose control
+  is `media`; `relation`, `gallery` and `repeater` clear when they are absent
+  from the POST. Each asks about the CONTROL the registry entry names, never
+  about the declared type name. That is the direction this invariant wants.
+- **`admin/RelationField.php`'s two `=== 'relation'` selectors** — 2 hits. They
+  pick the relation fields out of a declared `fields` array. Structural, and
+  INV-2 moves this file in phase 3.
+- **`api/Data.php`'s `=== 'repeater'`** — 1 hit, the one structural test: a
+  repeater publishes an OBJECT schema built from `sub_fields`, not a leaf. The
+  registry has no "is structural" column, and one test is cheaper than one more
+  column.
+- **JSON-Schema type words** — 2 hits in `api/Data.php`:
+  `in_array($type, ['array', 'object'], true)` and a `'type' => 'array'` being
+  written INTO a schema. They are the same two words as two field types and an
+  entirely different vocabulary. This is the false-positive SHAPE to recognise,
+  not a second table.
+- **WordPress's own vocabularies** — 3 hits. `date` as a `WP_Query` `orderby`
+  value in `api/Data.php` and `services/Logger.php`, and as a column name.
+- **The Logger model DECLARING its own fields by canonical name** — 5 hits in
+  `services/Logger.php`. That is the registry being USED, which is the thing
+  this invariant exists to make possible.
+- **MAP KEYS that are not type names** — 14 hits, all from the map-key
+  alternative, in four shapes. WordPress's own `callback` ARGUMENT key
+  (`api/Actions.php`, `api/Rest.php`, `core/Pages.php` — 5). WordPress POST
+  COLUMN and query words as array keys in `api/Data.php`: the `content` column
+  map, its `match ($key)` arm, a `meta_query` `['relation' => 'OR']`, and
+  `content`/`date` in a projected row (5). Payload keys named for what they
+  carry — `url` in `api/Data.php`'s attachment payload and twice in
+  `services/Logger.php` (3). And `api/Response.php`'s `'json' =>
+  'application/json'` MIME entry (1), which is (B)'s hit as well.
+- **(B)'s one hit — `api/Response.php`'s `$mimeTypes`.** MIME types, not field
+  types: the `[Tt][Yy][Pp][Ee][Ss]?` fragment catches the word. It is an INV-5
+  item — WordPress keeps that table as `wp_get_mime_types()` — and INV-5 already
+  lists it as outstanding for phase 4.

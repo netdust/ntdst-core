@@ -23,10 +23,11 @@ straight to `sanitize_text_field()`, `sanitize_textarea_field()`,
 `wp_validate_boolean()` — core owns the NAME, WordPress owns the answer.
 
 `int` and `float` are the exception that proves the rule: they are plain casts,
-because WordPress has no word for a signed integer or for a finite float.
-`absint()` is the nearest thing WordPress ships, and it strips the sign — which
-is how a discount in cents came back positive. Where WordPress has no word, core
-writes the smallest thing that answers, and the entry says so.
+because WordPress has no word for a signed integer or for a finite float. The
+`int` entry says why in its own comment: *"Signed on purpose (FR-5): absint()
+stripped the sign, and a discount in cents is a negative int. A non-scalar is
+not a number."* Where WordPress has no word, core writes the smallest thing that
+answers, and the entry says so.
 
 `api/Data.php` holds the same line in its own first line: *"NTDST Data Layer — a
 chain API over WP_Query, and the meta registration a declared model owes
@@ -37,11 +38,13 @@ exactly two things WordPress does not have — a route without a callable
 of twice.
 
 The rule has a corollary that matters more than the rule: **anything WordPress
-understands passes straight through.** `registerOne()` forwards `args`,
-`schema`, `show_in_index` and `allow_batch` untouched, under the comment
-*"narrowing its API would send consumers back to raw
-`register_rest_route()`"* (`api/Rest.php`). A wrapper that hides the thing it
-wraps is not a wrapper; it is a fork with extra steps.
+understands passes straight through.** `NTDST_Rest::OWN` lists the three options
+the class consumes, under the comment *"Options this class consumes; everything
+else goes to WP verbatim."* — and the file header states it once more:
+*"Everything else is passed straight through to WordPress."* (`api/Rest.php`).
+So `registerOne()` forwards `args`, `schema`, `show_in_index` and `allow_batch`
+untouched. A wrapper that hides the thing it wraps is not a wrapper; it is a
+fork with extra steps.
 
 The hard case is where WordPress does something **badly**. That is not an
 exemption — it is the strongest reason to wrap. See §6.

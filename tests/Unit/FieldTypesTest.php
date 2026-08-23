@@ -959,6 +959,28 @@ final class FieldTypesTest extends TestCase
         $this->assertSame(0, $this->sanitize('int', [1]));
     }
 
+    /**
+     * I-1 — the saturation promise is about a numeric STRING and nothing else.
+     *
+     * `(int) '99999999999999999999'` is PHP's string-to-int conversion, and
+     * that one clamps at the platform maximum. `(int) 1.0e30` is a float cast
+     * out of range, which PHP leaves UNDEFINED: it is 5076964154930102272 on
+     * this build and another number on another. A REST write carries a JSON
+     * number as a float, so that is the path a consumer meets it on — README
+     * may promise saturation for the string and must not promise it there.
+     */
+    public function testIntSaturatesANumericStringAndPromisesNothingForAnOversizedFloat(): void
+    {
+        $this->assertSame(PHP_INT_MAX, $this->sanitize('int', '99999999999999999999'));
+
+        $this->assertIsInt($this->sanitize('int', 1.0e30));
+        $this->assertNotSame(
+            PHP_INT_MAX,
+            $this->sanitize('int', 1.0e30),
+            'An oversized FLOAT does not saturate; the entry casts and PHP decides.',
+        );
+    }
+
     /** float refuses an array to 0.0, the way int refuses one to 0. */
     public function testFloatRefusesAnArrayLikeIntDoes(): void
     {
