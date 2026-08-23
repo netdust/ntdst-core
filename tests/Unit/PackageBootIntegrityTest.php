@@ -353,6 +353,30 @@ final class PackageBootIntegrityTest extends TestCase
             'ntdst_scheduler' => ['ntdst_scheduler', '5.0.0'],
             'ntdst_schedule_recurring' => ['ntdst_schedule_recurring', '5.0.0'],
             'ntdst_clear_recurring' => ['ntdst_clear_recurring', '5.0.0'],
+            // v5.0.0 core-trim (FR-8) — NTDST_Theme's mixin mechanism. It
+            // proxied `data`/`pages`/`response`/`log`/`mail` through __call(),
+            // so a theme reached another layer by a magic method instead of by
+            // that layer's own name; the surface could not be read without
+            // running it. A theme writes `ntdst_data()` now.
+            //
+            // Only these TWO of the five removed names get a row, and which
+            // ones is the whole decision. `wireMixins` and `templatePath` are
+            // distinctive: neither is a substring of another word, neither
+            // appears in README, and a surviving caller of either is a
+            // call-time fatal — exactly what this sweep exists to catch (the
+            // Cluster-A header above is core/Theme.php's own instance of it).
+            //
+            // `__call`, `mixin` and `when` CANNOT have a row here. `when` is
+            // ordinary English this codebase writes constantly, and
+            // core/Pages.php declares a LIVE when() of its own
+            // (`ntdst_pages()->when(...)`) — a bare row would fail on a
+            // shipped feature, and a call-shape row (`->when(`) would fail on
+            // its real callers. All three are pinned instead at the one place
+            // they can come back: a `function <name>` declaration in
+            // core/Theme.php, by bin/guard.sh's THEMEMETHODS line and by
+            // ThemeTrimTest's reflection assertion.
+            'wireMixins' => ['wireMixins', '5.0.0'],
+            'templatePath' => ['templatePath', '5.0.0'],
         ];
     }
 

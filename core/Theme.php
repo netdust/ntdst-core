@@ -35,32 +35,31 @@ defined('ABSPATH') || exit;
  *                   `NTDST_Data_Manager::registerTaxonomy(...)`.
  *  - apiAction() -> `ntdst_actions()->register(...)`, which is also
  *                   where the api_data capability floor lives.
- *  - module()    -> retired outright, not relocated. See the mixin rules below.
+ *  - module()    -> retired outright, not relocated.
  *
- * Those owners stay REACHABLE and that is deliberate — do not "fix" it:
- * wireMixins() proxies `data`/`pages`/`response`/`log`/`mail`, so
- * `$theme->data()->register(...)` is byte-for-byte what the deleted register()
- * did, and ThemeSubjectNarrowingTest pins that proxy. The rule governs what
- * earns a NAMED METHOD here (a second surface to keep in sync), not what is
- * reachable at one hop through an owner named out loud.
+ * Those owners are reached BY NAME, at the call site (FR-8, 5.0.0). A theme
+ * that wants the Data layer writes `ntdst_data()->register(...)`; it does not
+ * ask the theme for it. This class used to proxy `data`/`pages`/`response`/
+ * `log`/`mail` through a mixin() registry dispatched by __call(), and that
+ * surface could not be READ: nothing in the file said which names resolved, so
+ * the only way to learn the theme's API was to run it. The rule above governs
+ * what earns a NAMED METHOD here; the answer for another layer's front door is
+ * now "nothing", because the global helper already is one.
  *
- * Mixin rules:
- *  - mixin() supersedes the retired module() DSL: `$theme->mixin('slug', $svc)`
- *    then `$theme->slug()` replaces the old `$theme->module('slug')->get()`, and
- *    a service's config/enable filters are registered directly.
- *  - Method-injection mixins are dispatched via __call(), so they cannot
- *    override methods that already exist on NTDST_Theme. To override a
- *    built-in method, extend the class instead.
+ * Two more members went with the mechanism:
+ *  - when()         -> an `if` statement with a fluent return. PHP has an `if`.
+ *  - templatePath() -> `NTDST_Template_Loader::addPath($path)`, which is the
+ *                      same call one hop shorter and names its owner.
  *
- * The accepted cost — four forwarders. templatePath(), single(), page() and
- * archive() forward onto NTDST_Template_Loader and NTDST_Pages. They pass the
- * rule (their subject is the theme; NTDST_Pages and the loader are only the mechanism)
- * so they stay — but they are a SECOND public surface that has to track its
- * owner's signature, and that tax has already been paid twice: S7 had to repair
- * apiAction() after it drifted to literal-cap-only, and S8 had to update
- * taxonomy() in the same change. Whenever NTDST_Pages or NTDST_Template_Loader
- * changes shape, check these four — they can go stale without anything here
- * failing to load.
+ * The accepted cost — three forwarders. single(), page() and archive() forward
+ * onto NTDST_Pages. They pass the rule (their subject is the theme; NTDST_Pages
+ * is only the mechanism) so they stay — but they are a SECOND public surface
+ * that has to track its owner's signature, and that tax has already been paid
+ * twice: S7 had to repair apiAction() after it drifted to literal-cap-only, and
+ * S8 had to update taxonomy() in the same change. Whenever NTDST_Pages changes
+ * shape, check these three — they can go stale without anything here failing to
+ * load. (core-shape FR-12 deletes all three; until it lands they call
+ * ntdst_pages() by name, because the proxy they used to go through is gone.)
  *
  * Hook + filter naming conventions:
  *  - Actions: `ntdst_*` for new code. Theme registers no `netdust_*` hook of
@@ -74,7 +73,6 @@ defined('ABSPATH') || exit;
 class NTDST_Theme
 {
     private array $config;
-    private array $mixins = [];
 
     public function __construct(array $config = [])
     {
@@ -84,31 +82,8 @@ class NTDST_Theme
         // Register self as singleton in DI container
         ntdst_set(self::class, fn() => $this);
 
-        // Wire up service mixins immediately
-        $this->wireMixins();
-
         // Initialize theme
         $this->init();
-    }
-
-    /**
-     * Wire up NTDST service instances as mixins.
-     * Called automatically in constructor.
-     *
-     * Every helper wired here is core's own, defined by a file on
-     * ntdst-core.php's require list long before a theme can be constructed.
-     * None of them is optional, so none of them is guarded: a missing one is a
-     * fatal that says core is half-loaded, which is worth far more than a theme
-     * whose ->log() silently never wired (that is exactly how ntdst_router()
-     * stopped registering in Cluster A and nothing said so).
-     */
-    private function wireMixins(): void
-    {
-        $this->mixin('data', ntdst_data());
-        $this->mixin('pages', ntdst_pages());
-        $this->mixin('response', ntdst_response());
-        $this->mixin('log', ntdst_log());
-        $this->mixin('mail', ntdst_mail());
     }
 
     private function init(): void
@@ -333,43 +308,6 @@ class NTDST_Theme
 
 
     /**
-     * Conditional configuration based on context
-     *
-     * @param callable $condition Function that returns boolean
-     * @param callable $callback  Function to execute if condition is true
-     * @return $this
-     *
-     * Example:
-     *   $theme->when(fn() => is_front_page(), function($theme) {
-     *       $theme->filter('body_class', fn($c) => [...$c, 'is-front']);
-     *   });
-     */
-    public function when(callable $condition, callable $callback): self
-    {
-        if ($condition()) {
-            $callback($this);
-        }
-        return $this;
-    }
-
-    /**
-     * Add custom template path
-     *
-     * @param string $path Template directory path
-     * @return $this
-     *
-     * Example:
-     *   $theme->templatePath(__DIR__ . '/custom-templates');
-     */
-    public function templatePath(string $path): self
-    {
-        // One live registry (S5): the loader reads it on every resolution, so
-        // a path registered here is picked up without a cache-clear workaround.
-        NTDST_Template_Loader::addPath($path);
-        return $this;
-    }
-
-    /**
      * Register single template handler
      *
      * The post type is `?string` — NOT `string|callable`. This signature tracks
@@ -388,7 +326,7 @@ class NTDST_Theme
      */
     public function single(?string $post_type = null, ?callable $callback = null): self
     {
-        $this->pages()->single($post_type, $callback);
+        ntdst_pages()->single($post_type, $callback);
         return $this;
     }
 
@@ -406,7 +344,7 @@ class NTDST_Theme
      */
     public function page(string|callable $slug, ?callable $callback = null): self
     {
-        $this->pages()->page($slug, $callback);
+        ntdst_pages()->page($slug, $callback);
         return $this;
     }
 
@@ -429,95 +367,8 @@ class NTDST_Theme
      */
     public function archive(?string $post_type = null, ?callable $callback = null): self
     {
-        $this->pages()->archive($post_type, $callback);
+        ntdst_pages()->archive($post_type, $callback);
         return $this;
     }
 
-    /**
-     * Mixin: Extend theme with additional methods or instance proxies
-     *
-     * Two patterns supported:
-     * 1. Instance proxying: $theme->mixin('mail', ntdst_mail())
-     *    Usage: $theme->mail()->to(...)
-     *
-     * 2. Method injection: $theme->mixin(new HelperClass())
-     *    Copies all public methods from HelperClass to $theme
-     *
-     * @param string|object $nameOrInstance Mixin name (for instance proxy) or object (for method injection)
-     * @param object|null $instance Instance to proxy (only for pattern 1)
-     * @return $this
-     *
-     * Example (instance proxying):
-     *   $theme->mixin('mail', ntdst_mail());
-     *   $theme->mail()->to('user@example.com')->send();
-     *
-     * Example (method injection):
-     *   class ThemeHelpers {
-     *       public function formatDate($date) { return date('Y-m-d', strtotime($date)); }
-     *       public function truncate($text, $length) { return substr($text, 0, $length) . '...'; }
-     *   }
-     *   $theme->mixin(new ThemeHelpers());
-     *   $theme->formatDate('2024-01-01');  // Direct method call
-     */
-    public function mixin(string|object $nameOrInstance, ?object $instance = null): self
-    {
-        // Pattern 1: Instance proxying (named)
-        if (is_string($nameOrInstance) && $instance !== null) {
-            $name = sanitize_key($nameOrInstance);
-            $this->mixins[$name] = $instance;
-            return $this;
-        }
-
-        // Pattern 2: Method injection (copy methods from object)
-        if (is_object($nameOrInstance) && $instance === null) {
-            $class = new ReflectionClass($nameOrInstance);
-            foreach ($class->getMethods(ReflectionMethod::IS_PUBLIC) as $method) {
-                // Skip magic methods and constructors
-                if (str_starts_with($method->name, '__')) {
-                    continue;
-                }
-
-                // Store as callable bound to the original instance
-                $methodName = $method->name;
-                $this->mixins[$methodName] = function (...$args) use ($nameOrInstance, $methodName) {
-                    return $nameOrInstance->$methodName(...$args);
-                };
-            }
-            return $this;
-        }
-
-        // Invalid usage — fail loud rather than emit a warning that gets
-        // swallowed outside of WP_DEBUG_LOG.
-        throw new InvalidArgumentException(
-            'Invalid mixin usage. Use either mixin($name, $instance) or mixin($object)',
-        );
-    }
-
-    /**
-     * Magic method to handle dynamic calls to mixed-in methods/instances
-     *
-     * @param string $name Method name
-     * @param array $arguments Method arguments
-     * @return mixed
-     */
-    public function __call(string $name, array $arguments): mixed
-    {
-        if (!isset($this->mixins[$name])) {
-            throw new BadMethodCallException("Method or mixin '{$name}' does not exist on " . static::class);
-        }
-
-        $mixin = $this->mixins[$name];
-
-        // If it's a callable (method injection), execute it
-        if (is_callable($mixin)) {
-            return $mixin(...$arguments);
-        }
-
-        // If it's an object (instance proxy), return it for chaining
-        if (is_object($mixin)) {
-            return $mixin;
-        }
-
-        throw new BadMethodCallException("Mixin '{$name}' is not callable or an object");
-    }
 }

@@ -224,6 +224,38 @@ if [ "$CONTAINERMETHODS" != "0" ]; then
     exit 1
 fi
 
+# v5.0.0 core-trim (FR-8 / SC-3): NTDST_Theme wires the theme's hooks, and
+# carries no mixin mechanism.
+#
+# mixin() + __call() + the $mixins registry proxied `data`/`pages`/`response`/
+# `log`/`mail`, so `$theme->data()` reached another layer through a magic
+# method — a surface that cannot be READ, because nothing in the file says
+# which names resolve. `when()` was an `if` with a fluent return. Both go; a
+# theme names the owner at the call site now (`ntdst_data()`).
+#
+# WHY A DECLARATION GREP AND NOT A REMOVED-SYMBOL ROW — the same reason the
+# container's five methods get one, and it is sharper here. `when` is an
+# ordinary English word this codebase writes constantly, AND core/Pages.php
+# declares a LIVE `when()` of its own (`ntdst_pages()->when(...)`, its
+# docblock at :39). A bare sweep would delete a shipped feature's name along
+# with prose; a call-shape sweep (`->when(`) would hit that live caller. So
+# all three are pinned where they can actually come back — as a
+# `function <name>` DECLARATION in THIS ONE FILE.
+#
+# `templatePath` and `wireMixins` are NOT here: both are distinctive names
+# that appear nowhere else in the tree or in README, so they are pinned as
+# ordinary bare rows in the REMOVED sweep above, mirroring
+# PackageBootIntegrityTest::removedSymbolProvider() exactly. ThemeTrimTest
+# pins the same property harder, by reflection, and also catches the
+# mechanism arriving under a NEW name; this line is what fails on a fresh
+# checkout with no vendor/ and no PHP test run.
+THEMEMETHODS=$(grep -c "function __call\|function mixin\|function when" core/Theme.php || true)
+if [ "$THEMEMETHODS" != "0" ]; then
+    echo "core/Theme.php declares a method removed in v5.0.0 (__call/mixin/when):"
+    grep -n "function __call\|function mixin\|function when" core/Theme.php
+    exit 1
+fi
+
 # v5.0.0 core-trim (FR-11 / SC-4): core spells every hook `ntdst/...`, never
 # `ntdst_...`. The convention is declared once, in Bootstrap's header, and the
 # underscore spelling is the OTHER one — the sweep above pins six names that
