@@ -803,6 +803,52 @@ final class MetaboxGeneratorRenderTest extends TestCase
         return $html;
     }
 
+    /**
+     * Every rendered row carries its OWN index as `data-index`, and the hidden
+     * template carries the `__INDEX__` placeholder — the two halves the "Add
+     * Row" script reads.
+     *
+     * This is the PHP half of a JS invariant: indices are never REUSED. The
+     * script used to number a new row with the current row COUNT, so on a table
+     * whose middle row had been removed (rows 0, 2 left, count 2) the new row
+     * came in as 2 as well — two rows posting the same key, and PHP keeps the
+     * last one. Silent data loss on an ordinary edit. The fix derives the next
+     * index from the DOM: the highest `data-index` on the table, plus one.
+     *
+     * There is no JS runner in this project, so this pins what the FIX READS
+     * rather than the fix itself — if this attribute ever stops being emitted
+     * per row, the script silently goes back to guessing. The behaviour itself
+     * is a /shakeout probe.
+     */
+    public function testEveryRepeaterRowCarriesItsOwnIndexForTheAddRowScript(): void
+    {
+        $this->meta['slots'] = [
+            ['label' => 'A', 'qty' => 1, 'photo' => 6],
+            ['label' => 'B', 'qty' => 2, 'photo' => 7],
+            ['label' => 'C', 'qty' => 3, 'photo' => 8],
+        ];
+
+        $table = $this->repeaterTable();
+
+        $this->assertSame(
+            3,
+            preg_match_all('/<tr class="ntdst-repeater-row" data-index="(\\d+)">/', $table, $m),
+            'Each stored row renders one row element carrying an index.',
+        );
+        $this->assertSame(
+            ['0', '1', '2'],
+            $m[1],
+            'A row is numbered by its own position, and no two rows share a number.',
+        );
+
+        $html = $this->render(['slots' => self::FIELDS['slots']]);
+        $this->assertStringContainsString(
+            'data-index="__INDEX__"',
+            $html,
+            'The hidden template numbers itself through the placeholder the script substitutes.',
+        );
+    }
+
     /** Just the repeater's table — the rows, without the rest of the screen. */
     private function repeaterTable(): string
     {

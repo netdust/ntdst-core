@@ -338,8 +338,25 @@
 				return;
 			}
 
+			// Indices are NEVER REUSED. This was the row COUNT, which re-issues
+			// a LIVE index the moment a middle row is removed: rows 0 and 2 left,
+			// count 2, and the new row is numbered 2 as well. Two rows then post
+			// under one key and PHP keeps the last — the older row is gone on save
+			// with nothing said. The DOM carries the truth: the highest data-index
+			// rendered by NTDST_MetaboxGenerator::render_repeater_row(), plus one,
+			// and 0 on an empty table. Pinned in MetaboxGeneratorRenderTest; the
+			// behaviour itself is a shakeout probe (no JS runner in this project).
+			let newIndex = 0;
+
+			rows.children('.ntdst-repeater-row').each(function() {
+				const index = parseInt($(this).attr('data-index'), 10);
+
+				if (!isNaN(index) && index >= newIndex) {
+					newIndex = index + 1;
+				}
+			});
+
 			const template = $('#' + fieldId + '_template').html();
-			const newIndex = currentRowCount;
 			const newRow = template.replace(/__INDEX__/g, newIndex);
 
 			rows.append(newRow);
