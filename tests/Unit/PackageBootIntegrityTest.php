@@ -863,6 +863,28 @@ final class PackageBootIntegrityTest extends TestCase
     }
 
     /**
+     * T11-S2 — `NTDST_Response::json()` / `render()` / `addPath()` get NO
+     * removedSymbolProvider() row and cannot: `json` and `render` are
+     * ordinary English this codebase writes constantly, and `addPath` names
+     * a LIVE method of NTDST_Template_Loader (see the comment above the
+     * provider). README's `### 5.0.0` migration rows (:656, :657, :716,
+     * :717) are the only pin any of the three has — nothing else in this
+     * suite asserts they are still written down. This closes that blindness.
+     */
+    public function testReadmeNamesTheUnpinnedResponseRemovals(): void
+    {
+        $spans = implode("\n", $this->fiveZeroZeroSpans());
+
+        foreach (['NTDST_Response::json', 'NTDST_Response::render', 'NTDST_Response::addPath'] as $symbol) {
+            $this->assertStringContainsString(
+                $symbol,
+                $spans,
+                "README's `### 5.0.0` migration rows must still spell `{$symbol}` — it is the only pin this removal has.",
+            );
+        }
+    }
+
+    /**
      * SPLIT RED — cluster-3 fix wave F4, the structure list.
      *
      * `api/` no longer holds an Actions layer, so the bullet an adopter reads
@@ -1548,6 +1570,39 @@ final class PackageBootIntegrityTest extends TestCase
                 break; // the next version closes the table; a `####` sub-head does not
             }
             if (!$inSection || !str_starts_with(ltrim($line), '|')) {
+                continue;
+            }
+            if (preg_match_all('/`([^`]+)`/', $line, $matched) > 0) {
+                $spans = array_merge($spans, $matched[1]);
+            }
+        }
+
+        return $spans;
+    }
+
+    /**
+     * Every backticked span anywhere under the `### 5.0.0` heading, table row
+     * or prose alike — bounded by the next heading of level 1 to 3.
+     *
+     * Wider than coreTrimSpans() on purpose: json()/render()/addPath() are
+     * pinned by README rows outside the `#### Core-trim` sub-table.
+     *
+     * @return list<string>
+     */
+    private function fiveZeroZeroSpans(): array
+    {
+        $readme = $this->readmeText();
+
+        $spans = [];
+        $inSection = false;
+
+        foreach (explode("\n", $readme) as $line) {
+            if (preg_match('/^#{1,3} /', $line) === 1) {
+                $inSection = str_starts_with($line, '### 5.0.0');
+
+                continue;
+            }
+            if (!$inSection) {
                 continue;
             }
             if (preg_match_all('/`([^`]+)`/', $line, $matched) > 0) {
