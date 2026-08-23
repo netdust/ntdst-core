@@ -38,8 +38,8 @@ defined('ABSPATH') || exit;
  *
  * A service's config override is declared at
  * `config['services']['overrides'][$slug]`. It nests under the existing
- * `services` key rather than replacing it — `services.discovery_paths` and
- * friends already live there.
+ * `services` key rather than replacing it — `services.core`, `services.admin`
+ * and `services.conditional` already live there.
  *
  * SLUG DERIVATION — read this before writing an override. `{slug}` above is NOT
  * the class name lowercased. When a service declares no `metadata()['name']`,
@@ -137,35 +137,27 @@ class NTDST_Bootstrap
             return $this;
         }
 
-        $countBefore = count($this->services);
-
-        // Auto-discover root services if enabled
-        if ($this->config['services']['auto_discover'] ?? false) {
-            $this->discoverServices();
-        }
-
-        // If auto-discovery was on but found nothing, flag it — usually a misconfigured path.
-        if (($this->config['services']['auto_discover'] ?? false) && count($this->services) === $countBefore) {
-            $paths = $this->config['services']['discovery_paths'] ?? [];
-            ntdst_log()->debug('NTDST Bootstrap: auto-discovery found 0 services. Paths scanned: ' . implode(', ', $paths));
-        }
+        // The consumer lists services under three keys, and core registers
+        // exactly what it finds there. Nothing else in the `services` array is
+        // read: a key core consults and then ignores is a promise read back as
+        // a maybe (INV-10).
 
         // Register explicitly configured core services
         foreach ($this->config['services']['core'] ?? [] as $service) {
-            $this->registerService($service);
+            $this->registerService($service, 'core');
         }
 
         // Register admin services (conditionally)
         if (is_admin()) {
             foreach ($this->config['services']['admin'] ?? [] as $service) {
-                $this->registerService($service);
+                $this->registerService($service, 'admin');
             }
         }
 
         // Register conditional services
         foreach ($this->config['services']['conditional'] ?? [] as $key => $spec) {
             if (isset($spec['condition']) && is_callable($spec['condition']) && $spec['condition']()) {
-                $this->registerService($spec['service']);
+                $this->registerService($spec['service'], 'conditional');
             }
         }
 
@@ -182,10 +174,18 @@ class NTDST_Bootstrap
     /**
      * Register a single service
      *
-     * @param string $class Fully qualified class name
+     * The class must already be resolvable — by the consumer's own
+     * `require_once`, by Composer, or by any autoloader the consumer
+     * installed. Core loads nothing: it neither scans a directory nor derives
+     * a file path from a class name (INV-10). A writable directory on a
+     * scanned path was code execution, and a name in a config array is not a
+     * safe path.
+     *
+     * @param string $class  Fully qualified class name
+     * @param string $sector The config key the name came from: core|admin|conditional
      * @return void
      */
-    private function registerService(string $class): void
+    private function registerService(string $class, string $sector): void
     {
 
         // Skip if already registered
@@ -193,54 +193,22 @@ class NTDST_Bootstrap
             return;
         }
 
-        // For namespaced services, try to load the file first
-        // Maps namespace to file path, e.g. ntdstheme\services\gallery\ArtistService => services/gallery/ArtistService.php
-        $attemptedPaths = [];
-        if (!class_exists($class) && str_contains($class, '\\')) {
-            foreach ($this->config['services']['discovery_paths'] ?? [] as $basePath) {
-                $relativePath = str_replace('\\', '/', $class) . '.php';
-
-                // A namespace may carry a ROOT SEGMENT the directory tree does
-                // not repeat — `ntdstheme\services\gallery\ArtistService`
-                // living at `services/gallery/ArtistService.php`. So try the
-                // path as the namespace spells it, then again with the leading
-                // segment dropped.
-                //
-                // This used to strip `basename(get_stylesheet_directory())`
-                // instead (F5). That worked for a theme whose namespace root
-                // happened to equal its directory name, and was nonsense for a
-                // mu-plugin twice over: the consumer is not a theme, and the
-                // answer changed when somebody switched theme — a code path
-                // that broke on a setting no developer would think to check.
-                // The question was always "does the tree repeat this segment",
-                // which the filesystem can answer and the theme cannot.
-                $candidates = [$relativePath];
-                if (str_contains($relativePath, '/')) {
-                    $candidates[] = substr($relativePath, strpos($relativePath, '/') + 1);
-                }
-
-                $loaded = false;
-                foreach ($candidates as $candidate) {
-                    $filePath = dirname($basePath) . '/' . $candidate;
-                    $attemptedPaths[] = $filePath;
-
-                    if (file_exists($filePath)) {
-                        require_once $filePath;
-                        $loaded = true;
-                        break;
-                    }
-                }
-
-                if ($loaded) {
-                    break;
-                }
-            }
-        }
-
-        // Check if class exists
+        // `class_exists()` is the whole admission test, and its autoload pass
+        // is the consumer's loader, never one core installed.
         if (!class_exists($class)) {
-            $detail = $attemptedPaths ? ' (attempted: ' . implode(', ', $attemptedPaths) . ')' : '';
-            ntdst_log()->debug("NTDST Bootstrap: Service class {$class} not found{$detail}");
+            // The site owner reads this notice, so it names BOTH the class they
+            // listed and the key they listed it under — a fleet config lists
+            // services in three places. `_doing_it_wrong()` is the WordPress
+            // channel for "the code calling me is wrong"; the old debug line
+            // was a file nobody opens, so a service went missing in silence.
+            // The function named is the PUBLIC entry the consumer called, not
+            // this private helper, because that is what WordPress prints.
+            _doing_it_wrong(
+                __CLASS__ . '::register',
+                "Service class {$class} (services.{$sector}) is not loaded — require it or autoload it before register()",
+                '5.0.0',
+            );
+
             return;
         }
 
@@ -260,8 +228,8 @@ class NTDST_Bootstrap
         // PERFORMANCE: Pre-compute slug and cache the service's config override
         // This replaces the per-service filter with direct config lookup.
         // Overrides nest UNDER the existing `services` key (beside `core`,
-        // `admin`, `conditional`, `auto_discover`, `discovery_paths`) rather
-        // than occupying it, which is already taken.
+        // `admin` and `conditional`) rather than occupying it, which is
+        // already taken.
         $slug = $this->getServiceSlug($class);
         if (isset($this->config['services']['overrides'][$slug])) {
             $this->serviceConfigCache[$slug] = $this->config['services']['overrides'][$slug];
@@ -413,113 +381,6 @@ class NTDST_Bootstrap
                 throw $e;
             }
         }
-    }
-
-    // ========================================
-    // AUTO-DISCOVERY
-    // ========================================
-
-    /**
-     * Auto-discover services from configured paths
-     *
-     * @return void
-     */
-    private function discoverServices(): void
-    {
-        $paths = $this->config['services']['discovery_paths'] ?? [];
-
-        foreach ($paths as $path) {
-            if (!is_dir($path)) {
-                continue;
-            }
-
-            $this->discoverServicesInPath($path);
-        }
-    }
-
-    /**
-     * Discover services in a specific path
-     *
-     * @param string $path Directory path
-     * @return void
-     */
-    private function discoverServicesInPath(string $path): void
-    {
-        // Only discover root-level services (no subdirectory scanning)
-        // Services in subdirectories must have namespaces and be explicitly
-        // registered in theme-config.php (core, admin, or conditional)
-        $files = glob($path . '/*Service.php');
-
-        foreach ($files as $file) {
-            // Load the file first so class_exists() will work
-            require_once $file;
-
-            $className = $this->getClassNameFromFile($file);
-
-            if ($className && !in_array($className, $this->config['services']['core'] ?? [])) {
-                // Skip if service is in conditional config (let conditional handle it)
-                if ($this->isInConditionalConfig($className)) {
-                    continue;
-                }
-                $this->registerService($className);
-            }
-        }
-    }
-
-    /**
-     * Check if a service class is defined in the conditional config
-     *
-     * @param string $className Service class name
-     * @return bool
-     */
-    private function isInConditionalConfig(string $className): bool
-    {
-        foreach ($this->config['services']['conditional'] ?? [] as $key => $spec) {
-            $serviceClass = $spec['service'] ?? '';
-            // Normalize class names for comparison (handle namespace variations)
-            $normalizedService = ltrim(str_replace('/', '\\', $serviceClass), '\\');
-            $normalizedClass = ltrim(str_replace('/', '\\', $className), '\\');
-
-            if ($normalizedService === $normalizedClass) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    /**
-     * Extract class name from file
-     *
-     * @param string $file File path
-     * @return string|null Class name or null
-     */
-    private function getClassNameFromFile(string $file): ?string
-    {
-        $content = file_get_contents($file);
-        if ($content === false) {
-            return null;
-        }
-
-        $namespace = '';
-        $class = '';
-
-        // Extract namespace
-        if (preg_match('/^\s*namespace\s+([^;]+);/m', $content, $matches)) {
-            $namespace = trim($matches[1]);
-        }
-
-        // Extract class name (allow final/abstract modifiers)
-        if (preg_match('/^\s*(?:abstract\s+|final\s+)?class\s+(\w+)/m', $content, $matches)) {
-            $class = $matches[1];
-        }
-
-        if (empty($class)) {
-            return null;
-        }
-
-        $fqcn = $namespace ? $namespace . '\\' . $class : $class;
-
-        return class_exists($fqcn) ? $fqcn : null;
     }
 
     // ========================================

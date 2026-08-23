@@ -69,7 +69,24 @@ fi
 #         schemaFor(); a second public way to ask it is a second exposure a
 #         consumer can assemble beside the convergence point (INV-1). Neither
 #         name is part of any other word, so both are pinned bare.
-REMOVED=$(grep -rnE "ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
+# v5.0.0 core-trim: Bootstrap's service scanner and the two config keys that
+#         armed it (FR-1 / INV-10). The scanner globbed `*Service.php` under
+#         `services.discovery_paths`, `require_once`d every hit and regex-parsed
+#         the source for its class name, and `registerService()` turned a class
+#         name into a file path — a writable directory on that list was code
+#         execution. Core resolves a listed name with `class_exists()` now, or
+#         refuses it loudly.
+#         The two KEYS are swept beside the two methods, and that pairing is
+#         the point: deleting the methods while a shipped line still reads
+#         `$config['services']['auto_discover']` leaves the switch half-alive —
+#         a key core consults and then does nothing with is "loads nothing by
+#         guessing" read back as a maybe. A consumer config may still CARRY
+#         both keys; core simply never reads them (AF-4). This sweep is over
+#         what the PACKAGE ships, not over what a site writes.
+#         `discoverServicesInPath` needs no term: `discoverServices` is a
+#         substring of it. All four are pinned bare — no other word contains
+#         them — which mirrors PackageBootIntegrityTest's rows exactly.
+REMOVED=$(grep -rnE "discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
     --include='*.php' . \
     | grep -v /vendor/ \
     | grep -vE "^(\./)?tests/|^(\./)?specs/" \
