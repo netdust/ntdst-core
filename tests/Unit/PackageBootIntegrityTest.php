@@ -231,9 +231,19 @@ final class PackageBootIntegrityTest extends TestCase
             // as a fatal nobody's suite could see. Each name is its own word
             // here: none is a substring of another (`detachTerms` does not
             // contain `attachTerms`), and none appears in README or docs, so
-            // all eight are pinned bare with no exemption.
+            // all nine are pinned bare with no exemption.
+            //
+            // `getPostMeta` is the ninth and landed a gate later than the rest:
+            // T04 deleted the static without a row, so the one FR-4 removal with
+            // a KNOWN outside reader (josworld's cached-meta accessor) was the
+            // one removal this sweep could not see. It is pinned like its
+            // siblings — bare, and not a substring of any other name here:
+            // WordPress's own `get_post_meta()` is snake_case, and
+            // `getPostMetaFromCache()` (the accessor josworld actually calls)
+            // does not ship in core.
             'getFormattedPosts' => ['getFormattedPosts', '5.0.0'],
             'ntdst_get_formatted_posts' => ['ntdst_get_formatted_posts', '5.0.0'],
+            'getPostMeta' => ['getPostMeta', '5.0.0'],
             'getPostTerms' => ['getPostTerms', '5.0.0'],
             'attachTerms' => ['attachTerms', '5.0.0'],
             'syncTerms' => ['syncTerms', '5.0.0'],
