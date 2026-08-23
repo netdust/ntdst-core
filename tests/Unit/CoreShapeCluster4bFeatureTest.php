@@ -259,9 +259,6 @@ final class CoreShapeCluster4bFeatureTest extends TestCase
     // 4. The controller's open finding: a route with no matched rule
     // -----------------------------------------------------------------------
 
-    /**
-     * @group red-finding
-     */
     public function testABareQueryVarHitCannotInvokeAParameterlessRoute(): void
     {
         // `ntdst_page` is a PUBLIC query var, so `/?ntdst_page=0` reaches the
@@ -286,8 +283,12 @@ final class CoreShapeCluster4bFeatureTest extends TestCase
         $this->dispatch($pages, 0, 'GET', [], matchedRule: '');
 
         $this->assertSame(0, $ran, 'a URL that never matched our rule must not run our route.');
-        $this->assertTrue($wp_query->notFound, 'a hand-written query var is not a page of ours.');
-        $this->assertSame([404], $this->statuses);
+        // R-1 amended this pair (was: set_404 + [404]). Refusing with a 404
+        // would make `?ntdst_page=0` a way to turn ANY URL on the site into a
+        // 404 — a cache-poisoning primitive. The gate PASSES THROUGH: nothing
+        // of ours claimed this URL, so WordPress answers as it would have.
+        $this->assertFalse($wp_query->notFound, 'a hand-written query var is not a page of ours — and not a 404 either.');
+        $this->assertSame([], $this->statuses);
         $this->assertNull($this->templateIncludeFilter());
     }
 

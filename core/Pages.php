@@ -199,6 +199,19 @@ class NTDST_Pages
             return;
         }
 
+        // `ntdst_page` is a PUBLIC query var, so `/?ntdst_page=0` reaches this
+        // dispatcher on ANY URL without ever passing through the rewrite rule.
+        // A route with no placeholders has no param check to fail, so the front
+        // page would answer 200 with that route's body. The rule WordPress
+        // matched is the only proof this URL is ours: no match, or someone
+        // else's rule, and this is a PASS-THROUGH — WordPress answers as it
+        // would have. Not a 404: refusing here would make `?ntdst_page=0` a way
+        // to turn every URL on the site into a 404 (a cache-poisoning
+        // primitive). Only a rule of OURS that matched can refuse.
+        if (($GLOBALS['wp']->matched_rule ?? '') !== $route['regex']) {
+            return;
+        }
+
         if ($route['method'] !== strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'))) {
             $this->notFound();
 

@@ -61,6 +61,7 @@ final class NtdstPagesTest extends TestCase
             $GLOBALS['_ntdst_test_filter_args'],
             $GLOBALS['wp_query'],
             $GLOBALS['wp_rewrite'],
+            $GLOBALS['wp'],
         );
 
         Functions\when('add_action')->justReturn(true);
@@ -94,7 +95,7 @@ final class NtdstPagesTest extends TestCase
 
     protected function tearDown(): void
     {
-        unset($_SERVER['REQUEST_URI'], $_SERVER['REQUEST_METHOD'], $GLOBALS['wp_query'], $GLOBALS['wp_rewrite']);
+        unset($_SERVER['REQUEST_URI'], $_SERVER['REQUEST_METHOD'], $GLOBALS['wp_query'], $GLOBALS['wp_rewrite'], $GLOBALS['wp']);
         Monkey\tearDown();
         parent::tearDown();
     }
@@ -106,8 +107,13 @@ final class NtdstPagesTest extends TestCase
      * rewrite rule and put the route's index in `ntdst_page`, so a dispatch is
      * that query var plus the request method.
      */
-    private function dispatch(NTDST_Pages $pages, int $index, string $method, array $params = []): void
-    {
+    private function dispatch(
+        NTDST_Pages $pages,
+        int $index,
+        string $method,
+        array $params = [],
+        ?string $matchedRule = null,
+    ): void {
         $this->queryVars['ntdst_page'] = (string) $index;
 
         // The placeholders WordPress parsed. They arrive as query vars, which
@@ -116,6 +122,14 @@ final class NtdstPagesTest extends TestCase
         foreach ($params as $name => $value) {
             $this->queryVars['ntdst_p_' . $name] = $value;
         }
+
+        // R-1: WordPress records the rule it matched on the $wp global. A real
+        // URL hit carries the regex of the route it names, so that is the
+        // default here; a case that wants the bare `?ntdst_page=` hit — or a
+        // foreign rule — passes matchedRule itself.
+        $wp = new stdClass();
+        $wp->matched_rule = $matchedRule ?? ($this->rules[$index][0] ?? '');
+        $GLOBALS['wp'] = $wp;
 
         $_SERVER['REQUEST_METHOD'] = $method;
         $pages->dispatch();
@@ -584,6 +598,47 @@ final class NtdstPagesTest extends TestCase
 
         $this->assertFalse($wp_query->notFound, 'a query var naming no route of ours is not ours to refuse.');
         $this->assertSame([], $this->statuses);
+    }
+
+    public function testAQueryVarWithoutTheMatchedRuleIsNotOurRequest(): void
+    {
+        // R-1. `ntdst_page` is a PUBLIC query var, so `/?ntdst_page=0` reaches
+        // the dispatcher on ANY URL without ever going through the rewrite
+        // rule. A route with no placeholders has no param check to fail, so
+        // the front page would answer 200 with that route's body. Only a
+        // request WordPress matched to OUR rule is ours.
+        //
+        // And the refusal is a PASS-THROUGH, not a 404: answering 404 here
+        // would let `?ntdst_page=0` turn any URL on the site into a 404 —
+        // a cache-poisoning primitive. WordPress answers as it would have.
+        foreach (['', '^some/other/rule/?$'] as $foreign) {
+            $wp_query = new class {
+                public bool $notFound = false;
+
+                public function set_404(): void
+                {
+                    $this->notFound = true;
+                }
+            };
+            $GLOBALS['wp_query'] = $wp_query;
+            $this->statuses = [];
+            unset($GLOBALS['_ntdst_test_filters_at']['template_include']);
+
+            $ran = 0;
+            $pages = new NTDST_Pages();
+            $pages->path('/card', function () use (&$ran): string {
+                $ran++;
+
+                return __FILE__;
+            });
+
+            $this->dispatch($pages, 0, 'GET', [], matchedRule: $foreign);
+
+            $this->assertSame(0, $ran, "a URL that never matched our rule must not run our route ({$foreign}).");
+            $this->assertFalse($wp_query->notFound, 'the gate passes through; it does not 404 every URL on the site.');
+            $this->assertSame([], $this->statuses);
+            $this->assertNull($this->templateIncludeFilter());
+        }
     }
 
     public function testPathDefaultsToGet(): void
