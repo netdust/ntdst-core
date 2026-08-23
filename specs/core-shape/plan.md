@@ -181,10 +181,10 @@ final class NTDST_Rest {
 
 // admin/RelationField.php — Cluster 3 (T07)
 // GET /wp-json/ntdst/v1/relation/search?search=<q>&post_type[]=<type>
-//   permission: static fn(WP_REST_Request $r): bool => $this->mayPickFromAll((array) $r->get_param('post_type'))
+//   permission: fn(WP_REST_Request $r): bool => $this->mayPickFromAll((array) $r->get_param('post_type'))   // non-static (binds $this); mayPickFromAll(array): bool is NEW — it runs the existing mayPickFrom(string) (RelationField.php:~202) for every requested type (threat model #6)
 //   rate_limit: 60 / 60s
 //   returns: ['results' => [ ['id' => int, 'title' => string], … ]]   (bare array; WordPress wraps nothing)
-// assets/js/metabox-fields.js: wp.apiFetch({ path: '/ntdst/v1/relation/search?' + new URLSearchParams(...) })
+// assets/js/metabox-fields.js: wp.apiFetch({ path: '/ntdst/v1/relation/search?' + new URLSearchParams(...) })   // emits post_type[]=…, never post_types; reads response.results as [{id,title}] (the ID/post_title fallbacks at :117-118 go)
 
 // core/TemplateLoader.php — Cluster 4a (T09), class name unchanged: NTDST_Template_Loader
 final class NTDST_Template_Loader {
@@ -196,9 +196,10 @@ final class NTDST_Template_Loader {
     public static function init(): void;   // hooks {$type}_template for single|page|archive|singular|index + theme_file_path
     public static function pickFromCandidates(string $template, string $type, array $templates): string; // the {$type}_template callback
     public static function locateInCustomPaths(string $path, string $file): string;      // calls locate()
+    // private searchPaths() (Response.php:~688) and the traversal guard isInside() (:~699) move with the class — unlisted here before the freshness review; they must survive
 }
 // REMOVED: templateInclude(); NTDST_Response::addPath(), ::$extra_paths
-// NTDST_Response::html(string $template, array $data = [], array $extraPaths = []): string   // T09 adds $extraPaths; Mailer uses it
+// NTDST_Response::html(string $template, array $data = []): string   // freshness review 2026-08-23: NO $extraPaths — services/Mailer.php left core (core-trim T10), so the third parameter would have zero readers (INV-9); locate() keeps its own $extraPaths for internal use
 
 // core/Pages.php — Cluster 4b (T10)
 final class NTDST_Pages {
@@ -217,7 +218,7 @@ final class NTDST_Pages {
 // api/Response.php — Cluster 4b (T11)
 class NTDST_Response {
     // KEPT: reset(), with(), withData(), template(), getTemplate(), getStatus(), notFound(), redirect(), html(), download(), inline(), downloadHeaders()
-    // REMOVED: json(), jsonPayload(), render(), renderError(), getErrorHtml(), commitRenderStatus(), error() (the rendering half; status-only error() stays as error(string $message, int $status)),
+    // REMOVED: json(), jsonPayload(), render(), renderError(), getErrorHtml(), commitRenderStatus(), — error() at :94 is ALREADY status-only and stays; the rendering half is renderError()/getErrorHtml() (freshness review) —
     //          $mimeTypes, getMimeType(), registerMimeType(), ntdst_redirect(), ntdst_download()/ntdst_inline() stay.
     public static function downloadHeaders(int $length, string $filename, ?string $contentType = null, string $disposition = 'attachment'): array; // MIME via wp_check_filetype($filename, wp_get_mime_types())
     public static function mimeTypes(array $mimes): array;  // the mime_types filter callback adding json|xml|vcf|svg
@@ -234,7 +235,7 @@ weakens a numbered mitigation is rejected at its gate.
 3. **Meta writes through `/wp/v2`** — `register_post_meta` with `show_in_rest` also accepts **writes** from authenticated REST callers. *Attack:* a subscriber PATCHes a gig's `venue_city`. *Mitigation:* `auth_callback` requires `user_can($userId, 'edit_post', $postId)` — the user WordPress names in the callback's fourth argument, not the current session; `sanitize_callback` is the model's own sanitizer, and a non-scalar `$user_id`/`$post_id` is refused outright rather than cast (an object casts to `1`, a real user id). Test asserts both callbacks are present and drives each on real arguments. *The floor this sets:* `edit_post` on the post being written is not an editor-only capability — the effective write floor is **the post's own `edit_post` holder, which includes a Contributor on their own draft**. A site that wants a higher floor filters `map_meta_cap`; the package does not invent a capability. (T03)
 4. **Every unnamed route in the package and its consumers** — the default moves from "refused" to "logged in". *Attack:* a site with open registration exposes an unnamed `POST /purge` to every subscriber. *Mitigation:* any verb outside `GET`/`HEAD`/`OPTIONS` whose resolved permission is `is_user_logged_in` or `__return_true` is **not registered** (`_doing_it_wrong` + log), tested as absence from the captured `register_rest_route` calls, never as a 403. GET routes default to logged-in — WordPress's own `wp_ajax_` posture, stated in README. (T04)
 5. **`->public()` lands on the wrong route** — fluent misuse after `rest_api_init` has fired. *Attack:* a route intended internal becomes anonymous, or vice versa. *Mitigation:* `public()` applies to the most recent pending registration only; if that registration already ran (hook fired), `public()` refuses with `_doing_it_wrong` and changes nothing. Test covers both orders. (T04)
-6. **Admin relation picker** — `relation_search` moves from the action router (login + per-type `edit_others_posts`) to a route. *Attack:* the route's permission is `is_user_logged_in` by default, so any account enumerates every relation-target type's posts. *Mitigation:* the route declares a closure permission that runs `mayPickFrom()` for **every** requested type and denies when any fails or the list is empty; unit test: anonymous → not reached (WordPress), Author → false, Administrator → true, empty list → false. Rate-limited. (T07)
+6. **Admin relation picker** — `relation_search` moves from the action router (login + per-type `edit_others_posts`) to a route. *Attack:* the route's permission is `is_user_logged_in` by default, so any account enumerates every relation-target type's posts. *Mitigation:* the route declares a closure permission that runs `mayPickFrom()` for **every** requested type (as `mayPickFromAll(array $types): bool`, the Interfaces name) and denies when any fails or the list is empty; unit test: anonymous → not reached (WordPress), Author → false, Administrator → true, empty list → false. Rate-limited. (T07)
 7. **CSRF on the relation route** — it is a GET with no side effect; no nonce needed. Cookie auth still requires `X-WP-Nonce` for the caller to count as logged in; `wp.apiFetch` supplies it. *Mitigation:* the enqueue depends on `wp-api-fetch` so the middleware is present; the JS never builds a nonce itself. (T07)
 8. **Removing `verifyOrigin()` with `Actions.php`** — *Attack:* a cross-site page drives an authenticated write. *Mitigation:* none needed beyond WordPress's: a cookie request without a valid `wp_rest` nonce is anonymous (`rest-api.php:1147`), and a cross-origin page cannot obtain that nonce. Recorded in README as the reason the check went; a site wanting a belt writes a `rest_pre_dispatch` filter. (T08)
 9. **CORS list widening** — `cors([...])` now feeds `allowed_http_origins`, and that list is site-wide: `admin-ajax.php`, `admin-post.php` and the **customizer** all call `send_origin_headers()` (`wp-includes/http.php:519`), which sends `Access-Control-Allow-Credentials: true` to **every** allowed origin, unconditionally — irrespective of what `cors()`'s `$credentials` argument said. A resolver widens those three surfaces the same way, because `is_allowed_http_origin()` is where it answers. *Attack:* a declared origin fetches `admin-ajax.php?action=rest-nonce` with the victim's cookies, reads the response cross-origin, and holds a valid `wp_rest` nonce for that logged-in user — full authenticated REST as the victim. *Mitigation (rev 3, sentinel C2):* the declaration is **scoped to REST** — `filterAllowedOrigins()` and the resolver filter return WordPress's own answer untouched unless `wp_is_serving_rest_request()`, so those three surfaces keep WordPress's defaults; `'*'` is refused loudly (`5.0.0`, non-fatal, logged at warning); credentials are read per declared origin, never merged site-wide; the unit test asserts the filter output equals WP's defaults + the declared list and nothing else, in a REST request and outside one. Stated in README and in `cors()`'s docblock. (T06, Cluster 2 gate)
@@ -261,7 +262,7 @@ re-entry, concurrent, boundary, mid-flow failure.
 | AF-7 | same as Administrator, in the edit screen via the picker | happy path | 200, `results[]`; the picker renders them (browser) |
 | AF-8 | picker after 13h open tab (stale nonce) | **re-entry** | `wp.apiFetch` refetches `rest-nonce`, second call succeeds — simulated by invalidating the nonce cookie |
 | AF-9 | 61 picker searches in 60s as Administrator | **concurrent** | the 61st answers 429 with `retry_after` |
-| AF-10 | `POST /wp-json/ntdst-baseline/v1/purge` anonymous / Subscriber / Administrator with nonce | **denied ×2**, happy | 401 / 403 / 200 — the write-verb rule and `manage_options` hold on a real consumer route |
+| AF-10 | `POST /wp-json/probe/v1/purge` (freshness review: daan declares no `ntdst-baseline/v1` namespace — the probe mu-plugin `web/app/mu-plugins/zz-core-shape-probe.php` declares `probe/v1`; T07/Cluster 3 extends it with this `manage_options` write route) anonymous / Subscriber / Administrator with nonce | **denied ×2**, happy | 401 / 403 / 200 — the write-verb rule and `manage_options` hold on a real consumer route |
 | AF-11 | `GET /card` on daan | happy path | 200, daan's card template; `is_404` never set (SC-5) |
 | AF-12 | `GET /card/` and `GET /CARD` | **boundary** | trailing slash 200 (rewrite rule allows `/?$`); case-different 404 — WordPress-native, no canonical redirect suppression |
 | AF-13 | `GET /card/contact.vcf` | happy path | 200, `text/vcard`, `Content-Disposition: attachment; filename="…"; filename*=UTF-8''…`, `X-Content-Type-Options: nosniff` |
