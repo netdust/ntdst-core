@@ -12,19 +12,17 @@ declare(strict_types=1);
 
 defined('ABSPATH') || exit;
 
-final class NTDST_RelationField implements NTDST_Service_Meta
+// NOT a service, and it never was one. This class is on no service list: it
+// mounts itself from the bottom of this file (`add_action('after_setup_theme',
+// …)` @ 20), which is where its hooks have always come from. Until v5.0.0 it
+// also implemented NTDST_Service_Meta and declared a metadata() saying
+// `enabled => true`, `admin_only => true`, `priority => 5` — keys Bootstrap
+// reads off classes it BOOTS, and Bootstrap never boots this one. So the
+// declaration was a claim nobody read: a consumer who set `enabled => false`
+// through it would have switched off nothing, and a reader tracing the picker's
+// load order would have looked for it on a list it is not on (FR-10).
+final class NTDST_RelationField
 {
-    public static function metadata(): array
-    {
-        return [
-            'name' => 'Relation Fields',
-            'description' => 'API endpoints for relation field autocomplete and reverse relationships',
-            'admin_only' => true,
-            'enabled' => true,
-            'priority' => 5,
-        ];
-    }
-
     /**
      * Takes nothing. This used to demand a theme object it never dereferenced
      * — a dependency that did no work, but forced the bootstrap below to

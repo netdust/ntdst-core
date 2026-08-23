@@ -171,7 +171,19 @@ fi
 #         snake_case, and getPostMetaFromCache() — the accessor josworld calls,
 #         and the one KNOWN outside reader of the removed static — does not ship
 #         in core.
-REMOVED=$(grep -rnE "ntdst_model_create_before|ntdst_model_create_after|ntdst_model_update_before|ntdst_model_update_after|ntdst_model_delete_before|ntdst_model_delete_after|log_entry|ntdst_log_database_enabled|addHandler|removeHandler|setMinLevel|setBatchingEnabled|ntdst_log_debug|ntdst_log_info|ntdst_log_error|getFormattedPosts|ntdst_get_formatted_posts|getPostMeta|getPostTerms|attachTerms|syncTerms|detachTerms|whereDate|orWhere|discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
+# v5.0.0 core-trim: the container's second resolution path (FR-6 / FR-10).
+#         `ntdst_make` is make()'s GLOBAL front door — the one spelling of the
+#         removed path that can appear outside a `$container->` call — and
+#         `callableReflections` was call()'s reflection cache, whose only writer
+#         was call() itself. Both are pinned BARE: neither is a substring of
+#         another word here, neither is in README, and both mirror
+#         PackageBootIntegrityTest's rows exactly.
+#         The five METHOD names get no row and cannot: `make`, `call`, `forget`,
+#         `flush` and `keys` are ordinary English this codebase writes constantly
+#         ("make fresh", "the call site", "flush the cache"), so a bare sweep
+#         hits prose, and a call-shape sweep (`->make(`) misses a wrapped line.
+#         They are pinned below instead, at the ONE place they can come back.
+REMOVED=$(grep -rnE "ntdst_model_create_before|ntdst_model_create_after|ntdst_model_update_before|ntdst_model_update_after|ntdst_model_delete_before|ntdst_model_delete_after|log_entry|ntdst_log_database_enabled|addHandler|removeHandler|setMinLevel|setBatchingEnabled|ntdst_log_debug|ntdst_log_info|ntdst_log_error|getFormattedPosts|ntdst_get_formatted_posts|ntdst_make|callableReflections|getPostMeta|getPostTerms|attachTerms|syncTerms|detachTerms|whereDate|orWhere|discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
     --include='*.php' . \
     | grep -v /vendor/ \
     | grep -vE "^(\./)?tests/|^(\./)?specs/" \
@@ -180,6 +192,29 @@ REMOVED=$(grep -rnE "ntdst_model_create_before|ntdst_model_create_after|ntdst_mo
 if [ -n "$REMOVED" ]; then
     echo "Shipped code still references a symbol removed in v3.0.0 or v5.0.0:"
     echo "$REMOVED"
+    exit 1
+fi
+
+# v5.0.0 core-trim (FR-6 / SC-3): the container declares set/get/has, and no
+# second way to ask one of them.
+#
+# make() resolved WITHOUT the singleton cache, call() injected arguments into a
+# callable after construction, forget() and flush() mutated the registry at
+# runtime, and keys() handed back a read-only copy of it. Five public methods,
+# zero shipped readers, and each one a second answer to a question set/get/has
+# already answers — the shape FR-2 removed from Bootstrap.
+#
+# WHY A DECLARATION GREP AND NOT A REMOVED-SYMBOL ROW: all five are ordinary
+# English words (the sweep above explains at length), so they are pinned where
+# they can actually come back — as a `function <name>` DECLARATION in this one
+# file. Anywhere else the name is prose. ContainerSurfaceTest pins the same
+# property harder, as an EXACT public-method list, which also catches the sixth
+# method arriving under a NEW name; this line is what fails on a fresh checkout
+# with no vendor/ and no PHP test run.
+CONTAINERMETHODS=$(grep -c "function make\|function call\|function forget\|function flush\|function keys" core/Container.php || true)
+if [ "$CONTAINERMETHODS" != "0" ]; then
+    echo "core/Container.php declares a method removed in v5.0.0 (make/call/forget/flush/keys):"
+    grep -n "function make\|function call\|function forget\|function flush\|function keys" core/Container.php
     exit 1
 fi
 

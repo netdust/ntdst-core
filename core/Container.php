@@ -25,18 +25,11 @@ declare(strict_types=1);
  * $gateway = ntdst_get(PaymentGateway::class);
  * $gateway2 = ntdst_get(PaymentGateway::class); // Same instance
  *
- * // Make fresh instance (not cached)
- * $logger1 = ntdst_make(Logger::class);
- * $logger2 = ntdst_make(Logger::class); // Different instance
- *
  * // Autowiring (dependencies auto-resolved)
  * class OrderService {
  *     public function __construct(PaymentGateway $gateway, Logger $logger) {}
  * }
  * $orders = ntdst_get(OrderService::class); // Dependencies injected!
- *
- * // Method injection
- * ntdst_container()->call([$service, 'method'], ['param' => 'value']);
  */
 
 defined('ABSPATH') || exit;
@@ -45,20 +38,15 @@ defined('ABSPATH') || exit;
  * Conventions:
  * - Register bindings before the `ntdst/features_ready` hook. After that, only
  *   mutate the container from tests.
- * - Rebinding an ID does NOT invalidate consumers that already resolved it.
- *   If a test needs fresh resolution after rebinding, call flush().
+ * - Rebinding an ID clears that ID's resolved cache, but does NOT invalidate
+ *   consumers that already resolved it. A test that needs a clean registry
+ *   constructs a fresh NTDST_Container() — there is no flush().
  */
 class NTDST_Container
 {
     protected array $services = [];
     protected array $resolved = [];
     protected array $reflections = [];
-
-    /**
-     * PERFORMANCE: Cache for method/function reflections
-     * Uses object hash for closures, string key for methods
-     */
-    protected array $callableReflections = [];
 
     /**
      * PERFORMANCE: Cache for factory reflection results
@@ -107,34 +95,6 @@ class NTDST_Container
         $this->resolved[$id] = $resolved;
 
         return $resolved;
-    }
-
-    /**
-     * Create fresh instance (autowired, not cached)
-     *
-     * Keys in $params must match constructor parameter names. Unknown keys
-     * throw so typos surface immediately rather than silently autowiring.
-     */
-    public function make(string $id, array $params = []): object
-    {
-        if (!class_exists($id)) {
-            throw new RuntimeException("Class {$id} does not exist");
-        }
-
-        if ($params) {
-            $constructor = $this->getReflection($id)->getConstructor();
-            $known = $constructor
-                ? array_map(fn($p) => $p->getName(), $constructor->getParameters())
-                : [];
-            $unknown = array_diff(array_keys($params), $known);
-            if ($unknown) {
-                throw new RuntimeException(
-                    "Unknown parameter(s) for {$id}: " . implode(', ', $unknown),
-                );
-            }
-        }
-
-        return $this->resolveClass($id, $params);
     }
 
     /**
@@ -319,79 +279,6 @@ class NTDST_Container
 
         return $this->reflections[$class];
     }
-
-    /**
-     * Call method/function with dependency injection
-     * PERFORMANCE: Caches reflection for repeated calls to same callable
-     */
-    public function call(callable $callback, array $params = []): mixed
-    {
-        // Generate cache key based on callable type
-        if (is_array($callback)) {
-            $class = is_object($callback[0]) ? get_class($callback[0]) : $callback[0];
-            $cacheKey = $class . '::' . $callback[1];
-        } elseif ($callback instanceof Closure) {
-            $cacheKey = spl_object_hash($callback);
-        } elseif (is_string($callback)) {
-            $cacheKey = $callback;
-        } else {
-            // For other callables, skip caching
-            $cacheKey = null;
-        }
-
-        // PERFORMANCE: Use cached reflection if available
-        if ($cacheKey !== null && isset($this->callableReflections[$cacheKey])) {
-            $reflection = $this->callableReflections[$cacheKey];
-        } else {
-            if (is_array($callback)) {
-                $reflection = new ReflectionMethod($callback[0], $callback[1]);
-            } else {
-                $reflection = new ReflectionFunction($callback);
-            }
-
-            // Cache for future calls
-            if ($cacheKey !== null) {
-                $this->callableReflections[$cacheKey] = $reflection;
-            }
-        }
-
-        $dependencies = $this->resolveParameters($reflection->getParameters(), $params);
-
-        return $callback(...$dependencies);
-    }
-
-    /**
-     * Remove service from container
-     */
-    public function forget(string $id): self
-    {
-        unset($this->services[$id], $this->resolved[$id], $this->reflections[$id]);
-        return $this;
-    }
-
-    /**
-     * Clear all services (except container itself)
-     */
-    public function flush(): self
-    {
-        $container = $this->services[self::class];
-
-        $this->services = [self::class => $container];
-        $this->resolved = [self::class => $container];
-        $this->reflections = [];
-        $this->callableReflections = [];
-        $this->factoryCache = [];
-
-        return $this;
-    }
-
-    /**
-     * Get all registered service IDs
-     */
-    public function keys(): array
-    {
-        return array_keys($this->services);
-    }
 }
 
 /**
@@ -427,15 +314,5 @@ if (!function_exists('ntdst_get')) {
     function ntdst_get(string $id): mixed
     {
         return ntdst_container()->get($id);
-    }
-}
-
-/**
- * Quick make helper (fresh instance)
- */
-if (!function_exists('ntdst_make')) {
-    function ntdst_make(string $id, array $params = []): object
-    {
-        return ntdst_container()->make($id, $params);
     }
 }

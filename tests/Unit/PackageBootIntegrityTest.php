@@ -319,6 +319,30 @@ final class PackageBootIntegrityTest extends TestCase
             'ntdst_model_update_after' => ['ntdst_model_update_after', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
             'ntdst_model_delete_before' => ['ntdst_model_delete_before', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
             'ntdst_model_delete_after' => ['ntdst_model_delete_after', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            // v5.0.0 core-trim: the container's second resolution path and the
+            // cache that armed method injection (FR-6 / FR-10). `make()` resolved
+            // WITHOUT the singleton cache, so the same binding could be one
+            // object on one call site and another on the next — a lifecycle no
+            // declaration named. `ntdst_make` was its GLOBAL front door, which
+            // is the spelling a consumer reaches for first, and the only one of
+            // the five removals that can appear outside a `$container->` call.
+            // `callableReflections` was call()'s reflection cache: call() is the
+            // only thing that ever wrote it, so a surviving cache is method
+            // injection surviving under another name.
+            //
+            // Both are pinned BARE — neither is a substring of another word in
+            // this package, and neither appears in README. `make`, `call`,
+            // `forget`, `flush` and `keys` are NOT rows here and cannot be: they
+            // are ordinary English words this codebase writes constantly ("make
+            // fresh", "the call site", "flush the cache"), and a bare sweep on
+            // any of them hits hundreds of prose lines while a call-shape sweep
+            // (`->make(`) would miss `$c->make(` split across a wrapped line.
+            // bin/guard.sh pins those five instead, at the ONE place they could
+            // come back — as declarations in core/Container.php — with
+            // ContainerSurfaceTest's exact public-method list as the harder
+            // pin beside it.
+            'ntdst_make' => ['ntdst_make', '5.0.0'],
+            'callableReflections' => ['callableReflections', '5.0.0'],
         ];
     }
 
