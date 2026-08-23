@@ -909,6 +909,49 @@ final class PackageBootIntegrityTest extends TestCase
     }
 
     /**
+     * SOLO RED — cluster-5 gate fix round 2, R-I1.
+     *
+     * A removed name in README is a migration row doing its job. A call
+     * signature that NEVER EXISTED is something else: an adopter copies it,
+     * and the copy fatals or reads null. Two of them shipped —
+     *
+     *   `ntdst_data('gig')` — the helper takes no argument (api/Data.php:
+     *   `function ntdst_data(): NTDST_Data_Manager`). The model is
+     *   `ntdst_data()->get('gig')`, and `where()` is the MODEL's query
+     *   builder, so the chain an adopter must write is
+     *   `ntdst_data()->get('gig')->where(...)`.
+     *
+     *   `->sanitizer` — NTDST_FieldType declares `public readonly \Closure
+     *   $sanitize` (api/FieldTypes.php). `->sanitizer` is an undefined
+     *   property: a warning, then null, then a fatal at the call.
+     *
+     * So there is no migration-row exemption here, unlike the removed-symbol
+     * sweep: these are wrong instructions wherever in README they stand.
+     * Mirrored in `bin/guard.sh` (BADSIGNATURES), and the two must move
+     * together.
+     */
+    public function testReadmeNeverSpellsACallSignatureThePackageDoesNotHave(): void
+    {
+        $readme = $this->readmeText();
+
+        $this->assertStringNotContainsString(
+            "ntdst_data('",
+            $readme,
+            'ntdst_data() takes no argument — write `ntdst_data()->get(\'type\')->where(...)`.',
+        );
+        $this->assertStringNotContainsString(
+            'ntdst_data("',
+            $readme,
+            'ntdst_data() takes no argument — write `ntdst_data()->get("type")->where(...)`.',
+        );
+        $this->assertStringNotContainsString(
+            '->sanitizer',
+            $readme,
+            "NTDST_FieldType's property is `sanitize`; `->sanitizer` reads null and fatals at the call.",
+        );
+    }
+
+    /**
      * SPLIT RED — cluster-3 fix wave F4, the structure list.
      *
      * `api/` no longer holds an Actions layer, so the bullet an adopter reads

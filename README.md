@@ -314,7 +314,7 @@ schema `format` would validate stored legacy values and read them back as
 |---|---|
 | `public_fields` — the model constructor's fourth positional argument | `'show_in_rest' => true` on the field's own description. The constructor is `(string $post_type, array $schema, string $meta_prefix, array $scopes)`, so a subclass still passing five arguments drops its scopes and nothing reports it |
 | a `public_shape` entry on the model | nothing. The shape an exposure emits belongs to the exposing service, not to the model |
-| `publicRows()` | `ntdst_data('gig')->where(...)->withMeta()->get()` and project in the caller, or read WordPress's own collection at `/wp/v2/<rest_base>` |
+| `publicRows()` | `ntdst_data()->get('gig')->where(...)->withMeta()->get()` and project in the caller, or read WordPress's own collection at `/wp/v2/<rest_base>` |
 | `publicRow()` | `getMeta()` on the row, or `/wp/v2/<rest_base>/{id}` |
 | `getPublicShape()` | `restFields()` — the fields the model declares may leave it. It is a CEILING, not a shape: which of them an exposure actually emits is the exposure's decision |
 
@@ -628,7 +628,7 @@ the API.
 
 | Was | Now |
 |---|---|
-| `ntdst_get_formatted_posts()`, `getFormattedPosts()` | `ntdst_data('post_type')->where(…)->withMeta()->get()` |
+| `ntdst_get_formatted_posts()`, `getFormattedPosts()` | `ntdst_data()->get('post_type')->where(…)->withMeta()->get()` |
 | `getPostMeta()` | `->withMeta()` on the chain, or `getMeta()` on a row |
 | `getPostTerms()` | `->withTerms()`, or `wp_get_object_terms()` |
 | `attachTerms()`, `syncTerms()`, `detachTerms()` | `wp_set_object_terms()` — one call, WordPress's own |
@@ -710,7 +710,7 @@ here because a fatal does not care which spec removed the name.
 | `publicSurface()` | the same call, filtered on the route's `permission_callback` being `'__return_true'` |
 | `opaqueSurface()`, `forgetSurface()` | nothing. There is no second register to hide from or forget |
 | `NtdstRestSurfaceTest` | assert against `rest_get_server()->get_routes()` |
-| `getDefaultSanitizer()` | `NTDST_FieldTypes::get($type)->sanitizer` |
+| `getDefaultSanitizer()` | `NTDST_FieldTypes::get($type)->sanitize` |
 | `sanitizeBoolean()`, `sanitizeDate()`, `sanitizeJson()`, `sanitizeRepeater()`, `sanitizeNestedArray()`, `sanitizeAttachmentId()` | the registry entry's sanitizer. One table, one answer |
 | `sanitize_field()` (the metabox's own) | the same registry. The metabox and the model clean a value the same way now |
 | `MARKER_ONLY_REQUIRED_TYPES` | nothing |

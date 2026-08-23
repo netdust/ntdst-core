@@ -534,6 +534,33 @@ fi
 # every caller it finds, which is the property; two homes for one rule is how
 # they come to disagree.
 
+# v5.0.0 core-shape (R-I1): README never spells a call signature the package
+# does not have. Two shapes, both of which an adopter copies verbatim:
+#
+#   ntdst_data('gig')  — ntdst_data() takes NO argument (api/Data.php, the
+#                        helper returns the manager). The model comes from
+#                        ntdst_data()->get('gig'), and where() is the MODEL's
+#                        query builder, so the chain is
+#                        ntdst_data()->get('gig')->where(...).
+#   ->sanitizer        — NTDST_FieldType's property is `sanitize`
+#                        (api/FieldTypes.php). `->sanitizer` reads null and a
+#                        caller invoking it fatals.
+#
+# Migration rows are NOT exempt here, unlike the removed-symbol sweep: these
+# two are not names that LEFT the package, they are calls that never existed,
+# so a row spelling one is a wrong instruction wherever it stands. Both quote
+# styles are read — a single-quoted-only sweep is one a reformatter switches
+# off. Mirrored in PackageBootIntegrityTest::testReadmeNeverSpellsACall
+# SignatureThePackageDoesNotHave, and the two must move together.
+BADSIGNATURES=$(grep -n "ntdst_data('\|ntdst_data(\"\|->sanitizer" README.md || true)
+if [ -n "$BADSIGNATURES" ]; then
+    echo "README spells a call signature this package does not have"
+    echo "(ntdst_data() takes no argument — ntdst_data()->get('type')->where(...);"
+    echo " NTDST_FieldType's property is ->sanitize, not ->sanitizer):"
+    echo "$BADSIGNATURES"
+    exit 1
+fi
+
 if ! grep -q "PHP_SAPI === 'cli'" tests/bootstrap.php; then
     echo "tests/bootstrap.php is missing its CLI guard (PHP_SAPI === 'cli' || exit;)"
     exit 1
