@@ -17,9 +17,16 @@ If WordPress already does something well, core does not do it again.
 
 `api/FieldTypes.php` says so where the vocabulary is declared: *"Where WordPress
 has the word, the entry is WordPress's function — this table maps names to them,
-it does not re-implement them."* Seventeen type names, each bound to
-`sanitize_text_field()`, `wp_kses_post()`, `absint()` or `wp_validate_boolean()`
-— core owns the NAME, WordPress owns the answer.
+it does not re-implement them."* Seventeen type names, most of them bound
+straight to `sanitize_text_field()`, `sanitize_textarea_field()`,
+`wp_kses_post()`, `sanitize_email()`, `esc_url_raw()`, `absint()` or
+`wp_validate_boolean()` — core owns the NAME, WordPress owns the answer.
+
+`int` and `float` are the exception that proves the rule: they are plain casts,
+because WordPress has no word for a signed integer or for a finite float.
+`absint()` is the nearest thing WordPress ships, and it strips the sign — which
+is how a discount in cents came back positive. Where WordPress has no word, core
+writes the smallest thing that answers, and the entry says so.
 
 `api/Data.php` holds the same line in its own first line: *"NTDST Data Layer — a
 chain API over WP_Query, and the meta registration a declared model owes

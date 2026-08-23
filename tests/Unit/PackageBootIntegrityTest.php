@@ -223,6 +223,118 @@ final class PackageBootIntegrityTest extends TestCase
         return $hits;
     }
 
+    /**
+     * README names every retired type, and names it once.
+     *
+     * The vocabulary's retirement table is the fact; README's migration table
+     * is the ADOPTER's copy of it. A copy that drifts is the worst kind here:
+     * the reader upgrades, hits a fatal, opens README, and the name that
+     * fataled is not in the table. So the table is read back OFF the class —
+     * RETIRED is private, because nothing in the package may branch on it, and
+     * reflection is how a test reads a fact it must not make public.
+     *
+     * Exactly 13 rows, and no fourteenth: a row for a name the class does not
+     * retire is an instruction to rewrite a type that still works.
+     */
+    public function testReadmeNamesEveryRetiredTypeAndItsCanonicalName(): void
+    {
+        $retired = (new ReflectionClass(NTDST_FieldTypes::class))->getConstant('RETIRED');
+
+        $this->assertIsArray($retired, 'NTDST_FieldTypes::RETIRED is the fact this table copies.');
+
+        $rows = $this->fieldTypeRows();
+
+        $this->assertCount(
+            count($retired),
+            $rows,
+            'README\'s "Field types" table must have one row per retired name, and no more.',
+        );
+
+        foreach ($retired as $name => $canonical) {
+            $this->assertArrayHasKey(
+                $name,
+                $rows,
+                "NTDST_FieldTypes retires '{$name}', and README's migration table never names it.",
+            );
+            $this->assertSame(
+                $canonical,
+                $rows[$name],
+                "README sends '{$name}' to '{$rows[$name]}'; the vocabulary sends it to '{$canonical}'.",
+            );
+        }
+    }
+
+    /**
+     * The one storage change no rename can carry: `int` keeps its sign now.
+     *
+     * A consumer who only reads the migration table renames `integer` to `int`
+     * and ships, believing nothing else moved. absint() is gone from that path,
+     * so a field that used to store 500 for -500 stores -500 — and the value
+     * saturates at PHP_INT_MAX instead of wrapping. Both halves are named, or
+     * the section is telling half a truth.
+     */
+    public function testTheFieldTypesSectionStatesTheIntSignChange(): void
+    {
+        $section = $this->fieldTypesSection();
+
+        $this->assertStringContainsString(
+            'absint',
+            $section,
+            'Name the function that left the path — that is what the reader greps for.',
+        );
+        $this->assertMatchesRegularExpression(
+            '/negative/i',
+            $section,
+            '`int` stores negatives now; a migration table alone does not say so.',
+        );
+        $this->assertStringContainsString(
+            'PHP_INT_MAX',
+            $section,
+            'A value past the platform maximum saturates; say where it lands.',
+        );
+    }
+
+    /**
+     * README's "Field types" migration table, as retired => canonical.
+     *
+     * @return array<string, string>
+     */
+    private function fieldTypeRows(): array
+    {
+        $rows = [];
+
+        foreach (explode("\n", $this->fieldTypesSection()) as $line) {
+            if (preg_match('/^\| `([a-z_]+)` \| `([a-z_]+)` \|$/', trim($line), $m) === 1) {
+                $rows[$m[1]] = $m[2];
+            }
+        }
+
+        return $rows;
+    }
+
+    /**
+     * The "Field types" block of README's `### 5.0.0` section.
+     *
+     * Anchored on the bold lead-in and closed by the next `###`/`**` heading,
+     * so a later 5.0.0 subsection that happens to spell a type name cannot be
+     * read as a migration row.
+     */
+    private function fieldTypesSection(): string
+    {
+        $readme = file_get_contents(dirname(__DIR__, 2) . '/README.md');
+
+        $this->assertMatchesRegularExpression(
+            '/^\*\*Field types — .*$/m',
+            $readme,
+            'README\'s 5.0.0 section must lead its field-type block with `**Field types — …**`.',
+        );
+
+        $from = strpos($readme, '**Field types — ');
+        $end = strpos($readme, "\n### ", $from);
+
+        return substr($readme, $from, $end === false ? null : $end - $from);
+    }
+
     public function testThePackageNeverClaimsToBeOlderThanWhatItShips(): void
     {
         // F2 — v3.0.0 shipped with `Version: 2.4.1` in its header while

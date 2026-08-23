@@ -115,6 +115,13 @@ to `/wp-json/` in core's own JS that is not `wp.apiFetch`; an `Origin`/`Referer`
 check standing in for the nonce.
 **Mechanical check:** `grep -rn "wp_create_nonce\|wp_verify_nonce\|check_ajax_referer\|get_nonce\|HTTP_ORIGIN\|HTTP_REFERER" --include=*.php --include=*.js api core admin assets` → empty. `grep -rn "fetch(" assets/js` → only `wp.apiFetch`.
 **Status:** established by phase 3 (today `api/Actions.php` and `assets/js/ntdst-api.js` violate it).
+One hit is NOT a violation and never was: `admin/MetaboxGenerator.php:1866`'s
+`wp_verify_nonce(wp_unslash($_POST[$nonce_name]), …)`, paired with the
+`wp_nonce_field()` calls at `:344` and `:714`. A classic-editor metabox is a
+WordPress ADMIN FORM POST, and that pair IS WordPress's own CSRF gate for one —
+core mints nothing of its own there and invents no second token. This invariant is
+about core's HTTP surface, where the token is `wp_rest` and
+`rest_cookie_check_errors()` decides.
 
 ## INV-5 — Core keeps no table WordPress already keeps
 
@@ -171,6 +178,114 @@ on `$_SERVER['REMOTE_ADDR']` instead of `NTDST_ClientIp`.
 **Mechanical check:** `grep -rn "set_transient\|get_transient" --include=*.php api core admin services support` → only `support/RateLimiter.php` counts attempts. (`support` is in the list on purpose: without it the check never reads the one file it is about. `admin/MetaboxGenerator.php`'s `SAVE_ERROR_TRANSIENT_PREFIX` is a hit and not a counter — it parks one save-error MESSAGE for one redirect and is consumed on read.) In `guard()`, `$permission($request)` precedes `RateLimiter::attempt`.
 **Status:** holds today (`f42c732`); baseline's login throttle converges on it (`ntdst-baseline` `51f7e2e`).
 
+## INV-8 — One field-type vocabulary; a type name resolves in one table
+
+Every field type name on this site resolves in `NTDST_FieldTypes`. One entry says
+what sanitizes a value, what it publishes as, what draws it, whether it may sit in
+a repeater row, and how it reads back. A name used to mean four things in four
+files, and four tables drift: a `bool` was cleaned one way on the metabox path and
+another on the model path, and adding a type meant editing seven places.
+
+The set is CLOSED — 17 names, no filter and no registration method. A pluggable
+vocabulary is one a plugin can widen with a type whose sanitizer is a no-op.
+
+**Convergence point:** `api/FieldTypes.php`. `NTDST_FieldTypes::get()` is the one
+read of the table; `declaredType()` is the one answer to "what type does this
+declaration NAME"; `rowKey()` is the one answer to "what key is a cell stored
+under"; `assertDeclarations()` is the one place a `fields` array is judged. The
+model's constructor and `NTDST_MetaboxGenerator::register()` both call it, and
+neither keeps a copy of a rule.
+**Bypass smell:** a `match` / `switch` / `===` over a TYPE NAME anywhere else; a
+second list of type names (a `const TYPES`, a `$sanitizers` map built from
+literals, a metabox `sanitize_field()`); a default type spelled by hand; a
+per-caller copy of the row-key rule.
+**Mechanical check:** TWO commands, both run from the package root.
+
+```sh
+N='array|bool|boolean|callback|checkbox|content|date|datetime|decimal|double|email|file|float|gallery|html|image|int|integer|json|longtext|media|number|person|post_relation|relation|repeater|select|signed_int|string|text|textarea|url|wysiwyg'
+
+# (A) a switch/match head, a case, a type-name pair, a declaration, a comparison
+grep -rnE "(switch|\bmatch) *\(|case '($N)'|'($N)' *, *'|=> *'($N)'|[!=]== *'($N)'"'|[!=]== *"('"$N"')"' \
+    --include=*.php api core admin services support \
+  | grep -vE "^(\./)?api/FieldTypes\.php|(^|/)vendor/|(^|/)tests/" \
+  | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"
+
+# (B) a second TABLE of them
+grep -rnE '(const|static +\??array +\$)[ A-Za-z_]*[Tt][Yy][Pp][Ee][Ss]?[A-Za-z_]* *=' \
+    --include=*.php api core admin services support \
+  | grep -vE "^(\./)?api/FieldTypes\.php|(^|/)vendor/|(^|/)tests/"
+```
+
+Every part of (A)'s form is load-bearing:
+
+- The comparison alternative is SUBJECT-AGNOSTIC. The first version pinned it to
+  `$…type…` and missed `declaredType() === 'repeater'` and
+  `($config['type'] ?? '') === 'image'` — the two shapes a real second vocabulary
+  is written in.
+- `(switch|\bmatch) *\(` is restricted ONLY by the file exclusions, so a
+  `match ($entry->control)` head surfaces and has to be justified. The `\b` keeps
+  `preg_match(` out; without it every regex call in the package is a hit.
+- The double-quoted alternative reads the media-picker JS that
+  `admin/MetaboxGenerator.php` emits inline. Inline JS compares with `"`, so a
+  single-quoted pattern never looks at it.
+- The name list carries the 17 canonical names, the 13 in `RETIRED`, the two
+  CONTROL names that are not types (`media`, `checkbox`), and `callback` — the
+  render directive that has no entry.
+- The last filter drops COMMENT lines, the way INV-1's does. A docblock reading
+  `@param string $field Field to match (term_id, …)` is prose, not a switch.
+
+Run at `24a214c`, (A) returns **30 lines** and (B) returns **1**, and every one of
+them is named below. Anything else is a bypass.
+
+**Deliberate exceptions:**
+- **A `match`/`switch` head over something that is not a type name** —
+  `api/Rest.php:467` (`match (true)`), `api/Rest.php:678` (`match ($permission)`),
+  `core/LogLevel.php:17` (`match ($this)`, an enum), `api/Data.php:481`
+  (`match ($key)` over WordPress POST COLUMN names, not meta field types).
+- **`admin/MetaboxGenerator.php:940` — `match ($control)`.** The one control
+  switch, and it reads `$control` OFF the registry entry. It is the rendering half
+  of the same table, not a copy of it: a new type adds a row here and nowhere else.
+- **The `callback` render directive** — `admin/MetaboxGenerator.php:801`, `:1906`,
+  `:1945`. `callback` has no entry on purpose: the field draws itself and the
+  consumer's code owns what it stores. Both the render side and the save side must
+  step past it before they ask the registry anything, or a posted `callback` field
+  throws and kills the whole edit screen.
+- **The `media` arm** — `admin/MetaboxGenerator.php:1679` reads `image` against
+  `file` to choose the picker's library, and the picker JS at `:1762`, `:1765` and
+  `:1777` compares its own `mediaType` string. One control serves two types, and
+  which of the two is a fact only the declaration holds.
+- **CONTROL-name comparisons** — `admin/MetaboxGenerator.php:835` (`checkbox` and
+  `media` carry no native `required`), `:852` (`select` and `json` take no readonly
+  attribute), `:856` (`decimal` displays differently), `:1395` (a row cell whose
+  control is `media`), `:1955` (`relation` / `gallery` / `repeater` clear when they
+  are absent from the POST). Each asks about the CONTROL the registry entry names,
+  never about the declared type name. That is the direction this invariant wants.
+- **`admin/RelationField.php:158`, `:261`** — `=== 'relation'` selectors that pick
+  the relation fields out of a declared `fields` array. Structural, and INV-2 moves
+  this file in phase 3.
+- **`api/Data.php:285`** — `=== 'repeater'`, the one structural test: a repeater
+  publishes an OBJECT schema built from `sub_fields`, not a leaf. The table has no
+  "is structural" column, and one test is cheaper than one more column.
+- **JSON-Schema type words** — `api/Data.php:206`
+  (`in_array($type, ['array', 'object'], true)`) and `:329` (`'type' => 'array'`).
+  `array` and `object` there are JSON-SCHEMA types being written INTO a schema.
+  They are the same two words as two field types and an entirely different
+  vocabulary. This is the false-positive SHAPE to recognise, not a second table.
+- **WordPress's own vocabularies** — `api/Data.php:1222` and `:2208`, and
+  `services/Logger.php:416`. `date` there is a `WP_Query` `orderby` value and a
+  column name.
+- **`services/Logger.php:93`–`:97`** — the Logger model DECLARING its own fields by
+  canonical name. That is the vocabulary being USED, which is the thing this
+  invariant exists to make possible.
+- **(B)'s one hit — `api/Response.php:32`, `$mimeTypes`.** MIME types, not field
+  types: the `[Tt][Yy][Pp][Ee][Ss]?` fragment catches the word. It is an INV-5 item
+  (WordPress keeps that table as `wp_get_mime_types()`) and INV-5 already lists it
+  as outstanding for phase 4.
+
+**Status:** established by field-types Clusters A–C; code holds at `ba283d3` (the
+last commit that changed code). The check was run at `24a214c`: (A) 30 hits, all
+named; (B) 1 hit, named.
+
 ---
 
 ## Deliberate exceptions
@@ -208,4 +323,18 @@ Things core does that WordPress also does, kept on purpose. Each names why.
   helper; the RFC 5987 filename pair and `Content-Length` are the policy one
   consumer (daan's press kit) got three-quarters right by hand. `nosniff` is
   `send_nosniff_header()`.
+- **`NTDST_FieldTypes::nested()` is not `map_deep()`.** WordPress's helper
+  applies one callback to every leaf and leaves the keys alone. `array` and `json`
+  need the opposite on both counts: a typed scalar must stay typed (a JSON `false`
+  must not become `""`), and a KEY is a meta-ish identifier, so it goes through
+  `sanitize_key()` while the VALUE goes through `sanitize_text_field()`. One
+  callback cannot say two things. The recursion is ours; the two cleaning functions
+  are WordPress's.
+- **`=== 'repeater'` and `=== 'relation'` outside `api/FieldTypes.php`.**
+  `api/Data.php:285` asks whether a field publishes an OBJECT schema rather than a
+  leaf; `admin/RelationField.php:158` and `:261` pick the relation fields out of a
+  declared `fields` array. Both are STRUCTURAL questions about one type, not a
+  second vocabulary — the table has no "is structural" column, and adding one to
+  answer three lines is the more expensive copy. INV-8 names them and the check
+  surfaces them on every run.
 - **`NTDST_RateLimiter`, `NTDST_ClientIp`.** WordPress has neither.
