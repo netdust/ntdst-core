@@ -290,11 +290,79 @@ final class FieldTypesTest extends TestCase
         );
         sort($public);
 
-        $this->assertSame(['get', 'names', 'rowKey'], $public);
+        // Five, and the two new ones are the RULES that used to live in the
+        // callers: what type a declaration names (declaredType) and which
+        // declarations the vocabulary refuses outright (assertDeclarations).
+        // Both were copied into NTDST_Data_Model and NTDST_MetaboxGenerator,
+        // and a copy of a rule is a second vocabulary (INV-8).
+        $this->assertSame(['assertDeclarations', 'declaredType', 'get', 'names', 'rowKey'], $public);
         $this->assertTrue($class->isFinal(), 'NTDST_FieldTypes must be final.');
-        $this->assertTrue($class->getMethod('get')->isStatic());
-        $this->assertTrue($class->getMethod('names')->isStatic());
-        $this->assertTrue($class->getMethod('rowKey')->isStatic());
+
+        foreach ($public as $method) {
+            $this->assertTrue(
+                $class->getMethod($method)->isStatic(),
+                "NTDST_FieldTypes::{$method}() must be static — the table is the class.",
+            );
+        }
+    }
+
+    /**
+     * THE DECLARATION RULE, and there is one of it: the type a declaration NAMES.
+     *
+     * A bare string IS the type; an array says so under `type`; a declaration
+     * with neither is `text`, because a label-only field is the commonest
+     * declaration on the fleet and it must not fatal at init.
+     *
+     * Four readers asked this question and each carried its own answer — the
+     * model's constructor, its sanitizer binding, the metabox render and the
+     * metabox save — which is a second vocabulary in four places (INV-8). One
+     * of them defaulted a missing type to `'string'`, a name v5.0.0 retired.
+     *
+     * @dataProvider declarationProvider
+     */
+    public function testTheDeclarationRuleIsTheVocabularysAndDefaultsToText(mixed $declaration, string $expected): void
+    {
+        $this->assertTrue(
+            method_exists(NTDST_FieldTypes::class, 'declaredType'),
+            'NTDST_FieldTypes::declaredType() must be the one answer to "what type does this '
+                . 'declaration name" — every reader of a `fields` array asks it.',
+        );
+
+        $this->assertSame($expected, NTDST_FieldTypes::declaredType($declaration));
+    }
+
+    /** @return array<string, array{0: mixed, 1: string}> */
+    public static function declarationProvider(): array
+    {
+        return [
+            'a bare string is the type'      => ['int', 'int'],
+            'an array says so under type'    => [['type' => 'int', 'min' => 0], 'int'],
+            'no type at all is text'         => [['label' => 'Notes'], 'text'],
+            'an empty type is text'          => [['type' => ''], 'text'],
+            'a null type is text'            => [['type' => null], 'text'],
+            'an empty declaration is text'   => [[], 'text'],
+            'an empty string is text'        => ['', 'text'],
+            'null is text'                   => [null, 'text'],
+        ];
+    }
+
+    /**
+     * A JUNK type is not quietly rewritten to `text`: it is carried to get(),
+     * which refuses it by name.
+     *
+     * "Someone wrote no type" and "someone wrote `'type' => 123`" are different
+     * mistakes, and only the first one is legal. A rule that answered `text` for
+     * both would silently store a number field as text on every site that
+     * typo'd a declaration.
+     */
+    public function testAJunkTypeStillReachesTheVocabularyAndIsRefusedByName(): void
+    {
+        $this->assertTrue(method_exists(NTDST_FieldTypes::class, 'declaredType'), 'declaredType() is missing.');
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage("Unknown field type '123'.");
+
+        NTDST_FieldTypes::get(NTDST_FieldTypes::declaredType(['type' => 123]));
     }
 
     /**

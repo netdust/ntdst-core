@@ -15,7 +15,7 @@
 //   renders through one renderer keyed by the registry's control, in a row or at
 //   top level, and an unknown control is a fault, never a text box."
 //
-// FOUR FEATURES, in the order this file asserts them:
+// SIX FEATURES, in the order this file asserts them:
 //
 //   1. THE ROUND TRIP (SC-4, spec FR-5/FR-6/FR-7). A model declaring one field
 //      per TYPE renders a screen; the names that screen EMITS are the shape the
@@ -41,6 +41,13 @@
 //   4. HOSTILE VALUES THROUGH EVERY CONTROL (threat rows #1/#5) — asserted in
 //      MetaboxGeneratorRenderTest::testEveryControlEscapesAHostileValue(), which
 //      already owns the real-escaping harness. See that file.
+//   5. THE NONCE IS THE POST'S. The pair a screen emits is HARVESTED and posted
+//      back: the screen for THIS post is what saves it, and the token another
+//      post's screen minted saves nothing here (sentinel, Cluster C gate).
+//   6. THE DECLARATION IS THE ALLOW-LIST. A posted key the screen never declared
+//      cannot become a wp_posts COLUMN — `ntdst_fields[post_status]` and
+//      `ntdst_fields[post_author]` are the escalation, and they are asserted
+//      against the REAL model, which is what maps them (sentinel, Cluster C gate).
 //
 // HOW THIS FILE OBSERVES ALL OF THAT
 // Through the two PUBLIC entries WordPress itself calls — render_metabox() and
@@ -697,7 +704,28 @@ final class MetaboxReadsTheVocabularyTest extends TestCase
     public function testARetiredTypeOnANonDataPostTypeWritesNothingAndTellsTheEditor(): void
     {
         $this->modelTable()->setValue(null, []); // no Data model for 'legacy'
-        $this->generator()->register('legacy', ['fields' => ['title_line' => 'text', 'body' => 'wysiwyg']]);
+
+        $declaration = ['title_line' => 'text', 'body' => 'wysiwyg'];
+
+        // The FIRST refusal is now at registration, for a plain post type as for
+        // a model (reviewer S-5): the fleet's `wysiwyg` fields never reach an
+        // editor at all. The save path keeps its own refusal underneath, because
+        // a `fields` filter can still hand it a name it cannot resolve — so the
+        // declaration goes in past register() to prove that half.
+        try {
+            $this->generator()->register('legacy', ['fields' => $declaration]);
+            $this->fail('A retired name must be refused when the metabox is registered.');
+        } catch (InvalidArgumentException $e) {
+            $this->assertStringContainsString(
+                "Use 'html'.",
+                $e->getMessage(),
+                'The registration refusal names the replacement, exactly as the model\'s does.',
+            );
+        }
+
+        $models = new ReflectionProperty('NTDST_MetaboxGenerator', 'registered_models');
+        $models->setAccessible(true);
+        $models->setValue($this->generator(), ['legacy' => ['fields' => $declaration]]);
 
         $this->submit('legacy', ['title_line' => 'kept?', 'body' => '<p>hi</p>']);
         $this->save('legacy');
@@ -719,6 +747,122 @@ final class MetaboxReadsTheVocabularyTest extends TestCase
             "Use 'html'.",
             $logged,
             'The actionable message must reach the LOG, or the generic notice leaves nobody able to fix it.',
+        );
+    }
+
+    /**
+     * THE NONCE IS THE POST'S, not the post type's.
+     *
+     * One nonce per model per request meant one nonce for every post of that
+     * model: a token minted on the screen for post A verified the save of post
+     * B. The window is small — a nonce lives 12–24 hours — but inside it the
+     * token is a general-purpose "save any gig" credential, and it travels in
+     * the page of anything the holder can already edit.
+     *
+     * The round trip is HARVESTED, not assumed: whatever pair the screen emits
+     * is the pair posted back, so this pins the promise (the screen for THIS
+     * post is what saves it) and not a naming convention.
+     */
+    public function testTheNonceAScreenEmitsSavesThatPostAndNoOther(): void
+    {
+        $this->modelTable()->setValue(null, []);
+
+        // A model name of its own: render_metabox() remembers, per PROCESS,
+        // which models it has already given a nonce, so a name another case
+        // used would be silently nonce-less here.
+        $fields = ['title_line' => 'text'];
+        $this->generator()->register('per_post', ['fields' => $fields]);
+
+        $minted = [];
+        Functions\when('wp_nonce_field')->alias(function ($action, $name = '_wpnonce') use (&$minted) {
+            $minted[] = [$name, 'nonce:' . $action];
+            echo '<input type="hidden" name="' . $name . '" value="nonce:' . $action . '">';
+        });
+        // WordPress's own answer: a nonce verifies against the ACTION it was
+        // minted for, and against no other.
+        Functions\when('wp_verify_nonce')->alias(
+            static fn($value, $action = -1) => $value === 'nonce:' . $action ? 1 : false,
+        );
+
+        $this->render('per_post', $fields, self::POST_ID);
+        $this->render('per_post', $fields, self::POST_ID + 1);
+
+        $this->assertCount(
+            2,
+            $minted,
+            'Each post\'s edit screen must carry its OWN nonce. One per post type is one credential '
+                . 'that saves every post of that type.',
+        );
+        $this->assertNotSame($minted[0][1], $minted[1][1], 'And the two must not be the same token.');
+        $this->assertStringContainsString(
+            (string) self::POST_ID,
+            $minted[0][1],
+            'The action names the post it belongs to, or the two screens cannot differ.',
+        );
+
+        // The other post's nonce, replayed against this one: refused.
+        [$foreignName, $foreignValue] = $minted[1];
+        $_POST = [$foreignName => $foreignValue, 'ntdst_fields' => ['title_line' => 'pwned']];
+        $this->save('per_post', self::POST_ID);
+
+        $this->assertSame([], $this->metaWrites, 'A nonce minted for another post saves nothing here.');
+
+        // This post's own nonce, replayed as the browser would: accepted.
+        [$name, $value] = $minted[0];
+        $_POST = [$name => $value, 'ntdst_fields' => ['title_line' => 'typed']];
+        $this->save('per_post', self::POST_ID);
+
+        $this->assertSame(
+            'text:typed',
+            $this->meta['title_line'] ?? null,
+            'And the pair the screen actually emitted must save — the harvest is what makes this a '
+                . 'round trip instead of a convention.',
+        );
+    }
+
+    /**
+     * A posted key the screen never declared cannot become a POST COLUMN.
+     *
+     * The metabox walked `$_POST['ntdst_fields']` verbatim into update(), and
+     * NTDST_Data_Model maps `post_status`, `post_author` and `post_parent` onto
+     * wp_posts columns. So one extra input in the edit form — a name the site
+     * never declared — published a draft or handed it to another author, with
+     * the real model, on a real save. Asserted here against the REAL model for
+     * that reason: the columns are its half of the escalation.
+     */
+    public function testAPostedKeyOutsideTheDeclaredSetNeverBecomesAPostColumn(): void
+    {
+        $columns = [];
+        Functions\when('wp_update_post')->alias(function ($data = [], $wpError = false) use (&$columns) {
+            $columns[] = (array) $data;
+
+            return self::POST_ID;
+        });
+
+        $this->registerGig();
+        $this->submit('gig', [
+            'venue_city'  => 'Ghent',
+            'post_status' => 'publish',
+            'post_author' => '1',
+        ]);
+
+        $this->save('gig');
+
+        foreach ($columns as $written) {
+            foreach (['post_status', 'post_author'] as $column) {
+                $this->assertArrayNotHasKey(
+                    $column,
+                    $written,
+                    "A metabox save wrote the `{$column}` COLUMN from a posted field name. The edit "
+                        . 'form is not an allow-list; the declaration is.',
+                );
+            }
+        }
+
+        $this->assertSame(
+            'text:Ghent',
+            $this->stored('venue_city'),
+            'And the declared field still saves — the refusal is scoped to what was never declared.',
         );
     }
 
@@ -819,10 +963,10 @@ final class MetaboxReadsTheVocabularyTest extends TestCase
      */
     private string $lastRender = '';
 
-    private function render(string $type, array $fields): string
+    private function render(string $type, array $fields, int $postId = self::POST_ID): string
     {
         $post = new WP_Post();
-        $post->ID = self::POST_ID;
+        $post->ID = $postId;
         $post->post_type = $type;
 
         $this->lastRender = '';
@@ -911,13 +1055,13 @@ final class MetaboxReadsTheVocabularyTest extends TestCase
         ];
     }
 
-    private function save(string $type): void
+    private function save(string $type, int $postId = self::POST_ID): void
     {
         $post = new WP_Post();
-        $post->ID = self::POST_ID;
+        $post->ID = $postId;
         $post->post_type = $type;
 
-        $this->generator()->save_metabox_data(self::POST_ID, $post);
+        $this->generator()->save_metabox_data($postId, $post);
     }
 
     /** What the editor sees on the next admin request after a failed save. */

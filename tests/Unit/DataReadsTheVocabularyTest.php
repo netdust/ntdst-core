@@ -16,7 +16,9 @@
 //      names that sanitize to one key, is a fatal that NAMES the field (and the
 //      sub-field, and the canonical to write instead). Not a text box, not a
 //      silent fall-through to sanitize_text_field(), and not at save time —
-//      at init.
+//      at init. The rules are NTDST_FieldTypes::assertDeclarations()'s, and one
+//      provider drives them through BOTH callers: the model's constructor and
+//      NTDST_MetaboxGenerator::register() (reviewer S-5).
 //   2. int KEEPS ITS SIGN (FR-5, threat #4) on every write path: update(),
 //      create(), updateMeta(), updateMetaBatch(). absint() was the bug; a
 //      discount in cents is a negative int.
@@ -259,84 +261,177 @@ final class DataReadsTheVocabularyTest extends TestCase
     // ------------------------------------------- 1. refusal at registration
 
     /**
-     * FR-3/FR-5: `signed_int` folded into a signed `int`, and a bare type string
-     * is a declaration like any other. threat #7: the fatal names the field so
-     * the site owner knows WHICH declaration to fix, and the canonical so they
-     * know what to write.
-     */
-    public function testARetiredAliasWrittenAsABareTypeStringIsRefusedAtRegistration(): void
-    {
-        try {
-            $this->model(['n' => 'integer']);
-            $this->fail("Expected InvalidArgumentException for the retired type 'integer'.");
-        } catch (InvalidArgumentException $e) {
-            $this->assertStringContainsString("Field 'n'", $e->getMessage(), 'The fatal must name the field.');
-            $this->assertStringContainsString("Use 'int'", $e->getMessage(), 'The fatal must name the canonical.');
-        }
-    }
-
-    public function testARetiredAliasInTheTypeKeyIsRefusedAtRegistration(): void
-    {
-        try {
-            $this->model(['n' => ['type' => 'integer']]);
-            $this->fail("Expected InvalidArgumentException for the retired type 'integer'.");
-        } catch (InvalidArgumentException $e) {
-            $this->assertStringContainsString("Field 'n'", $e->getMessage());
-            $this->assertStringContainsString("Use 'int'", $e->getMessage());
-        }
-    }
-
-    /** D5: the vocabulary throws for anything invented, and lists what it knows. */
-    public function testAnInventedTypeNamesTheFieldAndTheKnownSet(): void
-    {
-        try {
-            $this->model(['n' => ['type' => 'gubbins']]);
-            $this->fail("Expected InvalidArgumentException for the invented type 'gubbins'.");
-        } catch (InvalidArgumentException $e) {
-            $this->assertStringContainsString("Field 'n'", $e->getMessage());
-            $this->assertStringContainsString('Known:', $e->getMessage(), 'An invention gets the known set, not a canonical.');
-            $this->assertStringNotContainsString("Use '", $e->getMessage());
-        }
-    }
-
-    /**
-     * threat #6: a field that brings its own `sanitizer` is exactly the door an
-     * attacker would use, so the registry is asked FIRST — the declaration is
-     * type-checked whether or not it also carries a callable.
-     */
-    public function testAFieldWithItsOwnSanitizerStillHasItsTypeChecked(): void
-    {
-        $this->expectException(InvalidArgumentException::class);
-
-        $this->model(['n' => ['type' => 'gubbins', 'sanitizer' => static fn($v) => $v]]);
-    }
-
-    /**
-     * threat #5 / SC-3. A `cell = false` type inside `sub_fields` renders today
-     * as a single-line text input and stores whatever that box held. It is
-     * refused at register() instead, naming the field AND the sub-field.
+     * EVERY declaration the vocabulary refuses, refused while the MODEL is
+     * being constructed — which is register() time on a site.
      *
-     * @dataProvider cellLessTypeProvider
+     * One provider, driven twice: here through the model's constructor, and in
+     * the case below through NTDST_MetaboxGenerator::register(). The rules
+     * themselves live in NTDST_FieldTypes::assertDeclarations() (reviewer S-5),
+     * because until this wave the metabox validated NOTHING: the same
+     * declaration that fatally refused to register as a model was accepted by a
+     * plain post type and only surfaced — as a save-time notice, or a text box —
+     * once an editor had typed into it.
+     *
+     * threat #5, #7: the message NAMES the field, the sub-field and the
+     * canonical to write instead, because on a site that fatal is the whole bug
+     * report.
+     *
+     * @param array<string, mixed> $fields
+     * @param list<string>         $mustSay
+     * @param list<string>         $mustNotSay
+     *
+     * @dataProvider refusedDeclarationProvider
      */
-    public function testATypeThatCannotLiveInARowIsRefusedInsideSubFields(string $type): void
-    {
+    public function testAModelRefusesEveryDeclarationTheVocabularyRefuses(
+        array $fields,
+        array $mustSay,
+        array $mustNotSay = [],
+    ): void {
         try {
-            $this->model([
-                'provenance' => [
-                    'type'       => 'repeater',
-                    'sub_fields' => [
-                        'notes' => ['type' => $type],
-                    ],
-                ],
-            ]);
-            $this->fail("Expected InvalidArgumentException for the '{$type}' sub-field.");
+            $this->model($fields);
+            $this->fail('Expected InvalidArgumentException for a declaration outside the vocabulary.');
         } catch (InvalidArgumentException $e) {
-            // FR-4 quotes this sentence for `html`; the same shape carries every
-            // cell-less name.
-            $this->assertStringContainsString(
-                "Field 'provenance' sub-field 'notes': '{$type}' cannot be a repeater sub-field",
-                $e->getMessage(),
+            $this->assertRefusal($e, $mustSay, $mustNotSay);
+        }
+    }
+
+    /**
+     * THE SAME declaration, THE SAME message, from a metabox registration on a
+     * post type with no model at all (reviewer S-5).
+     *
+     * A `fields` array is a `fields` array: the plain-post-type half of the
+     * fleet declares one too, and it reached the save path unchecked. A retired
+     * name there became a "Saving failed" notice AFTER the editor had typed a
+     * screenful; a `cell = false` sub-field became a text input that stored the
+     * escaped soup over the real markup. Both are init-time faults, on both
+     * paths, and they are the same fault — so they must carry the same words.
+     *
+     * @param array<string, mixed> $fields
+     * @param list<string>         $mustSay
+     * @param list<string>         $mustNotSay
+     *
+     * @dataProvider refusedDeclarationProvider
+     */
+    public function testAMetaboxRegistrationRefusesItWithTheSameMessage(
+        array $fields,
+        array $mustSay,
+        array $mustNotSay = [],
+    ): void {
+        $generator = (new ReflectionClass('NTDST_MetaboxGenerator'))->newInstanceWithoutConstructor();
+
+        try {
+            $generator->register('legacy', ['fields' => $fields]);
+            $this->fail(
+                'NTDST_MetaboxGenerator::register() accepted a declaration the vocabulary refuses. '
+                    . 'The rules belong to NTDST_FieldTypes::assertDeclarations(), and both callers ask it.',
             );
+        } catch (InvalidArgumentException $e) {
+            $this->assertRefusal($e, $mustSay, $mustNotSay);
+        }
+    }
+
+    /**
+     * The declarations the vocabulary refuses, and the words the refusal owes.
+     *
+     * The cell-less rows are DERIVED from the registry (`cell = false`), so this
+     * file carries no second copy of that verdict — the case below pins what the
+     * derivation currently derives to, or an empty provider would make both
+     * cases above vacuously green.
+     *
+     * @return array<string, array{0: array<string, mixed>, 1: list<string>, 2?: list<string>}>
+     */
+    public static function refusedDeclarationProvider(): array
+    {
+        $rows = [
+            // FR-3/FR-5: `signed_int` folded into a signed `int`, and a bare
+            // type string is a declaration like any other.
+            'a retired alias as a bare string' => [
+                ['n' => 'integer'],
+                ["Field 'n'", "Use 'int'"],
+            ],
+            'a retired alias under type' => [
+                ['n' => ['type' => 'integer']],
+                ["Field 'n'", "Use 'int'"],
+            ],
+            // D5: an invention gets the known set, never a canonical.
+            'an invented name' => [
+                ['n' => ['type' => 'gubbins']],
+                ["Field 'n'", 'Known:'],
+                ["Use '"],
+            ],
+            // threat #6: a field that brings its own `sanitizer` is exactly the
+            // door an attacker would use, so the type is checked first anyway.
+            'an invented name beside a sanitizer' => [
+                ['n' => ['type' => 'gubbins', 'sanitizer' => 'strval']],
+                ["Field 'n'", 'Known:'],
+            ],
+            'a retired name inside sub_fields' => [
+                ['provenance' => ['type' => 'repeater', 'sub_fields' => ['notes' => ['type' => 'wysiwyg']]]],
+                ['provenance', 'notes', "Use 'html'"],
+            ],
+            // FR-4: depth buys a cell-less type no way in — a nested repeater's
+            // rows are rendered as cells too.
+            'a cell-less type at depth two' => [
+                ['provenance' => [
+                    'type'       => 'repeater',
+                    'sub_fields' => ['rows' => [
+                        'type'       => 'repeater',
+                        'sub_fields' => ['body' => ['type' => 'html']],
+                    ]],
+                ]],
+                ['body', "'html' cannot be a repeater sub-field"],
+            ],
+            // A row is stored under rowKey() of its cell name, so two names that
+            // fold into one key are one cell: the second declaration silently
+            // takes the first one's type.
+            'two sub-field names that fold to one key' => [
+                ['provenance' => ['type' => 'repeater', 'sub_fields' => [
+                    'SubTitle' => ['type' => 'text'],
+                    'subTitle' => ['type' => 'int'],
+                ]]],
+                ['provenance', 'subtitle'],
+            ],
+            // Nothing runs a sub-field's `sanitizer`: the row walk cleans each
+            // cell by its DECLARED TYPE and never looks for a callable, so the
+            // declaration means the author believes a cell is being tightened
+            // while it is not. "Quietly does nothing" is the worst answer a
+            // security declaration can get.
+            'a sub-field that declares a sanitizer' => [
+                ['rows' => ['type' => 'repeater', 'sub_fields' => [
+                    'title' => ['type' => 'text', 'sanitizer' => 'strval'],
+                ]]],
+                ["Field 'rows' sub-field 'title': a sub-field cannot declare a 'sanitizer'."],
+            ],
+        ];
+
+        // threat #5 / SC-3: a `cell = false` type inside `sub_fields` renders as
+        // a single-line text input and stores whatever that box held.
+        foreach (self::cellLessTypeProvider() as [$type]) {
+            $rows["a cell-less '{$type}' sub-field"] = [
+                ['provenance' => ['type' => 'repeater', 'sub_fields' => ['notes' => ['type' => $type]]]],
+                ["Field 'provenance' sub-field 'notes': '{$type}' cannot be a repeater sub-field"],
+            ];
+        }
+
+        return $rows;
+    }
+
+    /**
+     * @param list<string> $mustSay
+     * @param list<string> $mustNotSay
+     */
+    private function assertRefusal(InvalidArgumentException $e, array $mustSay, array $mustNotSay): void
+    {
+        foreach ($mustSay as $fragment) {
+            $this->assertStringContainsString(
+                $fragment,
+                $e->getMessage(),
+                'The refusal must say what is wrong and what to write instead — it is the whole bug report.',
+            );
+        }
+
+        foreach ($mustNotSay as $fragment) {
+            $this->assertStringNotContainsString($fragment, $e->getMessage());
         }
     }
 
@@ -383,107 +478,6 @@ final class DataReadsTheVocabularyTest extends TestCase
             $this->storedValue('provenance'),
             'A nested repeater sanitizes its grandchildren through their declared types.',
         );
-    }
-
-    /** threat #7 at sub-field depth: the retired name is refused at init, not at save. */
-    public function testARetiredNameInsideSubFieldsIsRefusedAtRegistration(): void
-    {
-        try {
-            $this->model([
-                'provenance' => [
-                    'type'       => 'repeater',
-                    'sub_fields' => ['notes' => ['type' => 'wysiwyg']],
-                ],
-            ]);
-            $this->fail("Expected InvalidArgumentException for the retired sub-field type 'wysiwyg'.");
-        } catch (InvalidArgumentException $e) {
-            $this->assertStringContainsString('provenance', $e->getMessage(), 'Name the field.');
-            $this->assertStringContainsString('notes', $e->getMessage(), 'Name the sub-field.');
-            $this->assertStringContainsString("Use 'html'", $e->getMessage(), 'Name the canonical.');
-        }
-    }
-
-    /**
-     * FR-4 says EVERY sub-field resolves through get(). A nested repeater's
-     * sub-fields are sub-fields, and its rows are rendered as cells too — so
-     * depth does not buy a cell-less type a way in.
-     */
-    public function testACellLessTypeIsRefusedAtDepthTwo(): void
-    {
-        try {
-            $this->model([
-                'provenance' => [
-                    'type'       => 'repeater',
-                    'sub_fields' => [
-                        'rows' => [
-                            'type'       => 'repeater',
-                            'sub_fields' => ['body' => ['type' => 'html']],
-                        ],
-                    ],
-                ],
-            ]);
-            $this->fail('Expected InvalidArgumentException for the html sub-field at depth 2.');
-        } catch (InvalidArgumentException $e) {
-            $this->assertStringContainsString('body', $e->getMessage(), 'Name the sub-field that is refused.');
-            $this->assertStringContainsString("'html' cannot be a repeater sub-field", $e->getMessage());
-        }
-    }
-
-    /**
-     * The Cluster A collision ruling. A row is stored under sanitize_key() of
-     * its cell name, so `SubTitle` and `subTitle` are ONE stored key — the
-     * declaration map keeps whichever was declared last and the other field
-     * silently loses its type on every write. Two names, one key, no way to
-     * tell them apart: refused at register().
-     */
-    public function testTwoSubFieldNamesThatSanitizeToOneKeyAreRefused(): void
-    {
-        try {
-            $this->model([
-                'provenance' => [
-                    'type'       => 'repeater',
-                    'sub_fields' => [
-                        'SubTitle' => ['type' => 'text'],
-                        'subTitle' => ['type' => 'int'],
-                    ],
-                ],
-            ]);
-            $this->fail('Expected InvalidArgumentException for two sub-field names that sanitize to one key.');
-        } catch (InvalidArgumentException $e) {
-            $this->assertStringContainsString('provenance', $e->getMessage(), 'Name the field.');
-            $this->assertStringContainsString('subtitle', $e->getMessage(), 'Name the key they collide on.');
-        }
-    }
-
-    /**
-     * A SUB-FIELD CANNOT BRING ITS OWN SANITIZER (security review, Cluster B).
-     *
-     * A top-level field's `sanitizer` composes after the registry's and can only
-     * tighten. A sub-field's is not wired to anything at all: the row walk
-     * sanitizes each cell by its declared type and never looks for a callable,
-     * so a declaration that carries one has been silently ignored — the author
-     * believes a cell is being tightened, and it is not. It is refused at
-     * register() instead, naming the field and the sub-field, because "quietly
-     * does nothing" is the worst answer a security declaration can get.
-     */
-    public function testASubFieldCannotDeclareItsOwnSanitizer(): void
-    {
-        try {
-            $this->model([
-                'rows' => [
-                    'type'       => 'repeater',
-                    'sub_fields' => [
-                        'title' => ['type' => 'text', 'sanitizer' => static fn($v) => $v],
-                    ],
-                ],
-            ]);
-            $this->fail('Expected InvalidArgumentException for a sub-field that declares a sanitizer.');
-        } catch (InvalidArgumentException $e) {
-            $this->assertSame(
-                "Field 'rows' sub-field 'title': a sub-field cannot declare a 'sanitizer'.",
-                $e->getMessage(),
-            );
-        }
     }
 
     // ------------------------------------------------- 2. int keeps its sign
@@ -821,6 +815,13 @@ final class DataReadsTheVocabularyTest extends TestCase
             'rowKey'              => ['rowKey'],
             'formatRepeaterField' => ['formatRepeaterField'],
             'decodeArrayField'    => ['decodeArrayField'],
+            // The DECLARATION rules went the same way (reviewer S-5): what type
+            // a declaration names, and which declarations are refused outright,
+            // are the vocabulary's questions — asked by the model's constructor
+            // AND by NTDST_MetaboxGenerator::register(), which had no answer of
+            // its own at all.
+            'assertRowTypes'      => ['assertRowTypes'],
+            'declaredType'        => ['declaredType'],
         ];
     }
 

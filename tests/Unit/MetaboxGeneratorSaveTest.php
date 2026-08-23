@@ -22,14 +22,23 @@
 //   3. THE VOCABULARY'S OWN ANSWERS, NOT THE METABOX'S. `int '-500'` keeps its
 //      sign (absint() was the bug), `bool 'false'` is FALSE (WordPress's word:
 //      the old `(bool) $value` arm answered true), a repeater row whose only
-//      answer is `'0'` is KEPT and a row with no answer at all is dropped, and
-//      a relation absent from the POST is the empty list.
-//   4. A SANITIZER THAT THROWS IS A NOTICE, NEVER A WHITE SCREEN. The
-//      unslash/sanitize loop runs INSIDE the save's try, so an unknown type in
-//      a field declaration surfaces as the editor-facing save-error notice with
-//      NOTHING written — not a fatal that loses every field on the screen.
-//   5. THE SECOND TABLE IS GONE. NTDST_MetaboxGenerator has no sanitize_field()
-//      of its own; PackageBootIntegrityTest's removed-symbol sweep pins the name.
+//      answer is `'0'` is KEPT, and every PICKER absent from the POST — relation,
+//      gallery, repeater — is the empty list, because absent is how the screen
+//      says "emptied". Which fields those are is the REGISTRY's answer (their
+//      `control`), never a name matched in this file: a declaration the save
+//      cannot resolve stops the save instead of being skipped.
+//   4. A SAVE THAT CANNOT COMPLETE IS A NOTICE, NEVER A WHITE SCREEN AND NEVER A
+//      SILENT HALF. The unslash/sanitize loop runs INSIDE the save's try, so an
+//      unresolvable declaration surfaces as the editor-facing notice with
+//      NOTHING written; a row the model cannot find is refused rather than
+//      forked into a second post.
+//   5. THE BROWSER DOES NOT CHOOSE WHAT IS WRITTEN. Only DECLARED fields reach
+//      the store, on either branch: `ntdst_fields[post_author]` is not a field,
+//      and neither is `_thumbnail_id`. A `callback` field is declared and still
+//      not written — it renders itself and the consumer owns its storage.
+//      (The deleted sanitize_field() is pinned by name in
+//      PackageBootIntegrityTest's removed-symbol sweep, with the rest of the
+//      symbols this release removed.)
 //
 // HOW THIS FILE OBSERVES ALL OF THAT
 // Through save_metabox_data() — the callback WordPress itself fires on
@@ -79,13 +88,16 @@ if (!class_exists('WP_Post')) {
 defined('MINUTE_IN_SECONDS') || define('MINUTE_IN_SECONDS', 60);
 
 /**
- * The model the edit screen saves into — a RECORDER in front of the real thing.
+ * The model the edit screen saves into — a RECORDER standing in for the ORM.
  *
- * update() records the array it was handed BEFORE anything touches it (that is
- * promise 1, and it can only be seen from the model's side of the call), then
- * runs the model's REAL sanitize chain — registry entry first, declared
- * `sanitizer` override on its output — so promise 2 is counted against the
- * shipped closures rather than against a hand-written imitation of them.
+ * It OVERRIDES update()/create(): nothing here writes a post or a meta row, so
+ * no case in this file observes storage through the model. What it observes is
+ * the CALL — the array the metabox handed the model, before anything touched it
+ * (promise 1, visible only from the model's side) — and then what the model's
+ * OWN sanitize chain makes of that array, by calling the shipped
+ * sanitizeData(): registry entry first, declared `sanitizer` override on its
+ * output. So promise 2 is counted against the shipped closures and never
+ * against a hand-written imitation of them.
  *
  * Everything is static because NTDST_Data_Manager::get() hands out a CLONE:
  * an instance property recorded on the clone is invisible to the test that
@@ -102,11 +114,15 @@ final class MetaboxSaveRecordingModel extends NTDST_Data_Model
     /** What the model's own sanitize chain made of the last update(). */
     public static array $sanitized = [];
 
+    /** What find() answers. FALSE is a row this model cannot see (R-S4). */
+    public static bool $findsTheRow = true;
+
     public static function reset(): void
     {
         self::$updateCalls = [];
         self::$createCalls = [];
         self::$sanitized = [];
+        self::$findsTheRow = true;
     }
 
     public function find(int $id, $status = 'publish')
@@ -114,7 +130,9 @@ final class MetaboxSaveRecordingModel extends NTDST_Data_Model
         // The row exists — the edit screen is editing it. Returned as a plain
         // object so this file makes no claim about the ORM's read path, which
         // is not what T05 promises.
-        return (object) ['ID' => $id, 'post_type' => $this->post_type];
+        return self::$findsTheRow
+            ? (object) ['ID' => $id, 'post_type' => $this->post_type]
+            : false;
     }
 
     public function update(int $id, array $data)
@@ -158,6 +176,12 @@ final class MetaboxGeneratorSaveTest extends TestCase
     /** How many times each field's declared `sanitizer` override ran. */
     private array $spy = [];
 
+    /** Every do_action() call, in order: [hook, ...args] — the extensibility contract. */
+    private array $hooks = [];
+
+    /** Every wp_update_post() call: the array of post COLUMNS it was handed. */
+    private array $postWrites = [];
+
     /** The manager's model table, restored in tearDown — it is STATIC and process-wide. */
     private mixed $modelsBackup = null;
 
@@ -175,6 +199,8 @@ final class MetaboxGeneratorSaveTest extends TestCase
         $this->transients = [];
         $this->calls = [];
         $this->spy = [];
+        $this->hooks = [];
+        $this->postWrites = [];
         $_POST = [];
         $_GET = [];
         $GLOBALS['_ntdst_test_log'] = [];
@@ -238,8 +264,21 @@ final class MetaboxGeneratorSaveTest extends TestCase
         // ---- hooks: recorded, never fired ----
         Functions\when('add_action')->justReturn(true);
         Functions\when('remove_action')->justReturn(true);
-        Functions\when('do_action')->justReturn(null);
+        Functions\when('do_action')->alias(function (...$args) {
+            $this->hooks[] = $args;
+
+            return null;
+        });
         Functions\when('apply_filters')->returnArg(2);
+
+        // The post COLUMNS. A metabox writes META; anything that reaches
+        // wp_update_post() from a posted field is a column an editor named
+        // themselves (post_status, post_author).
+        Functions\when('wp_update_post')->alias(function ($data = [], $wpError = false) {
+            $this->postWrites[] = (array) $data;
+
+            return (int) (((array) $data)['ID'] ?? self::POST_ID);
+        });
 
         // ---- the store ----
         Functions\when('update_post_meta')->alias(function ($id, $key, $value) {
@@ -361,15 +400,20 @@ final class MetaboxGeneratorSaveTest extends TestCase
             $this->spy['ghost'] ?? 0,
             'A field the model does not declare has no declared sanitizer to run — it must not borrow another field\'s.',
         );
+        // $sanitized is what the model's OWN chain made of the payload — the
+        // recorder called the shipped sanitizeData() on it. It is not a stored
+        // value: nothing in this file writes one through the model.
         $this->assertArrayHasKey(
             'ghost',
             MetaboxSaveRecordingModel::$sanitized,
-            'An undeclared key still reaches the model and is still cleaned there — never stored as it was posted.',
+            'A field the metabox declares but the MODEL does not still reaches the model, and the '
+                . 'model still cleans it — the metabox must not drop it and must not clean it either.',
         );
         $this->assertSame(
             'text:boo',
             MetaboxSaveRecordingModel::$sanitized['ghost'],
-            'An undeclared key gets the text answer, from the model, once.',
+            'The model gives an undeclared key the text answer, once — so it can never be handled '
+                . 'exactly as it was posted.',
         );
     }
 
@@ -421,17 +465,12 @@ final class MetaboxGeneratorSaveTest extends TestCase
         );
     }
 
-    public function testABoolFieldSavedAsZeroStoresFalseAndOneStoresTrue(): void
-    {
-        $this->registerNote();
-        $this->submit('note', ['featured' => '0']);
-        $this->save('note');
-        $this->assertFalse($this->meta['featured'] ?? null, "'0' is false.");
-
-        $this->submit('note', ['featured' => '1']);
-        $this->save('note');
-        $this->assertTrue($this->meta['featured'] ?? null, "'1' is true.");
-    }
+    // The `'0'` / `'1'` pair that stood here is FieldTypesTest's question — the
+    // vocabulary's answer for `bool`, asserted against WordPress's own
+    // wp_validate_boolean() there. What this file owes is that the metabox asks
+    // the vocabulary at all, and the case above ('false' → FALSE, the answer the
+    // metabox's deleted `(bool) $value` arm got wrong) is the one that shows it
+    // (simplicity S18).
 
     public function testANonDataPostTypeStoresTheRegistrySanitizedValueOncePerField(): void
     {
@@ -446,38 +485,188 @@ final class MetaboxGeneratorSaveTest extends TestCase
         $this->assertSame(1, $this->calls['sanitize_textarea_field'] ?? 0, 'Once per field.');
     }
 
-    public function testARelationFieldClearedInTheEditorReachesADataModelAsTheEmptyList(): void
+    /**
+     * A picker with every item removed posts NOTHING, so ABSENT must mean
+     * CLEARED — for every control that is built out of the inputs it emits.
+     *
+     * `relation`, `gallery` and `repeater` all submit one input PER PICKED ITEM
+     * and, when the field is emptied, only their container. If absent meant
+     * "unchanged", the editor could never empty one of these fields from the
+     * screen: the old value would stand for ever, whatever the editor did.
+     */
+    public function testEveryPickerClearedInTheEditorReachesADataModelAsTheEmptyList(): void
     {
-        // A relation with every item removed posts NOTHING. Absent must mean
-        // "cleared", or the editor can never empty the field.
         $this->registerGig();
         $this->submit('gig', ['venue_city' => 'x']);
 
         $this->save('gig');
 
-        $this->assertSame(
-            [],
-            MetaboxSaveRecordingModel::$updateCalls[0][1]['tags'] ?? null,
-            'A relation absent from the POST is the empty list, not a missing key.',
-        );
+        $payload = MetaboxSaveRecordingModel::$updateCalls[0][1] ?? [];
+
+        foreach (['tags' => 'relation', 'slots' => 'repeater'] as $field => $control) {
+            $this->assertSame(
+                [],
+                $payload[$field] ?? null,
+                "A `{$control}` field absent from the POST is the empty list, not a missing key: "
+                    . 'a missing key leaves the stored value standing and the field can never be emptied.',
+            );
+        }
     }
 
-    public function testARelationFieldClearedInTheEditorDeletesTheMetaOnANonDataPostType(): void
+    public function testEveryPickerClearedInTheEditorDeletesTheMetaOnANonDataPostType(): void
     {
         $this->registerNote();
         $this->submit('note', ['title_line' => 'x']);
 
         $this->save('note');
 
-        $this->assertContains(
-            'related',
-            $this->metaDeletes,
-            'An empty list is DELETED rather than stored as a serialized empty array.',
+        foreach (['related' => 'relation', 'covers' => 'gallery', 'slots' => 'repeater'] as $field => $control) {
+            $this->assertContains(
+                $field,
+                $this->metaDeletes,
+                "An emptied `{$control}` field is DELETED rather than stored as a serialized empty array.",
+            );
+            $this->assertSame(
+                [],
+                array_values(array_filter($this->metaWrites, static fn(array $w): bool => $w[0] === $field)),
+                "And `{$field}` is never written.",
+            );
+        }
+    }
+
+    /**
+     * The SAME clearing rule when the form posts no `ntdst_fields` at all.
+     *
+     * The nonce has already proved the edit form was submitted. A screen whose
+     * every field is a picker and whose every picker was emptied posts exactly
+     * this: a nonce and nothing else. The old `empty($fields_data)` early return
+     * treated it as "nothing to do", so the one save that MUST clear was the one
+     * save that returned first (sentinel, this gate).
+     *
+     * A non-array `ntdst_fields` is the same request with a hostile shape
+     * (`?ntdst_fields=x`): it must clear the same way and raise no PHP warning —
+     * `failOnWarning` in phpunit.xml is what makes that half enforceable.
+     *
+     * @dataProvider fieldlessPosts
+     */
+    public function testAFormWithNoFieldsAtAllStillClearsEveryPicker(mixed $posted): void
+    {
+        $this->registerNote();
+        $_POST = ['ntdst_note_nonce' => 'a-valid-looking-nonce'];
+
+        if ($posted !== null) {
+            $_POST['ntdst_fields'] = $posted;
+        }
+
+        $this->save('note');
+
+        foreach (['related', 'covers', 'slots'] as $field) {
+            $this->assertContains(
+                $field,
+                $this->metaDeletes,
+                "The form was submitted — the nonce proves it — so an absent `{$field}` is a cleared "
+                    . 'one. An early return here is a picker that can never be emptied.',
+            );
+        }
+    }
+
+    /** @return array<string, array{0: mixed}> */
+    public static function fieldlessPosts(): array
+    {
+        return [
+            'no ntdst_fields key at all' => [null],
+            'an empty ntdst_fields'      => [[]],
+            'a non-array ntdst_fields'   => ['x'],
+        ];
+    }
+
+    /**
+     * A declaration the save path CANNOT RESOLVE stops the save; it is never
+     * quietly skipped (invariant audit, CRITICAL).
+     *
+     * The clearing rule above has to ask what CONTROL a declared field draws,
+     * and until this wave it asked the raw declared NAME instead — so a field
+     * declared with a retired alias ('person', which v5.0.0 folded into
+     * 'relation') simply did not match, and an emptied picker was silently left
+     * standing while the rest of the screen saved around it. Keyed on the
+     * registry's answer, the same declaration throws inside the save's try and
+     * becomes the editor-facing notice: nothing written, nothing deleted,
+     * and the editor is told.
+     *
+     * The declaration is injected past register(), which now refuses it at init
+     * (reviewer S-5) — the save path must fail closed on its own anyway, because
+     * the next retired name is a `fields` filter away.
+     */
+    public function testAnUnresolvableDeclarationStopsTheSaveInsteadOfSkippingTheField(): void
+    {
+        $this->registerRaw('legacy', [
+            'title_line' => 'text',
+            'people'     => 'person', // retired: 'relation'
+        ]);
+        $this->submit('legacy', ['title_line' => 'kept?']);
+
+        $generator = $this->generator();
+        $generator->save_metabox_data(self::POST_ID, $this->wpPost('legacy'));
+
+        $this->assertSame([], $this->metaWrites, 'A refused declaration writes nothing — not even the fields it could resolve.');
+        $this->assertSame([], $this->metaDeletes, 'And deletes nothing: a half-cleared post is worse than a refused save.');
+        $this->assertStringContainsString(
+            'Saving failed',
+            $this->noticeFor($generator),
+            'The editor is TOLD. Skipping the field silently is how a cleared picker comes back.',
         );
-        $this->assertSame(
-            [],
-            array_values(array_filter($this->metaWrites, static fn(array $w): bool => $w[0] === 'related')),
-            'And it is never written.',
+    }
+
+    /**
+     * A `callback` field is SKIPPED by the save, on both branches.
+     *
+     * `callback` is a render directive, not a vocabulary entry: the field draws
+     * itself and the consumer's own code owns whatever it stores. The render
+     * side already answers it before the registry is asked; the save side did
+     * not, so a `callback` field that posted anything under `ntdst_fields[…]`
+     * reached NTDST_FieldTypes::get('callback'), threw, and killed the whole
+     * save — every other field on the screen lost with it (simplicity I13, live
+     * on two fleet sites).
+     *
+     * Skipped, not stored and not a throw: the declaration says this field is
+     * not the metabox's to write. It is registered through the PUBLIC register()
+     * here on purpose — `'type' => 'callback'` is live on two fleet sites, so
+     * the declaration gate this wave adds must accept it as it accepts a type.
+     */
+    public function testACallbackFieldIsSkippedBySaveOnANonDataPostType(): void
+    {
+        $this->registerNote(['summary' => ['type' => 'callback', 'callback' => 'strval']]);
+        $this->submit('note', ['title_line' => 'x', 'summary' => 'whatever the widget posted']);
+
+        $generator = $this->generator();
+        $generator->save_metabox_data(self::POST_ID, $this->wpPost('note'));
+
+        $this->assertSame('text:x', $this->meta['title_line'] ?? null, 'The rest of the screen still saves.');
+        $this->assertArrayNotHasKey(
+            'summary',
+            $this->meta,
+            'A `callback` field is the consumer\'s to store. The metabox has no type for it and must not invent one.',
+        );
+        $this->assertStringNotContainsString(
+            'Saving failed',
+            $this->noticeFor($generator),
+            'And it is not a fault: `callback` is a legal declaration, so the save must not fail on it.',
+        );
+    }
+
+    public function testACallbackFieldIsSkippedBeforeADataModelSeesIt(): void
+    {
+        $this->registerGig();
+        $this->registerRaw('gig', ['venue_city' => 'text', 'summary' => ['type' => 'callback']]);
+        $this->submit('gig', ['venue_city' => 'x', 'summary' => 'whatever the widget posted']);
+
+        $this->save('gig');
+
+        $this->assertArrayNotHasKey(
+            'summary',
+            MetaboxSaveRecordingModel::$updateCalls[0][1] ?? [],
+            'The model never declared a `callback` field — handing it one makes it an unregistered key '
+                . 'the model warns about and then stores as text.',
         );
     }
 
@@ -525,7 +714,9 @@ final class MetaboxGeneratorSaveTest extends TestCase
         // it, and the save path must catch that where the editor can see it:
         // a fatal here white-screens the post and loses every other field on
         // the screen.
-        $this->register('legacy', [
+        // Past register(), which refuses this declaration at init now (S-5).
+        // The save path owes its own refusal: see registerRaw().
+        $this->registerRaw('legacy', [
             'title_line' => 'text',
             'body'       => 'wysiwyg',
         ]);
@@ -569,62 +760,187 @@ final class MetaboxGeneratorSaveTest extends TestCase
         );
     }
 
-    // ------------------------------------------------------------- promise 5
-
-    public function testTheMetaboxGeneratorHasNoSanitizerOfItsOwn(): void
+    /**
+     * A Data model that cannot SEE the row it is being asked to save refuses,
+     * and the editor is told (reviewer S-4).
+     *
+     * The old branch fell through to create() — which cannot honour a post_id —
+     * so a save of a post the model does not recognise FORKED a second,
+     * published row and logged an unregistered `post_id` key on the way. The
+     * screen said "saved" and the editor was looking at the wrong post.
+     * "This row is not mine" is a refusal, never a create.
+     */
+    public function testASaveForARowTheModelCannotFindRefusesInsteadOfForkingANewPost(): void
     {
-        $this->assertFalse(
-            (new ReflectionClass('NTDST_MetaboxGenerator'))->hasMethod('sanitize_field'),
-            'The metabox\'s private type switch was a SECOND vocabulary beside NTDST_FieldTypes '
-                . '(INV-8): `bool` meant one thing on this path and another on the model path.',
+        $this->registerGig();
+        MetaboxSaveRecordingModel::$findsTheRow = false;
+        $this->submit('gig', ['venue_city' => 'x']);
+
+        $generator = $this->generator();
+        $generator->save_metabox_data(self::POST_ID, $this->wpPost('gig'));
+
+        $this->assertSame([], MetaboxSaveRecordingModel::$createCalls, 'A save must never create a SECOND post.');
+        $this->assertSame([], MetaboxSaveRecordingModel::$updateCalls, 'And there is nothing to update.');
+        $this->assertSame([], $this->metaWrites, 'Nothing is written.');
+        $this->assertStringContainsString(
+            'Saving failed',
+            $this->noticeFor($generator),
+            'The editor is told: a silent fork reads as "saved" while the typing went to another post.',
+        );
+    }
+
+    /**
+     * The saved hook receives WHAT WAS POSTED on the Data branch — under a name
+     * that says so (reviewer I-2).
+     *
+     * The payload the metabox hands `ntdst/metabox_saved/{model}` on that branch
+     * is the unslashed POST, not the model's cleaned answer: the model cleaned
+     * what it STORED, and the hook sees what the editor TYPED. A listener that
+     * echoes it, writes it somewhere else, or mails it is handling raw input.
+     * This is a documented BREAKING row for 5.0.0, and it is pinned here so the
+     * rename that makes it honest cannot quietly change it into something else.
+     */
+    public function testTheSavedHookOnTheDataBranchCarriesThePostedValues(): void
+    {
+        $this->registerGig();
+        $this->submit('gig', ['venue_city' => '  <b>x</b>  ']);
+
+        $this->save('gig');
+
+        $fired = array_values(array_filter(
+            $this->hooks,
+            static fn(array $call): bool => ($call[0] ?? '') === 'ntdst/metabox_saved/gig',
+        ));
+
+        $this->assertCount(1, $fired, 'The saved hook fires exactly once on a genuine save.');
+        $this->assertSame(self::POST_ID, $fired[0][1] ?? null, 'It names the post it saved.');
+        $this->assertSame(
+            '  <b>x</b>  ',
+            $fired[0][2]['venue_city'] ?? null,
+            'The payload is the POSTED value, unslashed and uncleaned — the model is what cleaned '
+                . 'the stored one. A listener reading this is reading raw input.',
         );
     }
 
     // ------------------------------------------------------- the denial paths
 
-    public function testASaveWithABadNonceWritesNothing(): void
+    /**
+     * A posted key the SCREEN never declared never reaches the store — on
+     * either branch (sentinel, this gate).
+     *
+     * `$_POST['ntdst_fields']` was walked verbatim, so the browser decided which
+     * keys the save wrote. On a Data model those keys go into update(), and the
+     * model maps `post_status`, `post_author` and `post_parent` onto wp_posts
+     * COLUMNS: a contributor who can edit their own draft could publish it, or
+     * hand it to another author, by adding one input to the form. On a plain
+     * post type they become meta keys, `_thumbnail_id` among them — the featured
+     * image, set from a field that does not exist.
+     *
+     * The declaration is the allow-list. It is the only thing on this screen
+     * that the site — not the browser — wrote.
+     */
+    public function testAPostedKeyOutsideTheDeclaredSetNeverReachesTheStore(): void
     {
-        Functions\when('wp_verify_nonce')->justReturn(false);
-
-        $this->registerNote();
-        $this->submit('note', ['title_line' => '<b>x</b>']);
-
-        $this->save('note');
-
-        $this->assertSame([], $this->metaWrites, 'A forged request writes nothing.');
-        $this->assertSame([], $this->metaDeletes, 'And deletes nothing.');
-    }
-
-    public function testASaveWithNoNonceAtAllWritesNothing(): void
-    {
-        $this->registerNote();
-        $_POST = ['ntdst_fields' => ['title_line' => '<b>x</b>']];
-
-        $this->save('note');
-
-        $this->assertSame([], $this->metaWrites, 'No nonce is not a save.');
-    }
-
-    public function testASaveByAUserWhoCannotEditThePostWritesNothing(): void
-    {
-        Functions\when('current_user_can')->justReturn(false);
+        $forged = [
+            'post_status'        => 'publish',
+            'post_author'        => '1',
+            'post_parent'        => '7',
+            '_thumbnail_id'      => '4242',
+            '_wp_page_template'  => 'evil.php',
+        ];
 
         $this->registerGig();
-        $this->submit('gig', ['venue_city' => '<b>x</b>']);
+        $this->submit('gig', ['venue_city' => 'pwned?'] + $forged);
 
         $this->save('gig');
 
-        $this->assertSame([], MetaboxSaveRecordingModel::$updateCalls, 'A refused actor never reaches the model.');
-        $this->assertSame([], $this->metaWrites, 'Nor the meta table.');
+        $payload = MetaboxSaveRecordingModel::$updateCalls[0][1] ?? [];
+
+        foreach (array_keys($forged) as $key) {
+            $this->assertArrayNotHasKey(
+                $key,
+                $payload,
+                "`{$key}` was posted through the metabox and is not a declared field. Handing it to "
+                    . 'the model lets the browser choose what the save writes — post columns included.',
+            );
+        }
+
+        // The recorder does not forward to wp_update_post(), so this only says
+        // the SAVE PATH wrote no column of its own. The escalation itself — the
+        // REAL model mapping `post_status`/`post_author` onto wp_posts — is
+        // asserted against the real model in
+        // MetaboxReadsTheVocabularyTest::testAPostedKeyOutsideTheDeclaredSetNeverBecomesAPostColumn().
+        $this->assertSame([], $this->postWrites, 'The save path itself writes no post column.');
+        $this->assertSame('pwned?', $payload['venue_city'] ?? null, 'The declared field still saves.');
+
+        // The same POST against a post type with no model: the keys would be
+        // meta rows, and `_thumbnail_id` is the featured image.
+        $this->registerNote();
+        $this->submit('note', ['title_line' => 'x'] + $forged);
+
+        $this->save('note');
+
+        foreach (array_keys($forged) as $key) {
+            $this->assertArrayNotHasKey($key, $this->meta, "`{$key}` must never be written as post meta by this save.");
+        }
     }
 
-    public function testASaveOfAPostTypeWithNoMetaboxWritesNothing(): void
+    /**
+     * Every way a save is REFUSED, in one place: nothing is written, nothing is
+     * deleted, and no model is ever reached (simplicity S19).
+     *
+     * @dataProvider refusedSaves
+     */
+    public function testARefusedSaveWritesNothing(string $why, Closure $arrange, string $postType): void
     {
-        $this->submit('unknown', ['title_line' => '<b>x</b>']);
+        $arrange($this);
 
-        $this->save('unknown');
+        $this->save($postType);
 
-        $this->assertSame([], $this->metaWrites, 'A post type this generator never registered is not its business.');
+        $this->assertSame([], $this->metaWrites, "{$why}: nothing may be written.");
+        $this->assertSame([], $this->metaDeletes, "{$why}: nothing may be deleted — a clear is a write.");
+        $this->assertSame([], MetaboxSaveRecordingModel::$updateCalls, "{$why}: the model is never reached.");
+        $this->assertSame([], MetaboxSaveRecordingModel::$createCalls, "{$why}: and nothing is created.");
+    }
+
+    /** @return array<string, array{0: string, 1: Closure, 2: string}> */
+    public static function refusedSaves(): array
+    {
+        return [
+            'a forged nonce' => [
+                'A forged request is not a save',
+                static function (self $test): void {
+                    Functions\when('wp_verify_nonce')->justReturn(false);
+                    $test->registerNote();
+                    $test->submit('note', ['title_line' => '<b>x</b>', 'related' => ['1']]);
+                },
+                'note',
+            ],
+            'no nonce at all' => [
+                'No nonce is not a save',
+                static function (self $test): void {
+                    $test->registerNote();
+                    $_POST = ['ntdst_fields' => ['title_line' => '<b>x</b>', 'related' => ['1']]];
+                },
+                'note',
+            ],
+            'an actor who cannot edit the post' => [
+                'A refused actor never reaches the store',
+                static function (self $test): void {
+                    Functions\when('current_user_can')->justReturn(false);
+                    $test->registerGig();
+                    $test->submit('gig', ['venue_city' => '<b>x</b>']);
+                },
+                'gig',
+            ],
+            'a post type with no metabox' => [
+                'A post type this generator never registered is not its business',
+                static function (self $test): void {
+                    $test->submit('unknown', ['title_line' => '<b>x</b>']);
+                },
+                'unknown',
+            ],
+        ];
     }
 
     // ------------------------------------------------------------- harness
@@ -671,11 +987,14 @@ final class MetaboxGeneratorSaveTest extends TestCase
      */
     private function registerGig(array $overrides = []): void
     {
+        $rows = ['type' => 'repeater', 'sub_fields' => ['label' => 'text', 'qty' => 'int']];
+
         $schema = [
             'venue_city' => ['type' => 'text', 'sanitizer' => $this->countingSanitizer('venue_city')],
             'bio'        => ['type' => 'textarea', 'sanitizer' => $this->countingSanitizer('bio')],
             'discount'   => ['type' => 'int', 'sanitizer' => $this->countingSanitizer('discount')],
             'tags'       => ['type' => 'relation', 'sanitizer' => $this->countingSanitizer('tags')],
+            'slots'      => $rows + ['sanitizer' => $this->countingSanitizer('slots')],
         ];
 
         foreach ($overrides as $field => $config) {
@@ -687,6 +1006,7 @@ final class MetaboxGeneratorSaveTest extends TestCase
             'bio'        => 'textarea',
             'discount'   => 'int',
             'tags'       => 'relation',
+            'slots'      => $rows,
             'ghost'      => 'text',
         ]);
 
@@ -696,7 +1016,7 @@ final class MetaboxGeneratorSaveTest extends TestCase
     }
 
     /** A post type with a metabox and NO model — WordPress's own meta table. */
-    private function registerNote(): void
+    private function registerNote(array $extraFields = []): void
     {
         $this->modelTable()->setValue(null, []);
 
@@ -706,11 +1026,33 @@ final class MetaboxGeneratorSaveTest extends TestCase
             'featured'   => 'bool',
             'discount'   => 'int',
             'related'    => 'relation',
+            'covers'     => 'gallery',
             'slots'      => [
                 'type'       => 'repeater',
                 'sub_fields' => ['label' => 'text', 'qty' => 'int'],
             ],
-        ]);
+        ] + $extraFields);
+    }
+
+    /**
+     * A declaration written straight into the generator's table, past register().
+     *
+     * register() refuses what the vocabulary refuses (reviewer S-5), so a
+     * retired name cannot be registered through it any more — and the SAVE path
+     * still has to fail closed when one reaches it. The two guards land in the
+     * same wave, so the save-path rule cannot be proved through the front door;
+     * it is proved here, where a `ntdst/{model}/fields` filter, a cached older
+     * registration, or the next name this vocabulary retires would put it.
+     */
+    private function registerRaw(string $type, array $fields): void
+    {
+        $models = new ReflectionProperty('NTDST_MetaboxGenerator', 'registered_models');
+        $models->setAccessible(true);
+
+        $table = $models->getValue($this->generator());
+        $table[$type] = ['fields' => $fields];
+
+        $models->setValue($this->generator(), $table);
     }
 
     /** A no-op override that only counts: the registry's answer passes straight through. */

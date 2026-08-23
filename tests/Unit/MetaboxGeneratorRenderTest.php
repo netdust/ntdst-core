@@ -28,11 +28,22 @@
 //   4. THE SECOND TYPE LIST IS GONE. MARKER_ONLY_REQUIRED_TYPES was a second
 //      table of type names next to the registry's; the native-`required`
 //      decision now reads NTDST_FieldType's own `$cell`/`$control`. Any second
-//      list is a list that can disagree with the first (INV-8).
-//   5. NO TYPE-NAME SWITCH SURVIVES. The two render switches are gone, and
-//      render_repeater_media_cell() is folded or deleted — pinned against the
-//      SOURCE, because a switch that is merely unreachable is still a second
-//      vocabulary waiting for a caller.
+//      list is a list that can disagree with the first (INV-8). The NAME is
+//      pinned by PackageBootIntegrityTest's removed-symbol sweep, beside
+//      render_repeater_media_cell() and sanitize_field() — one sweep for every
+//      symbol this release deleted, instead of a bespoke reflection case each
+//      (simplicity S17).
+//   5. NO TYPE-NAME SWITCH SURVIVES. Pinned against the SOURCE with INV-8's own
+//      (A) shapes, because a switch that is merely unreachable is still a second
+//      vocabulary waiting for a caller. Every hit must fall into ONE of five
+//      NAMED exception families or the guard fails naming the line: the fifth
+//      family — a comparison whose subject is a registry-resolved CONTROL — is
+//      what separates "the renderer asks the registry" from "the file reads a
+//      type name of its own".
+//   6. A ROW TEMPLATE THE BROWSER CAN CLONE. The repeater's hidden
+//      `<script type="text/html">` template must hold row markup and nothing
+//      else: one stray `</script>` inside it ends the template early and spills
+//      the rest onto the page (sentinel, this gate).
 //
 // HOW THIS FILE OBSERVES ALL OF THAT
 // Through render_metabox() — the public entry WordPress itself calls for a
@@ -139,9 +150,22 @@ final class MetaboxGeneratorRenderTest extends TestCase
         Functions\when('esc_attr')->alias(static fn($t) => htmlspecialchars((string) $t, ENT_QUOTES));
         Functions\when('esc_html')->alias(static fn($t) => htmlspecialchars((string) $t, ENT_QUOTES));
         Functions\when('esc_textarea')->alias(static fn($t) => htmlspecialchars((string) $t, ENT_QUOTES));
-        Functions\when('esc_url')->alias(static fn($u) => (string) $u);
+        // esc_url() is WordPress's OWN shape, not a pass-through: it is the only
+        // escaper on the preview `<img src>` and on the attachment edit link, and
+        // a pass-through stub there would call an unescaped URL safe. Core strips
+        // everything outside its allowed character set (which takes `"`, `<` and
+        // `>` with it), then encodes `&` and `'`.
+        Functions\when('esc_url')->alias(static function ($url) {
+            $url = str_replace(' ', '%20', ltrim((string) $url));
+            $url = (string) preg_replace('/[^a-z0-9\-~+_.?#=!&;,\/:%@$|*\'()\[\]\x80-\xff]/i', '', $url);
+
+            return str_replace(['&', "'"], ['&#038;', '&#039;'], $url);
+        });
         Functions\when('absint')->alias(static fn($v) => abs((int) $v));
-        Functions\when('wp_kses_post')->returnArg(1);
+        // TAGGED, so a render that started calling wp_kses_post() on a stored
+        // value would be visible instead of invisible: the `html` control hands
+        // the editor the RAW value by design, and that is asserted, not assumed.
+        Functions\when('wp_kses_post')->alias(static fn($v) => 'kses:' . (string) $v);
 
         // ---- TAGGED: wp_editor() is invisible in its own output ----
         Functions\when('wp_editor')->alias(static function ($content, $editor_id, $settings = []) {
@@ -174,6 +198,86 @@ final class MetaboxGeneratorRenderTest extends TestCase
     {
         Monkey\tearDown();
         parent::tearDown();
+    }
+
+    // ------------------------------------------------------------- promise 6
+
+    /**
+     * The repeater's hidden row template holds ROW MARKUP AND NOTHING ELSE.
+     *
+     * A `<script type="text/html">` block ends at the first `</script>` the
+     * parser sees, wherever it came from. The media picker's assets — a `<style>`
+     * and a jQuery `<script>` — are emitted lazily by the FIRST `media` control
+     * on the screen, and on a screen whose only media control is a repeater cell
+     * with NO rows yet, that first control is the one inside the template. The
+     * template then closes on the picker's own `</script>`: the rest of the row
+     * markup lands in the visible page, the "Add Row" button clones a truncated
+     * template, and the picker inside a new row is wired to nothing.
+     *
+     * Zero rows is the ordinary case — every repeater starts empty.
+     *
+     * FIRST IN THIS FILE ON PURPOSE. The picker assets are emitted once per
+     * PROCESS (a function static), so any earlier media render in the suite
+     * would make this case pass without proving anything. The guard below fails
+     * loudly if that day comes, instead of going quietly green.
+     */
+    public function testTheRepeaterRowTemplateIsNotBrokenByThePickerAssets(): void
+    {
+        $statics = (new ReflectionMethod('NTDST_MetaboxGenerator', 'render_media_picker_assets'))
+            ->getStaticVariables();
+
+        $this->assertFalse(
+            $statics['assets_rendered'] ?? true,
+            'The media picker assets have already been emitted in this process, so this case can no '
+                . 'longer see the bug it exists for. It must run BEFORE any other media render — keep '
+                . 'it first in this file.',
+        );
+
+        $this->meta = []; // an empty repeater: no rows, only the template
+
+        $html = $this->render(['slots' => [
+            'type'       => 'repeater',
+            'sub_fields' => ['photo' => 'image'],
+        ]]);
+
+        $open = strpos($html, '<script type="text/html"');
+        $this->assertNotFalse($open, 'The repeater must emit a row template for its JS to clone.');
+
+        $close = strpos($html, '</script>', $open);
+        $this->assertNotFalse($close, 'The row template must be closed.');
+
+        $template = substr($html, $open, $close - $open);
+
+        $this->assertStringNotContainsString(
+            '<script',
+            $template,
+            'A nested <script> inside the row template ends the template at ITS closing tag: the rest '
+                . 'of the row spills onto the page and the clone is truncated.',
+        );
+        $this->assertStringNotContainsString(
+            '<style',
+            $template,
+            'And its stylesheet rides in with it — inside a text/html template it is inert markup, '
+                . 'copied into every cloned row.',
+        );
+        $this->assertStringContainsString(
+            'name="ntdst_fields[slots][__INDEX__][photo]"',
+            $template,
+            'The template must carry the row it exists to clone — an empty one would pass every other '
+                . 'assertion here while cloning nothing.',
+        );
+
+        $assets = strpos($html, '.ntdst-repeater-media-select');
+        $this->assertNotFalse(
+            $assets,
+            'The picker still needs its handlers on a screen whose ONLY media control is a repeater '
+                . 'cell — hoisting them out of the template must not drop them.',
+        );
+        $this->assertLessThan(
+            $open,
+            $assets,
+            'The picker assets belong BEFORE the template, not inside it.',
+        );
     }
 
     // ------------------------------------------------------------- promise 1
@@ -214,7 +318,12 @@ final class MetaboxGeneratorRenderTest extends TestCase
             'media → the picker'       => ['poster', ['ntdst-repeater-media', 'name="ntdst_fields[poster]"', 'ntdst-repeater-media-select']],
             'relation → the picker'    => ['tags', ['ntdst-relation-field', 'data-field-name="tags"', 'name="ntdst_fields[tags][]"']],
             'gallery → the container'  => ['shots', ['ntdst-gallery-field', 'data-field-name="shots"', 'name="ntdst_fields[shots][]"']],
-            'repeater → the table'     => ['slots', ['ntdst-repeater-table', 'data-field-name="slots"']],
+            // No `data-field-name` needle here (simplicity S21): the repeater
+            // submits through the row inputs this file already asserts, so the
+            // attribute was pinned without a reader. The relation and gallery
+            // rows keep theirs — assets/js/metabox-fields.js reads both to build
+            // the `ntdst_fields[<field>][]` inputs their pickers post.
+            'repeater → the table'     => ['slots', ['ntdst-repeater-table']],
         ];
     }
 
@@ -240,38 +349,39 @@ final class MetaboxGeneratorRenderTest extends TestCase
 
     // ------------------------------------------------------------- promise 2
 
-    public function testARepeaterRowRendersEachCellThroughTheSameControls(): void
-    {
-        $row = $this->repeaterTable();
-
-        $this->assertStringContainsString('name="ntdst_fields[slots][0][label]"', $row, 'A `text` cell keeps the row naming.');
-        $this->assertStringContainsString('name="ntdst_fields[slots][0][qty]"', $row, 'An `int` cell keeps the row naming.');
-        $this->assertStringContainsString('name="ntdst_fields[slots][0][photo]"', $row, 'A media cell keeps the row naming.');
-    }
-
     /**
-     * An `int` cell is a number input.
+     * Each declared cell renders ITS control, under the row naming.
      *
-     * The live bug: the row's own switch knew `number` and `integer` — two
-     * names the vocabulary RETIRED — and not `int`, the name it actually uses.
-     * Every declared `int` cell rendered through `default:` as text.
+     * The live bug this covers: the row's own switch knew `number` and
+     * `integer` — two names the vocabulary RETIRED — and not `int`, the name it
+     * actually uses, so every declared `int` cell fell through to a text input.
+     * The cell and the top-level field of the same type must resolve to the
+     * same control, because they are the same declaration.
+     *
+     * @dataProvider repeaterCells
      */
-    public function testAnIntCellRendersAsANumberInputNotText(): void
+    public function testEachCellRendersItsOwnControlUnderTheRowNaming(string $pattern, string $why): void
     {
-        $row = $this->repeaterTable();
-
-        $this->assertMatchesRegularExpression(
-            '/<input[^>]*type="number"[^>]*name="ntdst_fields\[slots\]\[0\]\[qty\]"/',
-            $row,
-            'An `int` cell must resolve to the `number` control, like the top-level field of the same type.',
-        );
+        $this->assertMatchesRegularExpression($pattern, $this->repeaterTable(), $why);
     }
 
-    public function testAMediaCellRendersThePickerNotAText(): void
+    /** @return array<string, array{0: string, 1: string}> */
+    public static function repeaterCells(): array
     {
-        $row = $this->repeaterTable();
-
-        $this->assertStringContainsString('ntdst-repeater-media-select', $row, 'An `image` cell is the media picker.');
+        return [
+            'text cell → a text input' => [
+                '/<input[^>]*type="text"[^>]*name="ntdst_fields\[slots\]\[0\]\[label\]"/',
+                'A `text` cell is a text input under the row naming.',
+            ],
+            'int cell → a number input' => [
+                '/<input[^>]*type="number"[^>]*name="ntdst_fields\[slots\]\[0\]\[qty\]"/',
+                'An `int` cell must resolve to the `number` control, like the top-level field of the same type.',
+            ],
+            'image cell → the media picker' => [
+                '/name="ntdst_fields\[slots\]\[0\]\[photo\]"[^>]*class="ntdst-repeater-media-input"/',
+                'An `image` cell is the media picker\'s hidden input, not a text box — same row naming.',
+            ],
+        ];
     }
 
     public function testARepeaterRowCarriesNoLabelWrapper(): void
@@ -315,15 +425,6 @@ final class MetaboxGeneratorRenderTest extends TestCase
     }
 
     // ------------------------------------------------------------- promise 4
-
-    public function testTheSecondTypeListIsGone(): void
-    {
-        $this->assertFalse(
-            (new ReflectionClass('NTDST_MetaboxGenerator'))->hasConstant('MARKER_ONLY_REQUIRED_TYPES'),
-            'MARKER_ONLY_REQUIRED_TYPES was a second table of type names beside the registry; '
-                . 'the native-`required` decision reads NTDST_FieldType $cell/$control now.',
-        );
-    }
 
     /**
      * Native `required` lands only on a control the browser can focus AND that
@@ -385,31 +486,132 @@ final class MetaboxGeneratorRenderTest extends TestCase
 
     // ------------------------------------------------------------- promise 5
 
+    /**
+     * INV-8's own check (A), run in-repo against this one file — and every hit
+     * must be one of FIVE NAMED EXCEPTIONS or the guard fails naming the line.
+     *
+     * The vocabulary has one home. This file is where the second one always
+     * grew back: two switches over type names, a marker-only list, a row walk
+     * that knew `integer`. The earlier version of this case grepped for
+     * `case '…':` and `switch ($type)` and was therefore blind to every shape
+     * the code actually used next — a `match` head, an `in_array()` over a
+     * hand-written pair, a `===` against a name in the save path (invariant
+     * audit I4).
+     *
+     * WHAT IS SEARCHED (INV-8 (A), amended at the Cluster B and C audits):
+     * a `switch (`/`match (` head; `case '<name>'`; a quoted `'<name>' ,`/`=>`
+     * list shape; a `===`/`!==` against a quoted name in EITHER quote style
+     * (the picker JS is double-quoted); and `in_array(`/`array_key_exists(`
+     * over one. The NAMES are derived — the 17 canonical, the 13 retired, every
+     * `control` the table names, plus `callback` — because a hand-typed list
+     * here would be exactly the second table this guards against.
+     *
+     * THE FIVE EXCEPTION FAMILIES, by what the line MEANS (not by line number,
+     * which moves on the next edit — the ledger's five families, tasks.md T09):
+     *   1. THE RENDERER ITSELF — `match ($control)` and its arms. This is the
+     *      convergence point, not a bypass of it.
+     *   2. A CONTROL-NAME COMPARISON ON A REGISTRY-RESOLVED SUBJECT
+     *      (`$control`, `->control`): a render- or save-capability question
+     *      about what the REGISTRY answered. The subject is what makes it legal
+     *      — the same question asked of a raw declared name is the defect this
+     *      wave fixes, and it stays a failure here.
+     *   3. THE `callback` RENDER DIRECTIVE — a field that renders itself. It has
+     *      no registry entry and must not grow one, so it is answered before the
+     *      registry is asked, on both the render and the save side.
+     *   4. THE MEDIA WIDGET'S `image` VERSUS `file` QUESTION, in PHP and in its
+     *      picker JS: two type names share the `media` control and the widget
+     *      must still tell them apart to scope the wp.media library.
+     *   5. THE PICKER JS'S OWN wp.media EVENT NAMES (`frame.on("select")`) —
+     *      jQuery vocabulary that happens to collide with a type name.
+     */
     public function testNoTypeNameSwitchSurvivesInTheSource(): void
     {
-        $source = file_get_contents(self::SOURCE);
+        $names = $this->vocabularyWords();
+        $alternation = implode('|', $names);
 
-        $this->assertIsString($source);
+        $shapes = [
+            '/(switch|(^|[^A-Za-z0-9_])match) *\(/',
+            "/case ['\"]({$alternation})['\"]/",
+            "/['\"]({$alternation})['\"] *(,|=>)/",
+            "/[!=]== *['\"]({$alternation})['\"]/",
+            "/(in_array|array_key_exists) *\(.*['\"]({$alternation})['\"]/",
+        ];
+
+        // Keyed by the family each line belongs to, so a failure reads as
+        // "this line is not one of the five" rather than as a regex count.
+        $exceptions = [
+            'the one renderer (match ($control) and its arms)' => '/^match \((\$[a-z_]*control|[^)]*->control)\)|^\'[a-z]+\' *=> \$this->[a-z_]+\(/',
+            // The SUBJECT is what makes it legal: what the registry answered,
+            // never the raw declared name. `in_array($type, …)` fails here, and
+            // that is the invariant audit's CRITICAL.
+            'a control-name comparison on a registry-resolved subject' => '/(\$[a-z_]*control|->control) *(!==|===)|(in_array|array_key_exists) *\( *[^,]*(\$[a-z_]*control|->control)/',
+            'the `callback` render directive'                  => "/'callback'/",
+            'the media widget\'s image-versus-file question'    => '/\$is_image\b|mediaType === "/',
+            'the picker JS\'s own wp.media event names'         => '/\.on\("[a-z]+"/',
+        ];
+
+        $unexplained = [];
+
+        foreach (file(self::SOURCE) as $n => $line) {
+            $code = trim($line);
+
+            // A comment may discuss a type name; a line of code may not.
+            if ($code === '' || str_starts_with($code, '*') || str_starts_with($code, '//') || str_starts_with($code, '/*')) {
+                continue;
+            }
+
+            $hit = false;
+            foreach ($shapes as $shape) {
+                if (preg_match($shape, $line) === 1) {
+                    $hit = true;
+                    break;
+                }
+            }
+
+            if (!$hit) {
+                continue;
+            }
+
+            foreach ($exceptions as $family) {
+                if (preg_match($family, $code) === 1) {
+                    continue 2;
+                }
+            }
+
+            $unexplained[] = 'admin/MetaboxGenerator.php:' . ($n + 1) . ' → ' . $code;
+        }
 
         $this->assertSame(
-            0,
-            preg_match_all("/case '[a-z_]+':|switch \(\\\$(type|field_type)\)/", $source, $unused),
-            'Both render switches must be gone: one renderer keyed by the registry\'s control, '
-                . 'and no arm keyed to a type NAME outside it.',
+            [],
+            $unexplained,
+            "A type name is read here, outside the five named exceptions (INV-8):\n"
+                . implode("\n", $unexplained)
+                . "\n\nAsk NTDST_FieldTypes for the entry and key the decision on what it answers — "
+                . 'a list of type names kept in this file is a second vocabulary, and it drifts.',
         );
     }
 
-    public function testTheRepeaterMediaCellIsFoldedOrDeleted(): void
+    /**
+     * The words INV-8 (A) looks for: the whole vocabulary, everything it
+     * retired, every control it names, and the one render directive that has no
+     * entry. DERIVED, so this file carries no second copy of the table.
+     *
+     * @return list<string>
+     */
+    private function vocabularyWords(): array
     {
-        $source = file_get_contents(self::SOURCE);
+        $registry = new ReflectionClass(NTDST_FieldTypes::class);
+        $retired = $registry->getConstant('RETIRED');
 
-        $this->assertIsString($source);
+        $this->assertIsArray($retired, 'NTDST_FieldTypes::RETIRED is the retired-name table — the check needs it.');
 
-        $this->assertSame(
-            0,
-            preg_match_all('/function render_repeater_media_cell/', $source, $unused),
-            'render_repeater_media_cell() served BOTH switches; with one renderer it is the `media` arm.',
-        );
+        $words = array_merge(NTDST_FieldTypes::names(), array_keys($retired), ['callback']);
+
+        foreach (NTDST_FieldTypes::names() as $name) {
+            $words[] = NTDST_FieldTypes::get($name)->control;
+        }
+
+        return array_values(array_unique($words));
     }
 
     // -------------------------------------------- promise 6 (Cluster C feature)
@@ -443,6 +645,20 @@ final class MetaboxGeneratorRenderTest extends TestCase
             echo '<!--wp_editor:' . $editor_id . '-->';
         });
 
+        // The picker paths carry values this screen does NOT store: an
+        // attachment's title, its alt text, its thumbnail URL, the edit link,
+        // a related post's title. Every one of them is content someone else can
+        // write — a contributor uploading a file, an author naming a post — so
+        // they are made hostile too, and the `<img src>`/`<a href>` pair is the
+        // only place on this screen escaped by esc_url() rather than esc_attr().
+        Functions\when('get_the_title')->justReturn($hostile);
+        Functions\when('wp_get_attachment_image_url')->justReturn('https://example.org/' . $hostile);
+        Functions\when('admin_url')->alias(static fn($p = '') => 'https://example.org/wp-admin/' . $p . $hostile);
+        Functions\when('get_posts')->alias(static fn(array $args = []) => array_map(
+            static fn($id) => (object) ['ID' => (int) $id, 'post_title' => $hostile],
+            $args['post__in'] ?? [],
+        ));
+
         $this->meta = [
             'venue_city' => $hostile,
             'contact'    => $hostile,
@@ -452,7 +668,13 @@ final class MetaboxGeneratorRenderTest extends TestCase
             'status'     => $hostile,
             'payload'    => $hostile,
             'body'       => $hostile,
+            'poster'     => 5,
+            'tags'       => [7],
+            'shots'      => [8],
             'slots'      => [['label' => $hostile, 'qty' => $hostile, 'photo' => 0]],
+
+            // What the gallery reads for its alt-text indicator.
+            '_wp_attachment_image_alt' => $hostile,
         ];
 
         $html = $this->render([
@@ -464,6 +686,9 @@ final class MetaboxGeneratorRenderTest extends TestCase
             'status'     => ['type' => 'select', 'options' => [$hostile => $hostile]],
             'payload'    => 'json',
             'body'       => 'html',
+            'poster'     => 'image',
+            'tags'       => ['type' => 'relation', 'post_type' => 'artist'],
+            'shots'      => 'gallery',
             'slots'      => [
                 'type'       => 'repeater',
                 'sub_fields' => ['label' => 'text', 'qty' => 'int', 'photo' => 'image'],
@@ -516,7 +741,23 @@ final class MetaboxGeneratorRenderTest extends TestCase
             $hostile,
             $handedToTheEditor,
             'wp_editor() is handed the value UN-escaped by design — escaping it there is what turns '
-                . 'stored content into soup and saves the soup back.',
+                . 'stored content into soup and saves the soup back. Un-escaped is not un-cleaned: the '
+                . 'value was wp_kses_post()\'d on the way IN, and the tagged stub here would show a '
+                . 'second clean on the way out.',
+        );
+
+        // The two attributes esc_url() owns. A URL is not an ordinary attribute
+        // value: esc_attr() would leave `javascript:` intact, and esc_url() is
+        // what strips the characters that close the attribute.
+        foreach (['<img src="', '<a href="'] as $opening) {
+            $this->assertStringContainsString($opening, $html, "The gallery must render {$opening}…");
+        }
+
+        $this->assertDoesNotMatchRegularExpression(
+            '/(src|href)="[^"]*[<>]/',
+            $html,
+            'A URL that still carries `<` or `>` has not been through esc_url() — and both of them '
+                . 'break out of the attribute they sit in.',
         );
     }
 

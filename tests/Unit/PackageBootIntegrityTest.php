@@ -95,6 +95,16 @@ final class PackageBootIntegrityTest extends TestCase
             // helper and for prose about sanitizing a field, but no shipped
             // line may CALL or DECLARE one.
             'sanitize_field' => ['sanitize_field(', '5.0.0'],
+            // The metabox's other two second tables, retired by the same task
+            // and pinned the same way (simplicity S17 — one sweep, not three
+            // bespoke reflection cases). MARKER_ONLY_REQUIRED_TYPES was a
+            // hand-kept list of type names deciding which controls may carry
+            // native `required`; the registry entry's own $cell/$control answers
+            // that now. render_repeater_media_cell() was the row's copy of the
+            // media picker, and a copy of a control is a control that drifts —
+            // the row cell and the top-level field must be the same widget.
+            'MARKER_ONLY_REQUIRED_TYPES' => ['MARKER_ONLY_REQUIRED_TYPES', '5.0.0'],
+            'render_repeater_media_cell' => ['render_repeater_media_cell(', '5.0.0'],
             // The retired type NAME (D4: it folded into a signed `int`). Shipped
             // code may not declare a field with it; the vocabulary's own
             // retirement table is the one place that still says the word.
