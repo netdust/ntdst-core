@@ -23,6 +23,38 @@ defined('ABSPATH') || exit;
 define('NTDST_PATH', __DIR__);
 define('NTDST_URL', plugins_url('', __FILE__));
 
+/**
+ * Enqueue the shared NTDST API client (window.ntdstAPI).
+ *
+ * Single source of truth for /wp-json/ntdst/v1/action calls. Use from both
+ * frontend (theme) and admin pages. Localizes the wp_rest nonce as
+ * window.ntdstAPIConfig.restNonce so the client can authenticate the REST
+ * endpoint regardless of context.
+ *
+ * Defined ABOVE the require list, not below it. PHP hoists an unconditional
+ * top-level function, so today's order works either way — but a required file
+ * that calls this at LOAD time is one edit away, and "it works because of
+ * hoisting" is a rule nobody reading the list can see.
+ */
+function ntdst_enqueue_api_client(): void
+{
+    $path = NTDST_PATH . '/assets/js/ntdst-api.js';
+    wp_enqueue_script(
+        'ntdst-api',
+        NTDST_URL . '/assets/js/ntdst-api.js',
+        [],
+        file_exists($path) ? (string) filemtime($path) : '1.0.0',
+        false,
+    );
+    wp_add_inline_script(
+        'ntdst-api',
+        'window.ntdstAPIConfig = ' . wp_json_encode([
+            'restNonce' => wp_create_nonce('wp_rest'),
+        ]) . ';',
+        'before',
+    );
+}
+
 // Load core foundation
 require_once NTDST_PATH . '/core/Container.php';
 
@@ -33,6 +65,9 @@ require_once NTDST_PATH . '/core/Container.php';
 // it wanted to say went nowhere. Those guards are deleted (FR-3) and this line
 // is what makes that safe. bin/guard.sh asserts both halves — no call-site
 // function_exists() guard on a core helper, and this require above api/.
+//
+// Logger's ctor reaches ntdst_data() (api/Data.php, below) — no top-level
+// ntdst_log() call may sit between these lines; T05 removes the dependency.
 require_once NTDST_PATH . '/services/Logger.php';
 
 require_once NTDST_PATH . '/core/Pages.php';
@@ -79,29 +114,3 @@ function ntdst_enqueue_admin_toolkit(): void
     );
 }
 
-/**
- * Enqueue the shared NTDST API client (window.ntdstAPI).
- *
- * Single source of truth for /wp-json/ntdst/v1/action calls. Use from both
- * frontend (theme) and admin pages. Localizes the wp_rest nonce as
- * window.ntdstAPIConfig.restNonce so the client can authenticate the REST
- * endpoint regardless of context.
- */
-function ntdst_enqueue_api_client(): void
-{
-    $path = NTDST_PATH . '/assets/js/ntdst-api.js';
-    wp_enqueue_script(
-        'ntdst-api',
-        NTDST_URL . '/assets/js/ntdst-api.js',
-        [],
-        file_exists($path) ? (string) filemtime($path) : '1.0.0',
-        false,
-    );
-    wp_add_inline_script(
-        'ntdst-api',
-        'window.ntdstAPIConfig = ' . wp_json_encode([
-            'restNonce' => wp_create_nonce('wp_rest'),
-        ]) . ';',
-        'before',
-    );
-}

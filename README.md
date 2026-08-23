@@ -91,11 +91,9 @@ Read every line before upgrading. Nothing here is shimmed.
    **change key**. Check every service that declares a `name`, and remember the
    `_enabled` filter is a DENY filter that fails OPEN — a stale key means a
    service you meant to switch off boots.
-5. **A namespaced service's file path no longer depends on the active theme.**
-   Bootstrap used to strip `basename(get_stylesheet_directory())` from the
-   namespace path. It now tries the path as spelled and then with the leading
-   segment dropped. Existing theme layouts resolve exactly as before. The one
-   difference: if BOTH candidates exist on disk, the unstripped one now wins.
+5. **Bootstrap derives no path from a class name.** A listed class must be
+   loaded or autoloadable before `register()` (see the core-trim migration
+   table).
 6. **A CORS preflight is charged against a rate-limited route.** `OPTIONS` used
    to cost nothing. It now spends one unit from a bucket of its own
    (`ntdst_rest_pf_*`), so a preflight flood can now return 429. It does **not**

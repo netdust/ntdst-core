@@ -24,6 +24,17 @@ fi
 # guarded on ntdst_router() so a required mixin silently stopped registering.
 # This grep is what makes the next rename fail loudly instead.
 #
+# THE ROWS ARE PackageBootIntegrityTest::removedSymbolProvider()'s, by hand.
+# Read that provider when you add one: the shape of a row — bare word, call
+# shape `name(`, declaration position — is decided there, with the reason, and
+# a row spelled differently here sweeps something the test does not. This copy
+# exists because the gate has to fail on a fresh checkout with no vendor/ and
+# no PHP test run, and the two lists being the same list is the property an
+# audit checks. Six names were behind the provider when the invariant auditor
+# last compared them (getServices, NTDST_SectorRegistry, ntdst_sectors,
+# ntdst_endpoints, MARKER_ONLY_REQUIRED_TYPES, render_repeater_media_cell);
+# deriving this pattern FROM the provider is the parked fix.
+#
 # v3.0.0: the v2 routing facades.
 # v5.0.0: the NTDST_Rest surface registry — WordPress's get_routes() is the
 #         registry now — and the test file that asserted on it. The removed
@@ -103,7 +114,7 @@ fi
 #         All five are pinned bare and mirror PackageBootIntegrityTest's rows.
 #         That sweep also reads README.md and exempts its migration ROWS; this
 #         one greps *.php only, so it needs no exemption.
-REMOVED=$(grep -rnE "discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
+REMOVED=$(grep -rnE "discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
     --include='*.php' . \
     | grep -v /vendor/ \
     | grep -vE "^(\./)?tests/|^(\./)?specs/" \
@@ -122,10 +133,14 @@ fi
 # ntdst_log() exists is asking whether core finished loading — and then
 # answering "no" by silently skipping the work. That is load-order duct tape:
 # the guards existed because services/Logger.php was required LAST, after
-# api/ and admin/ had already run. Logger is required FIRST now (asserted
-# below), so the answer is always yes and the question is dead weight. A
-# missing helper must fatal at boot, which is the correct moment to learn that
-# core is half-loaded — not produce a request that quietly logs nothing.
+# api/ and admin/ had already run. Logger is required FIRST now — asserted by
+# BootstrapLoadsNothingByGuessingTest::testEveryRequiredFileThatCallsTheLog
+# HelperIsRequiredAfterTheLogger, which reads the require list out of
+# ntdst-core.php and demands the ordering of every caller it finds, rather than
+# by a pair of line numbers picked here today. So the answer is always yes and
+# the question is dead weight. A missing helper must fatal at boot, which is the
+# correct moment to learn that core is half-loaded — not produce a request that
+# quietly logs nothing.
 #
 # DEFINITION wrappers are exempt, and the exemption is BY SHAPE rather than by
 # file: `if (!function_exists('ntdst_x')) {` whose very NEXT line declares that
@@ -137,6 +152,18 @@ fi
 # still protect; when the last one goes, this exemption matches nothing and the
 # literal SC-2 sweep (`grep -c "function_exists('ntdst_" ... ` = 0) lands with
 # no further change here.
+#
+# The sweep reads BOTH quote styles — `function_exists('ntdst_log')` and
+# `function_exists("ntdst_log")` are the same guard, and a single-quoted pattern
+# is a sweep a reformatter can switch off. Its file list is the whole shipped
+# tree that defines or calls a helper: api/, core/, admin/, services/, support/
+# and ntdst-core.php itself, the file that owns the require order this rule is
+# about.
+#
+# The lookahead is LINE-ADJACENT, not brace-aware: a definition wrapper is
+# exempt when the guard's very NEXT non-blank, non-comment line declares that
+# same function. A wrapper that opens a brace, does something else first and
+# then declares it is not exempt and will be reported.
 #
 # ONE row-anchored exemption: admin/RelationField.php's prefixedMetaKey() still
 # guards on ntdst_data(). It is a REAL call-site guard and a real FR-3 target —
@@ -154,18 +181,18 @@ CALLGUARDS=$(awk '
             name = $0
             sub(/^[ \t]*function[ \t]+/, "", name)
             sub(/[ \t]*\(.*$/, "", name)
-            if (viol[pend] ~ ("function_exists\\(\047" name "\047\\)")) {
+            if (viol[pend] ~ ("function_exists\\([ \t]*[\"\047]" name "[\"\047]")) {
                 delete viol[pend]
             }
         }
         pend = ""
-        if ($0 ~ /function_exists\(\047ntdst_/) {
+        if ($0 ~ "function_exists\\([ \t]*[\"\047]ntdst_") {
             pend = FILENAME ":" FNR
             viol[pend] = $0
         }
     }
     END { for (k in viol) print k ": " viol[k] }
-' api/*.php core/*.php admin/*.php services/*.php \
+' ntdst-core.php api/*.php core/*.php admin/*.php services/*.php support/*.php \
     | grep -vE "^admin/RelationField\.php:[0-9]+: *if \(!function_exists\('ntdst_data'\)\) \{$" \
     | sort || true)
 if [ -n "$CALLGUARDS" ]; then
@@ -175,25 +202,14 @@ if [ -n "$CALLGUARDS" ]; then
     exit 1
 fi
 
-# v5.0.0 core-trim (FR-3): services/Logger.php is required BEFORE the api/ layer.
-# This is the other half of the sweep above — deleting the call-site guards is
-# only safe while ntdst_log() is defined before anything that calls it. api/
-# opens with FieldTypes.php, and api/Actions.php is INVOKED at load time
-# (`ntdst_actions();`), so a Logger that loads after api/ means core's own boot
-# path can log into a function that does not exist yet. Pinned against
-# api/FieldTypes.php, the first api/ require; INV-8 keeps FieldTypes before
-# api/Data.php, so Logger precedes Data transitively.
-LOGGER_AT=$(grep -n "require_once NTDST_PATH \. '/services/Logger\.php'" ntdst-core.php | head -1 | cut -d: -f1)
-FIELDTYPES_AT=$(grep -n "require_once NTDST_PATH \. '/api/FieldTypes\.php'" ntdst-core.php | head -1 | cut -d: -f1)
-if [ -z "$LOGGER_AT" ] || [ -z "$FIELDTYPES_AT" ]; then
-    echo "ntdst-core.php no longer requires services/Logger.php and api/FieldTypes.php by name."
-    exit 1
-fi
-if [ "$LOGGER_AT" -ge "$FIELDTYPES_AT" ]; then
-    echo "ntdst-core.php requires services/Logger.php (line $LOGGER_AT) AFTER api/FieldTypes.php (line $FIELDTYPES_AT)."
-    echo "Logger must load first: api/ calls ntdst_log() and api/Actions.php runs at load time."
-    exit 1
-fi
+# The other half of FR-3 — that services/Logger.php is required before every
+# file on the list that calls ntdst_log() — is asserted by
+# BootstrapLoadsNothingByGuessingTest, not here. The check that stood in this
+# spot compared Logger's line number against api/FieldTypes.php's, which is one
+# hand-picked pair: it goes quiet the moment a NEW caller appears above Logger
+# in support/ or core/. The test reads the require list and asks the question of
+# every caller it finds, which is the property; two homes for one rule is how
+# they come to disagree.
 
 if ! grep -q "PHP_SAPI === 'cli'" tests/bootstrap.php; then
     echo "tests/bootstrap.php is missing its CLI guard (PHP_SAPI === 'cli' || exit;)"
