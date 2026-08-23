@@ -173,6 +173,43 @@ final class TemplateLoaderTest extends TestCase
         );
     }
 
+    /**
+     * The mount sits BEFORE a consumer's own `{$type}_template` handler.
+     *
+     * NTDST_Pages::template() mounts a consumer callback at WordPress's default
+     * 10 (core/Pages.php:153, no priority argument), and a handler a theme
+     * wrote by hand must be able to override what the registry picked. So core
+     * has to run FIRST and fill the gap; the consumer decides LAST. Nothing
+     * pinned the 5 before this case, and the old callback got this backwards —
+     * it sat on `template_include` at 99, after every `{$type}_template`
+     * filter, and overrode those handlers instead.
+     *
+     * All five hooks, in one case: the ordering is one decision, not five.
+     */
+    public function testTheLoaderMountsBeforeAConsumerHandler(): void
+    {
+        foreach (array_keys(self::hierarchyFilterProvider()) as $hook) {
+            $mounted = $GLOBALS['_ntdst_test_filters_at'][$hook] ?? [];
+            $priorities = array_keys(array_filter(
+                $mounted,
+                static fn ($cb): bool => $cb === [NTDST_Template_Loader::class, 'pickFromCandidates'],
+            ));
+
+            $this->assertNotSame([], $priorities, "init() must mount pickFromCandidates() on {$hook}.");
+
+            foreach ($priorities as $priority) {
+                $this->assertLessThan(
+                    10,
+                    $priority,
+                    "{$hook}: pickFromCandidates() must run before a consumer's own handler, which "
+                    . 'NTDST_Pages::template() mounts at WordPress\'s default 10 (core/Pages.php:153, '
+                    . 'no priority argument) — core fills the gap first so a hand-written handler can '
+                    . 'still override the registry\'s pick.',
+                );
+            }
+        }
+    }
+
     public function testThePickerReturnsTheRegisteredFileForWordPressesOwnCandidate(): void
     {
         $this->writeTemplate($this->registered, 'single-gig.php');
