@@ -20,9 +20,9 @@ defined('ABSPATH') || exit;
  * Until 5.0.0 the class broke that rule: it proxied `data`/`pages`/`response`/
  * `log`/`mail` through a mixin() registry dispatched by __call(), opening
  * another layer's front door under names no reader could see. That mechanism is
- * gone, with register(), taxonomy(), apiAction(), module() and templatePath().
+ * gone, with register(), taxonomy(), module() and templatePath().
  * Callers name the owning layer themselves now — `ntdst_data()`,
- * `ntdst_pages()`, `ntdst_actions()`, `NTDST_Template_Loader::addPath()`
+ * `ntdst_pages()`, `ntdst_rest()`, `NTDST_Template_Loader::addPath()`
  * (FR-8, 5.0.0; the reasoning lives in the core-shape spec).
  *
  * Accepted cost: single(), page() and archive() forward onto NTDST_Pages, a

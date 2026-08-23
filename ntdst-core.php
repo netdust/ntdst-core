@@ -8,7 +8,7 @@
  * Architecture:
  * - core/     → Foundation (Container, Bootstrap, Theme, Pages)
  * - support/  → Shared primitives with no dependencies (ClientIp, Cidr, RateLimiter)
- * - api/      → Request flow (Actions, Rest, Data, Response)
+ * - api/      → Request flow (Rest, Data, Response)
  * - admin/    → Admin UI (MetaboxGenerator, RelationField)
  * - services/ → Built-in services (Logger)
  *
@@ -23,46 +23,14 @@ defined('ABSPATH') || exit;
 define('NTDST_PATH', __DIR__);
 define('NTDST_URL', plugins_url('', __FILE__));
 
-/**
- * Enqueue the shared NTDST API client (window.ntdstAPI).
- *
- * Single source of truth for /wp-json/ntdst/v1/action calls. Use from both
- * frontend (theme) and admin pages. Localizes the wp_rest nonce as
- * window.ntdstAPIConfig.restNonce so the client can authenticate the REST
- * endpoint regardless of context.
- *
- * Defined ABOVE the require list, not below it. PHP hoists an unconditional
- * top-level function, so today's order works either way — but a required file
- * that calls this at LOAD time is one edit away, and "it works because of
- * hoisting" is a rule nobody reading the list can see.
- */
-function ntdst_enqueue_api_client(): void
-{
-    $path = NTDST_PATH . '/assets/js/ntdst-api.js';
-    wp_enqueue_script(
-        'ntdst-api',
-        NTDST_URL . '/assets/js/ntdst-api.js',
-        [],
-        file_exists($path) ? (string) filemtime($path) : '1.0.0',
-        false,
-    );
-    wp_add_inline_script(
-        'ntdst-api',
-        'window.ntdstAPIConfig = ' . wp_json_encode([
-            'restNonce' => wp_create_nonce('wp_rest'),
-        ]) . ';',
-        'before',
-    );
-}
-
 // Load core foundation
 require_once NTDST_PATH . '/core/Container.php';
 
 // Logger loads FIRST — immediately after the container, before core/, support/,
 // api/ and admin/. It used to load LAST, which is why every caller in this
 // package guarded its logging with function_exists('ntdst_log'): by the time
-// Logger existed, api/Actions.php had already been INVOKED below and anything
-// it wanted to say went nowhere. Those guards are deleted (FR-3) and this line
+// Logger existed, the api/ file booted below had already RUN and anything it
+// wanted to say went nowhere. Those guards are deleted (FR-3) and this line
 // is what makes that safe. bin/guard.sh asserts both halves — no call-site
 // function_exists() guard on a core helper, and this require above api/.
 //
@@ -90,10 +58,8 @@ require_once NTDST_PATH . '/api/Response.php';
 require_once NTDST_PATH . '/admin/MetaboxGenerator.php';
 require_once NTDST_PATH . '/admin/RelationField.php';
 
-// Load and initialize endpoints system
+// Load the REST surface
 require_once NTDST_PATH . '/api/Rest.php';
-require_once NTDST_PATH . '/api/Actions.php';
-ntdst_actions(); // Initialise the command service to register its REST routes
 
 /**
  * Enqueue the shared NTDST admin toolkit CSS.

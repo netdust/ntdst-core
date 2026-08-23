@@ -16,7 +16,6 @@ declare(strict_types=1);
  *
  * Pick the right service:
  *   page / template   → ntdst_pages()
- *   command (ajax)    → ntdst_actions()->register()
  *   resource route    → ntdst_rest()
  *
  * Usage:

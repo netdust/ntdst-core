@@ -198,6 +198,26 @@ fi
 #         `ntdst_mail_before_send`, `_sent`, `_template_paths` and
 #         `_attachment_bases`. README is not swept by this line (*.php only),
 #         so the migration table needs no exemption here.
+# v5.0.0 core-shape: the command dispatcher leaves the package (FR-7). Seven
+#         rows here, and the four `api*` envelopes go to METHOD_PINS instead —
+#         see that table. `NTDST_Actions` owned `POST /ntdst/v1/action` and
+#         `POST /ntdst/v1/get_nonce`, verified `Origin` itself and minted its
+#         own nonce; `assets/js/ntdst-api.js` (`window.ntdstAPI`) was the
+#         browser half and `ntdst_enqueue_api_client()` put it on the page. A
+#         resource route through `ntdst_rest()` and `wp.apiFetch` do all of it
+#         on WordPress's own CSRF now (INV-2, INV-4).
+#         The two FILTER names earn their rows for the reason the model hooks
+#         did: a handler that outlives its dispatcher goes QUIET — php -l
+#         passes, the suite stays green, and a site's command silently stops
+#         answering. `ntdst/api_data/{action}` is interpolated, so the row is
+#         the STEM `ntdst/api_data`. `get_nonce` is the retired ROUTE segment,
+#         pinned bare: nothing else in the package spells it, and README is out
+#         of scope here (*.php only).
+#         All seven are pinned bare — none is a substring of another — and
+#         mirror PackageBootIntegrityTest's rows exactly. `ntdstAPI` is swept in
+#         PHP because ntdst-core.php used to PRINT it (`window.ntdstAPIConfig`)
+#         from an inline script; the JS file itself is gone, so there is no
+#         *.js half left to sweep.
 # The two families are named separately because the retired-TYPE one is the
 # only one whose names collide with WordPress's own vocabulary: a REST route
 # declares ['type' => 'string', 'required' => true], which is JSON Schema and
@@ -212,7 +232,7 @@ fi
 # on a line of its own is indistinguishable from the retired declaration.
 # Mirrors PackageBootIntegrityTest::REST_ARG_SCHEMA_LINE; the shapes are the
 # contract, not the file they were found in.
-REMOVED_SYMBOLS="NTDST_Mailer|ntdst_mail|ntdst_send_mail|ntdst_send_queued_mail|ntdst_notify|ntdst_notification|ntdst_wrap_email_in_layout|ntdst_wrap_all_emails|ntdst_email_layout_paths|NTDST_Scheduler|ntdst_scheduler|ntdst_schedule_recurring|ntdst_clear_recurring|ntdst_model_create_before|ntdst_model_create_after|ntdst_model_update_before|ntdst_model_update_after|ntdst_model_delete_before|ntdst_model_delete_after|log_entry|ntdst_log_database_enabled|addHandler|removeHandler|setMinLevel|setBatchingEnabled|ntdst_log_debug|ntdst_log_info|ntdst_log_error|getFormattedPosts|ntdst_get_formatted_posts|ntdst_make|callableReflections|wireMixins|templatePath|getPostMeta|getPostTerms|attachTerms|syncTerms|detachTerms|whereDate|orWhere|discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int"
+REMOVED_SYMBOLS="NTDST_Mailer|ntdst_mail|ntdst_send_mail|ntdst_send_queued_mail|ntdst_notify|ntdst_notification|ntdst_wrap_email_in_layout|ntdst_wrap_all_emails|ntdst_email_layout_paths|NTDST_Scheduler|ntdst_scheduler|ntdst_schedule_recurring|ntdst_clear_recurring|ntdst_model_create_before|ntdst_model_create_after|ntdst_model_update_before|ntdst_model_update_after|ntdst_model_delete_before|ntdst_model_delete_after|log_entry|ntdst_log_database_enabled|addHandler|removeHandler|setMinLevel|setBatchingEnabled|ntdst_log_debug|ntdst_log_info|ntdst_log_error|getFormattedPosts|ntdst_get_formatted_posts|ntdst_make|callableReflections|wireMixins|templatePath|getPostMeta|getPostTerms|attachTerms|syncTerms|detachTerms|whereDate|orWhere|discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|NTDST_Actions|ntdst_actions|ntdst_enqueue_api_client|ntdstAPI|get_nonce|ntdst/api_data|ntdst/api/public_actions"
 RETIRED_TYPES="'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'"
 REST_ARG_SCHEMA_LINE="'type' *=> *'[a-z_]+'.*'(required|sanitize_callback|validate_callback|items|enum)' *=>|'(required|sanitize_callback|validate_callback|items|enum)' *=>.*'type' *=> *'[a-z_]+'"
 
@@ -277,6 +297,23 @@ declare -A METHOD_PINS=(
     # `if` with a fluent return. Both go; a theme names the owner at the call
     # site now (`ntdst_data()`).
     ["core/Theme.php"]="__call mixin when"
+
+    # FR-7 / SC-3: NTDST_Response has ONE wire shape, and no api* envelope
+    # beside it. apiSuccess()/apiError() built a {success,data:{message,code}}
+    # body that DELIBERATELY disagreed with jsonPayload()'s {success,error},
+    # and apiSuccessResponse()/apiErrorResponse() emitted it as a REST
+    # response — a second wire vocabulary whose only consumers were
+    # NTDST_Actions and the ntdstAPI JS client, both deleted here.
+    #
+    # Pinned as DECLARATIONS in this one file rather than as bare REMOVED rows,
+    # for the reason the container's five methods are: the sweep above reads
+    # *.php only and these four names are not in shipped PHP prose, but they
+    # ARE in README's migration table and in the provider's rows, and a name
+    # pinned in two shapes across two lists is how the two come to disagree.
+    # A method can only come back where it is DECLARED, and that is here.
+    # PackageBootIntegrityTest pins all four as bare provider rows, which is
+    # the sweep that also answers for README.
+    ["api/Response.php"]="apiSuccess apiError apiSuccessResponse apiErrorResponse"
 )
 for PIN_FILE in $(printf '%s\n' "${!METHOD_PINS[@]}" | sort); do
     PIN_METHODS="${METHOD_PINS[$PIN_FILE]}"

@@ -184,38 +184,6 @@ class NTDST_Response
         exit;
     }
 
-    /** API envelope builders — the ONE place the {success,…} wire shapes are decided. */
-    public static function apiSuccess(array $data): array
-    {
-        return ['success' => true, 'data' => $data];
-    }
-
-    // Deliberately a DIFFERENT error wire shape than jsonPayload(): apiError()
-    // → {success:false,data:{message,code}} (NTDST_Actions / ntdstAPI JS clients) vs
-    // jsonPayload() → {success:false,error:string} (json() clients). Do not
-    // "unify" — each shape has live consumers.
-    public static function apiError(string $message, string $code = 'error'): array
-    {
-        return ['success' => false, 'data' => ['message' => $message, 'code' => $code]];
-    }
-
-    /**
-     * The api envelope AS a REST response — the emission NTDST_Actions lacked.
-     *
-     * Deliberately NOT jsonPayload()'s {success,error} shape: these carry the
-     * apiSuccess()/apiError() {success,data} shape the ntdstAPI JS client
-     * reads. Same status mechanism, different (and pinned-distinct) wire shape.
-     */
-    public static function apiSuccessResponse(array $data): WP_REST_Response
-    {
-        return new WP_REST_Response(self::apiSuccess($data), 200);
-    }
-
-    public static function apiErrorResponse(string $message, string $code = 'error', int $status = 400): WP_REST_Response
-    {
-        return new WP_REST_Response(self::apiError($message, $code), $status);
-    }
-
     protected function jsonPayload(): array
     {
         return $this->error

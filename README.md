@@ -20,9 +20,7 @@ vendored copy that drifts. `bin/zero-readers.sh` sweeps six of them for readers
 
 | You want | Use |
 |---|---|
-| a command, dispatched same-origin | `ntdst_actions()->register()` |
-| a resource route | `ntdst_rest('ns/v1')->get()` / `->post()` |
-| file bytes | `add_filter('ntdst/api_download/{action}', …)` |
+| a command, or any resource route | `ntdst_rest('ns/v1')->get()` / `->post()` |
 | a page | `ntdst_pages()->path()` |
 | a download response | `ntdst_download()` — never a hand-rolled CSV block |
 | a download too big to hold in memory | stream it yourself, with `NTDST_Response::downloadHeaders()` |
@@ -35,28 +33,13 @@ vendored copy that drifts. `bin/zero-readers.sh` sweeps six of them for readers
 - Features land on `feature/{name}`.
 - Both merge to `main` with `--no-ff` so the history shows the branch.
 
-## Request dispatch filters
+## Commands and resource routes
 
-Handlers register on same-origin dispatch filters; `NTDST_Actions` owns the
-auth gate so a handler never hand-rolls nonce/capability checks.
-
-An action nothing has registered is refused before the gate does any work: it
-gets no rate bucket, and `/get_nonce` will not mint a nonce for it. Registered
-means listed in `ntdst/api/public_actions`, or having a handler on the dispatch
-filter below.
-
-- `ntdst/api_data/{action}` — POST `/action`. Handler returns
-  `array|WP_Error`; the dispatcher emits the JSON envelope. Gate: rate limit,
-  Origin/CSRF check, per-action nonce, and anonymous callers may reach only
-  actions listed in `ntdst/api/public_actions`.
-- `ntdst/api_download/{action}` — GET `/download` (since v2.3.0). Handler
-  emits a file via `ntdst_response()->download()` / `->inline()` and exits;
-  the dispatcher never reads a filename or path from the request. Same gate as
-  `/action` **except** no Origin check: a browser `<a href>` download is a
-  top-level navigation that carries no `Origin` header, so the per-action
-  nonce in the URL is this surface's CSRF gate. A download action is never
-  public unless listed in `ntdst/api/public_actions`; a handler that returns
-  instead of emitting yields a 500 rather than a blank body.
+There is one HTTP surface, and it is `ntdst_rest()`. A command is a `->post()`
+route like any other: WordPress checks the `wp_rest` nonce, the route's
+`permission_callback` decides who may call it, and the browser reaches it with
+`wp.apiFetch`. 5.0.0 deleted the separate same-origin dispatcher that used to
+own commands — see `### 5.0.0 — BREAKING` for the migration table.
 
 ## Versions
 
@@ -73,12 +56,10 @@ Read every line before upgrading. Nothing here is shimmed.
 
 **Behaviour changes a working consumer can notice.**
 
-1. **`/get_nonce` no longer mints a nonce for an unregistered action.** It used
-   to hand any logged-in caller a nonce for any string. Registered means listed
-   in `ntdst/api/public_actions`, or having a handler on `ntdst/api_data/` or
-   `ntdst/api_download/`. If you used `/get_nonce` as a generic nonce factory
-   for your own AJAX, it now returns 401. Mint those with `wp_create_nonce()`
-   yourself.
+1. **The nonce-minting route stopped answering for unregistered actions.** It
+   used to hand any logged-in caller a nonce for any string. 5.0.0 deletes the
+   route outright — mint your own with `wp_create_nonce('wp_rest')`, which is
+   what `wp.apiFetch` already sends.
 2. **An unregistered action gets no rate bucket and no 429.** It is refused
    with a bare `false` (401), same as an auth denial.
 3. **An anonymous caller is refused BEFORE the limiter runs.** Only reachable
@@ -647,6 +628,29 @@ here because a fatal does not care which spec removed the name.
 | `render_repeater_media_cell()` | the `match ($control)` arm in `admin/MetaboxGenerator.php` |
 | `restSchemaFor()`, `restSubFields()` | `restFields()`. `schemaFor()` asks the publish question at every depth, and it is private |
 
+**The command dispatcher (FR-7).** There is ONE HTTP surface now, and it is
+`ntdst_rest()`. The command dispatcher ran a second one: `POST /ntdst/v1/action`
+with its own `Origin` check, its own per-action nonce minted at a route of its
+own, its own allow-list filter and its own `{success,data}` envelope — every
+CSRF decision WordPress already makes, made a second time and differently. The
+table names each removed symbol. A command is a `->post()` route like any other; the browser reaches
+it with `wp.apiFetch`, which sends the `wp_rest` nonce for you (INV-2, INV-4).
+
+| Was | Now |
+|---|---|
+| `ntdst_actions()`, `NTDST_Actions` | `ntdst_rest('ns/v1')->post('/thing', $cb, ['permission_callback' => …])` |
+| `add_filter('ntdst/api_data/{action}', $cb)` | the route's own `callback` |
+| `add_filter('ntdst/api/public_actions', …)` | `'permission_callback' => '__return_true'` on that route |
+| `POST /ntdst/v1/get_nonce` | `wp_create_nonce('wp_rest')` — `wp.apiFetch` already sends it |
+| `assets/js/ntdst-api.js`, `window.ntdstAPI` | `wp.apiFetch` (`wp-api-fetch` is a WordPress-provided script handle) |
+| `ntdst_enqueue_api_client()` | nothing — depend on `wp-api-fetch` instead |
+| `NTDST_Response::apiSuccess()`, `apiError()` | return the array or a `WP_Error`; WordPress builds the body |
+| `NTDST_Response::apiSuccessResponse()`, `apiErrorResponse()` | `new WP_REST_Response($data, $status)`, or `WP_Error` |
+
+A route's response shape changes with it: the dispatcher wrapped every answer in
+`{success:true,data:{…}}`, and a REST route returns the payload itself. A client
+reading `response.data.thing` reads `response.thing` now.
+
 **Two behavioural changes no rename carries.** Both used to be silent when the
 logger was absent, and both are unconditional now (FR-3):
 
@@ -826,10 +830,11 @@ worse, and does not fix it unless you ask. Asking is one option key.
 
 ### 3.0.0
 
-The routing surface was renamed with no aliases and no shims: `NTDST_Actions` +
-`ntdst_actions()->register()` for commands, `ntdst_rest()` for resource routes,
-`ntdst_pages()` for pages. A caller of a retired symbol gets a fatal,
-deliberately, rather than silent inaction.
+The routing surface was renamed with no aliases and no shims: `ntdst_rest()`
+for resource routes, `ntdst_pages()` for pages, and a same-origin command
+dispatcher beside them that 5.0.0 then removed (see `### 5.0.0 — BREAKING`). A
+caller of a retired symbol gets a fatal, deliberately, rather than silent
+inaction.
 
 ## Minimalism rule
 

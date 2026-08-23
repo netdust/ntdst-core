@@ -416,6 +416,50 @@ final class PackageBootIntegrityTest extends TestCase
             'ntdst_mail_attachment_bases' => ['ntdst_mail_attachment_bases', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
             'ntdst_email_layout_paths' => ['ntdst_email_layout_paths', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
             'ntdst_wrap_all_emails' => ['ntdst_wrap_all_emails', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            // v5.0.0 core-shape: the command dispatcher leaves the package
+            // (FR-7). `NTDST_Actions` owned `POST /ntdst/v1/action` and
+            // `POST /ntdst/v1/get_nonce`, verified the `Origin` header itself
+            // and minted its own nonce; `assets/js/ntdst-api.js` was the
+            // browser half (`window.ntdstAPI`) and `ntdst_enqueue_api_client()`
+            // put it on the page. A resource route through `ntdst_rest()` and
+            // `wp.apiFetch` do all of it now, on WordPress's own CSRF (INV-2,
+            // INV-4).
+            //
+            // Eleven rows in three families, and the split is the same one the
+            // Mailer rows make. The class, the two globals and the browser
+            // object are the names a consumer CALLS — a survivor is a
+            // call-time fatal. The two FILTER names are what a consumer
+            // LISTENS on: `ntdst/api_data/{action}` is interpolated, so the
+            // row is the STEM `ntdst/api_data`, and a handler that outlives
+            // its dispatcher goes quiet instead of fataling, which is the
+            // failure a sweep has to see. `get_nonce` is the retired ROUTE
+            // segment — bare, because nothing else in the package spells it.
+            //
+            // The four `api*` envelopes are METHODS of NTDST_Response and are
+            // pinned bare here rather than by call shape: none is an ordinary
+            // English word, none appears in prose, and `apiSuccess` /
+            // `apiError` are substrings of their `*Response` siblings, so the
+            // pairs are listed anyway for the same reason the `ntdst_mail_*`
+            // hooks are — FR-7 enumerates four, and narrowing one row must not
+            // silently un-pin two. bin/guard.sh pins the same four as
+            // DECLARATIONS in api/Response.php (METHOD_PINS), because a *.php
+            // sweep on a bare `apiError` would also have to answer for README.
+            //
+            // All eleven carry README's MIGRATION-ROW exemption, the shape the
+            // `ntdst_service_` and `ntdst_model_*` rows use: the migration
+            // table may SPELL a removed name, while a live INSTRUCTION
+            // elsewhere in README that still uses one fails.
+            'ntdst_actions' => ['ntdst_actions', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'NTDST_Actions' => ['NTDST_Actions', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst_enqueue_api_client' => ['ntdst_enqueue_api_client', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdstAPI' => ['ntdstAPI', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'get_nonce' => ['get_nonce', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst/api_data' => ['ntdst/api_data', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst/api/public_actions' => ['ntdst/api/public_actions', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'apiSuccessResponse' => ['apiSuccessResponse', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'apiErrorResponse' => ['apiErrorResponse', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'apiSuccess' => ['apiSuccess', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'apiError' => ['apiError', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
         ];
     }
 
