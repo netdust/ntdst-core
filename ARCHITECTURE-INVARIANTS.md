@@ -60,7 +60,8 @@ All three commands re-run verbatim at `9fdad3d`, the code this doc describes:
 `:266`, `:1932`, `:1955`, `:2071`, `:2075`, `:2127`), and no second READER among
 them; (3) EMPTY — no `public_fields`, `public_shape` or `publicRow` survives
 outside the test that forbids the vocabulary. Earlier pins: `42d7090` (the code),
-`96560c5` (the checks). T14 re-runs all three at the release commit.
+`96560c5` (the checks). Re-run verbatim at `85b54cb` (T14, pre-tag release
+commit): identical — EMPTY, TEN hits at the same ten lines, EMPTY.
 
 ## INV-2 — One HTTP surface: every route registers through `ntdst_rest()`
 
@@ -83,7 +84,8 @@ form to run.
 **Status:** holds (established 2026-08-23, specs/core-shape — Cluster 3, T08).
 Re-run verbatim at `9fdad3d` — EMPTY: no `register_rest_route(`, no `wp_ajax_`,
 no `ntdst/api_data` and no `ntdst_actions` outside `api/Rest.php`, with the
-comment filter carrying nothing. Earlier pin `007fb33`, also empty. `api/Actions.php` is deleted, `ntdst-core.php` no longer requires
+comment filter carrying nothing. Re-run verbatim at `85b54cb` (T14): still
+EMPTY. Earlier pin `007fb33`, also empty. `api/Actions.php` is deleted, `ntdst-core.php` no longer requires
 or boots it, `admin/RelationField.php` moved to `ntdst_rest()` at T07, and
 `NTDST_Rest::registerOne()` is the only caller of `register_rest_route()` in the
 package. The seven live hits recorded at `96560c5` are all gone.
@@ -118,7 +120,8 @@ handler body instead of on the route; a second permission registry; a
 **Status:** holds (established 2026-08-23, specs/core-shape — Cluster 2, T04–T06).
 Re-run verbatim at `9fdad3d` — EMPTY, with and without the comment filter: no
 `__return_true`, no `=> 'public'`, no `->public()` and no `public_actions`
-outside `api/Rest.php`. Earlier pin `d91e117` for routes through
+outside `api/Rest.php`. Re-run verbatim at `85b54cb` (T14): still EMPTY.
+Earlier pin `d91e117` for routes through
 `ntdst_rest()`; re-pinned at core-shape Cluster 3, also empty. `api/Actions.php` carried all six hits recorded at `96560c5` (the
 `$public_actions` property, the filter read and the membership test on each of
 the two dispatch paths, and the registration helper) and T08 deleted the file,
@@ -151,7 +154,8 @@ check standing in for the nonce.
 **Status:** holds (established 2026-08-23, specs/core-shape — Cluster 3, T08),
 with the widened pattern the cluster-3 fix wave added. Both commands re-run
 verbatim at `9fdad3d`: THREE hits, all in `admin/MetaboxGenerator.php` —
-`:342`, `:712`, `:1864` — and `grep -rn "fetch(" assets/js` is EMPTY. Core mints no nonce and reads no `Origin` or `Referer`
+`:342`, `:712`, `:1864` — and `grep -rn "fetch(" assets/js` is EMPTY. Re-run
+verbatim at `85b54cb` (T14): identical — same three lines, still EMPTY. Core mints no nonce and reads no `Origin` or `Referer`
 anywhere on its HTTP surface. `api/Actions.php` carried all eight of the hits recorded at
 `96560c5` and is deleted; `assets/js/ntdst-api.js` carried the ninth and its
 four raw `fetch()` calls, and is deleted too. The `wp_rest` nonce that
@@ -218,6 +222,9 @@ The `api*` envelopes are no longer outstanding: T08 deleted `apiSuccess()`, `api
 `apiSuccessResponse()` and `apiErrorResponse()` with the dispatcher that wrapped
 every answer in `{success, data}` — a REST route returns the payload and
 WordPress builds the body.
+
+Re-run verbatim at `85b54cb` (T14): TWENTY hits, unchanged from `2fbde3d` — the
+same twenty names above, nothing new and nothing named here gone.
 
 ## INV-6 — One template resolver; page routes are rewrite rules; a template callback returns a path
 
@@ -292,7 +299,9 @@ commands re-run verbatim at `9fdad3d`: the first returns FIVE hits, all
 comments on its guard), and the second returns ONE `function redirect`
 (`api/Response.php:150`) and ONE `function addPath`
 (`core/TemplateLoader.php:31`). `api/Response.php` and `core/Pages.php` return
-zero on the first. The line numbers in the paragraph below match the tree at
+zero on the first. Re-run verbatim at `85b54cb` (T14): identical on both
+counts and all six line numbers unchanged (`:146`, `:149`, `:190`, `:204`,
+`:215`; `api/Response.php:150`; `core/TemplateLoader.php:31`). The line numbers in the paragraph below match the tree at
 that sha; T14 re-pins them once more.
 
 Satisfied at `8338c4a` (core-shape Cluster 4b GATE-fix wave; the
@@ -331,7 +340,9 @@ honour. `html()` hands its data to WordPress's own
 `load_template($file, false, $data)` inside a buffer (`api/Response.php:191`),
 which is the one way data reaches a template besides
 `NTDST_Template_Loader::page()`. Line numbers re-pinned at `8338c4a`, the last
-CODE commit of the GATE-fix wave; they move again at T14.
+CODE commit of the GATE-fix wave; re-verified unchanged at `85b54cb` (T14) —
+every line cited in this paragraph (`Pages.php:141,165,180,204,206,329,331,345`;
+`Response.php:89,99-100,150,157,191,211,225,237,249`) still holds.
 
 ## INV-7 — Throttling is one primitive, charged from the permission callback
 
@@ -353,7 +364,9 @@ own comments explaining the window. The other three are
 `SAVE_ERROR_TRANSIENT_PREFIX`, one save-error MESSAGE parked for one redirect
 and consumed on read, not a count of anything. In `guard()`,
 `$permission($request)` at `api/Rest.php:928` still precedes
-`NTDST_RateLimiter::attempt` at `:949`. Earlier pin `f42c732`; baseline's login
+`NTDST_RateLimiter::attempt` at `:949`. Re-run verbatim at `85b54cb` (T14):
+identical — same NINE hits at the same lines, and the guard-order pair
+(`:928`, `:949`) unchanged. Earlier pin `f42c732`; baseline's login
 throttle converges on it (`ntdst-baseline` `51f7e2e`).
 
 ## INV-8 — One field-type vocabulary; a type name resolves in one table
@@ -456,6 +469,8 @@ Both commands re-run verbatim at `9fdad3d`: (A) returns **51** and (B) returns
 `admin/RelationField.php` 5, `api/Rest.php` 3, `core/Pages.php` 2,
 `core/LogLevel.php` 1, `api/Response.php` 1 — every one of them named under
 `## Deliberate exceptions`. (B)'s single hit is `admin/RelationField.php:46`.
+Re-run verbatim at `85b54cb` (T14): identical — (A) 51 with the same per-file
+shape, (B) 1 at the same line.
 
 Earlier: (A) 51 / (B) 1, both re-run at the core-shape cluster-3 fix wave. (A)'s TOTAL is unchanged from `96560c5` and its shape is
 not: `api/Actions.php` went 2 → 0 (T08 deleted the file, and both its hits were
@@ -543,7 +558,9 @@ scoping were corrected at the Cluster D gate). Re-run verbatim at `9fdad3d`:
 consumer root is present. All sixteen `EXCEPTIONS` rows are named in README's
 `#### Extension points` table and every one of them still has a shipped site —
 `ntdst_inline()` included, which core-shape decided to KEEP rather than delete.
-Earlier pin `5506025` — stdout empty and exit 0, with all thirteen consumer
+Re-run verbatim at `85b54cb` (T14): stdout still empty (0 lines), exit 0, and
+every consumer root still present (a missing root prints as a finding on
+stdout, and stdout was empty). Earlier pin `5506025` — stdout empty and exit 0, with all thirteen consumer
 roots present; the advisory method candidate count is on stderr, not pinned here,
 because it moves whenever a consumer repository does. Nine of the sixteen
 `EXCEPTIONS` rows are load-bearing: drop one and a finding appears. The seven
@@ -630,7 +647,8 @@ for `ntdst-core.php` and `0` for `core/Bootstrap.php`; (2) is EMPTY; (3) is one
 file, `core/Bootstrap.php`; (4) has the single gated `ntdst_set($class)` at
 `core/Bootstrap.php:501` behind `class_exists()` at `:408`, beside
 `core/Container.php`'s own declaration and docblock examples and
-`core/Theme.php:58` registering an instance of itself. Earlier pin `96560c5`,
+`core/Theme.php:58` registering an instance of itself. Re-run verbatim at
+`85b54cb` (T14): identical — same four answers at the same lines. Earlier pin `96560c5`,
 with the same four answers. (2) was also run
 against a scratch file holding the exact line 5.0.0 deleted,
 `$relativePath = str_replace('\\', '/', $class) . '.php';` — one hit.
