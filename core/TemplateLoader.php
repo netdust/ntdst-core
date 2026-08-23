@@ -17,7 +17,12 @@ final class NTDST_Template_Loader
     /** The ONE template path registry. Read live on every locate(). */
     protected static array $custom_paths = [];
 
-    /** Resolved-template cache (shared). Positive hits only — see locate(). */
+    /**
+     * Resolved-template cache (shared). Positive hits only — see locate().
+     *
+     * Keyed by THEME plus name: a positive resolution is only cache-safe for
+     * the theme it was resolved under.
+     */
     protected static array $template_cache = [];
 
     /** @var array<string, mixed> Data page() hands to the template WordPress includes later. */
@@ -89,8 +94,18 @@ final class NTDST_Template_Loader
             $template .= '.php';
         }
 
-        if (isset(self::$template_cache[$template])) {
-            return self::$template_cache[$template];
+        // Keyed per THEME, never by name alone. themeDirs() is read live, so
+        // switch_to_blog() or a `stylesheet`/`template` filter moves the whole
+        // search inside one request — while a cache hit returns BEFORE any
+        // bound is re-checked. Keyed by name alone, `header` resolved under the
+        // old theme kept answering with the old theme's file (one blog serving
+        // another blog's header). A positive resolution is cache-safe only
+        // within the theme it was resolved under, so the theme is in the key
+        // and a theme change simply misses.
+        $key = implode('|', self::themeDirs()) . '|' . $template;
+
+        if (isset(self::$template_cache[$key])) {
+            return self::$template_cache[$key];
         }
 
         // $extraPaths resolve for THIS call only and never populate the shared
@@ -108,7 +123,7 @@ final class NTDST_Template_Loader
         foreach (self::searchPaths() as $path) {
             $file = $path . '/' . $template;
             if (file_exists($file) && self::isInside($file, $path)) {
-                self::$template_cache[$template] = $file;
+                self::$template_cache[$key] = $file;
                 return $file;
             }
         }
@@ -130,7 +145,7 @@ final class NTDST_Template_Loader
         // breakage that is miserable to diagnose (2026-06-12, questionnaire
         // field rendering).
         if ($located) {
-            self::$template_cache[$template] = $located;
+            self::$template_cache[$key] = $located;
             return $located;
         }
 

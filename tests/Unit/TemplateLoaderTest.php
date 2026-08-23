@@ -61,6 +61,19 @@ final class TemplateLoaderTest extends TestCase
     /** A registered plugin template directory. */
     private string $registered = '';
 
+    /**
+     * What get_stylesheet_directory()/get_template_directory() answer RIGHT NOW.
+     *
+     * Live, not frozen: switch_to_blog() and the `stylesheet` filter both move
+     * the theme inside a single request, so a case that switches themes just
+     * writes this property. A justReturn() would freeze the answer and no test
+     * could tell a per-theme cache from a global one.
+     */
+    private string $themeDir = '';
+
+    /** WordPress's third locate_template() branch, ABSPATH . WPINC . '/theme-compat'. */
+    private string $themeCompat = '';
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -71,10 +84,16 @@ final class TemplateLoaderTest extends TestCase
         mkdir($this->registered, 0o777, true);
 
         // The theme half of searchPaths() points at nothing that exists, so a
-        // resolution in these tests can only come from the registry.
-        Functions\when('get_stylesheet_directory')->justReturn($this->root . '/no-such-theme');
-        Functions\when('get_template_directory')->justReturn($this->root . '/no-such-theme');
-        Functions\when('locate_template')->justReturn('');
+        // resolution in these tests can only come from the registry — unless a
+        // case moves $themeDir (a theme switch) or fills $themeCompat.
+        $this->themeDir = $this->root . '/no-such-theme';
+        $this->themeCompat = $this->root . '/wp-includes/theme-compat';
+
+        Functions\when('get_stylesheet_directory')->alias(fn (): string => $this->themeDir);
+        Functions\when('get_template_directory')->alias(fn (): string => $this->themeDir);
+        Functions\when('locate_template')->alias(
+            fn ($names, $load = false, $require_once = true): string => $this->locateTemplateStub((array) $names),
+        );
 
         $this->resetLoader();
 
@@ -426,8 +445,84 @@ final class TemplateLoaderTest extends TestCase
     }
 
     // -----------------------------------------------------------------------
+    // One cache, keyed per theme
+    // -----------------------------------------------------------------------
+
+    /**
+     * A theme switch must MISS the cache (R2-1).
+     *
+     * $template_cache was keyed by name alone and a hit returned before any
+     * bound was re-checked, while themeDirs() is read live. So after
+     * switch_to_blog() — or any `stylesheet`/`template` filter change — a name
+     * already resolved under theme A kept answering with theme A's file while
+     * every other part of the class had moved to theme B. The multisite shape
+     * of that bug is one blog rendering another blog's header.
+     */
+    public function testACacheHitDoesNotSurviveAThemeSwitch(): void
+    {
+        $themeA = $this->root . '/theme-a';
+        $themeB = $this->root . '/theme-b';
+        $this->writeTemplate($themeA, 'header.php');
+        $this->writeTemplate($themeB, 'header.php');
+
+        $this->themeDir = $themeA;
+        $this->assertSame(
+            $themeA . '/header.php',
+            NTDST_Template_Loader::locate('header'),
+            'theme A resolves and populates the cache.',
+        );
+
+        $this->themeDir = $themeB;
+        $this->assertSame(
+            $themeB . '/header.php',
+            NTDST_Template_Loader::locate('header'),
+            'After a theme switch the cached name must MISS: the cache is keyed per theme, '
+            . 'and a hit that predates the switch answers for a theme that is no longer active.',
+        );
+    }
+
+    /**
+     * The switch does not throw the cache away either — theme A's entry is
+     * still there, so switching back is a hit and not a re-scan. Keying is the
+     * fix; flushing on every locate() would be a different (slower) one.
+     */
+    public function testSwitchingBackIsStillServedFromTheCache(): void
+    {
+        $themeA = $this->root . '/theme-a';
+        $themeB = $this->root . '/theme-b';
+        $this->writeTemplate($themeA, 'header.php');
+        $this->writeTemplate($themeB, 'header.php');
+
+        $this->themeDir = $themeA;
+        NTDST_Template_Loader::locate('header');
+        $this->themeDir = $themeB;
+        NTDST_Template_Loader::locate('header');
+        $this->themeDir = $themeA;
+
+        $this->assertSame($themeA . '/header.php', NTDST_Template_Loader::locate('header'));
+        $this->assertCount(
+            2,
+            $this->cachedEntries(),
+            'One entry per (theme, name): both themes stay cached, neither shadows the other.',
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
+
+    /**
+     * The shared resolved-template cache, read back through reflection.
+     *
+     * @return array<string, string>
+     */
+    private function cachedEntries(): array
+    {
+        $property = (new ReflectionClass(NTDST_Template_Loader::class))->getProperty('template_cache');
+        $property->setAccessible(true);
+
+        return $property->getValue();
+    }
 
     private function resetLoader(): void
     {
@@ -437,6 +532,30 @@ final class TemplateLoaderTest extends TestCase
             $property->setAccessible(true);
             $property->setValue(null, $empty);
         }
+    }
+
+    /**
+     * Real-equivalent of WordPress's locate_template(): the stylesheet dir, the
+     * template dir, then ABSPATH . WPINC . '/theme-compat/' — WordPress's own
+     * three branches, in its order. The first two are the same directory here;
+     * the third is the branch R2-3 pins as REFUSED. None of these directories
+     * exists unless a case creates it, so every other case still resolves from
+     * the registry and sees '' from the fallthrough, as before.
+     *
+     * @param list<mixed> $names
+     */
+    private function locateTemplateStub(array $names): string
+    {
+        foreach ($names as $name) {
+            foreach ([$this->themeDir, $this->themeDir, $this->themeCompat] as $dir) {
+                $file = $dir . '/' . ltrim((string) $name, '/');
+                if (is_file($file)) {
+                    return $file;
+                }
+            }
+        }
+
+        return '';
     }
 
     private function writeTemplate(string $dir, string $relative): void
