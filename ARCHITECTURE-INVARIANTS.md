@@ -196,8 +196,8 @@ is deleted with `getMimeType()` and `registerMimeType()`, and the check returns
 resolves its type through `wp_check_filetype($name, wp_get_mime_types())`, and
 the four types WordPress's table lacks arrive through the filter WordPress
 provides for exactly that: `NTDST_Response::mimeTypes()` on `mime_types`
-(`api/Response.php:348`, mounted by `init()` `:388`), which ADDS and never
-overrides. `uploadMimes()` (`:375`) reads those four back OFF `upload_mimes`,
+(`api/Response.php:362`, mounted by `init()` `:402`), which ADDS and never
+overrides. `uploadMimes()` (`:389`) reads those four back OFF `upload_mimes`,
 because `mime_types` is also the base of `get_allowed_mime_types()` and core may
 not widen what a site accepts on upload; it derives them from `mimeTypes([])`
 rather than listing them a second time, so the grep gains no hit.
@@ -224,7 +224,7 @@ way to pass data to a template (`extract()` over a caller array); a second
 `addPath`.
 **Deliberate exceptions:**
 - **The page dispatcher's terminator** — `NTDST_Pages::terminate()`
-  (`core/Pages.php:285`, `exit` at `:287`), called from `dispatch()` when a
+  (`core/Pages.php:329`, `exit` at `:331`), called from `dispatch()` when a
   `path()` callback returns `null`/`true`. ONE site. A callback that answered
   the request itself has already written its bytes, and returning out of
   `template_redirect` leaves WordPress to render the query it had resolved —
@@ -235,40 +235,81 @@ way to pass data to a template (`extract()` over a caller array); a second
   DISPATCHER does, and it is a `protected function terminate(): never` so a
   test double can observe the end of the request instead of dying with it.
   Added by the core-shape Cluster 4b fix wave (C-1, `a5092a7`).
-**Mechanical check:** `grep -rn "is_404 = false\|redirect_canonical\|locate_template(\|extract(" --include=*.php api core` → FIVE hits, all
+
+  A7 — what "one exit site" means, exactly. The rule is: NOTHING exits inside
+  a TEMPLATE FILTER callback, and the dispatcher is the only site that ends a
+  request the callback did not answer itself. It is not "the package holds one
+  `exit`". A callback may deliberately hand the request to a helper that ends
+  it, and there are exactly TWO such helpers, both `never`-typed so the reading
+  is local: `NTDST_Response::redirect()` (`api/Response.php:150`, `exit` at
+  `:157`) and `sendFile()` (`:237`, `exit` at `:249`) behind `download()`
+  (`:211`) / `inline()` (`:225`). Each is called FROM a callback, on that
+  callback's own account, with its bytes already written — the case the
+  contract calls "I answered this request myself". README names both.
+- **Two homes for one refusal** — `NTDST_Pages::notFound()`
+  (`core/Pages.php:345`) and `NTDST_Response::notFound()` (`api/Response.php:89`)
+  write the SAME three lines: `$wp_query->set_404()`, `status_header(404)`,
+  `nocache_headers()`. WordPress's own `WP::handle_404()` has already decided
+  the request was fine by the time either runs, so the flag alone would leave a
+  200 on the wire — both need all three. Accepted for Cluster 4b (reinvention 1,
+  A4) with the convergence named: `Pages::notFound()` becomes
+  `ntdst_response()->notFound()` once a shared require between the two files is
+  acceptable, which today would cost a third file both must load. Until then an
+  edit to ONE of them is a defect unless it lands in both;
+  `CoreShapeCluster4bFeatureTest::testAPageRefusalSendsTheSameThreeLinesResponseSends()`
+  asserts the two side by side, which is the check that catches a one-sided
+  edit.
+**Mechanical check:** `grep -rn "is_404 = false\|redirect_canonical\|locate_template(\|extract(" --include=*.php api core admin support services ntdst-core.php` → FIVE hits, all
 `core/TemplateLoader.php`, and none of them a bypass: the single
 `locate_template()` CALL at `:146`, and four comments documenting the guard on
 its result (`:149`, `:190`, `:204`, `:215` — the hit is refused unless it lies
 inside a theme directory, `5fa3d61`). `api/Response.php` and `core/Pages.php`
 return ZERO: the canonical-redirect filter, both `is_404 = false` clears and
 both `extract()` calls over a caller array are gone.
-`grep -rn "function addPath\|function redirect" --include=*.php api core` → ONE
-each: `api/Response.php:140` and `core/TemplateLoader.php:31`.
-**Status:** SATISFIED at `ae6da3e` (core-shape Cluster 4b fix wave; the last
-behaviour commit of the wave is `db0b335`), which re-pins the page-router half after C-1/C-2/I-1/I-2/I-3; `2fbde3d` (T11) closed
-the Response half and `5bee797` (T10) first closed the page-router half.
-`NTDST_Pages::path()` (`core/Pages.php:125`) calls `add_rewrite_rule()` at
-`:149` and names its query vars on the `query_vars` filter (`queryVars()`
-`:164`); `dispatch()` (`:188`) runs on `template_redirect` and reads
-`get_query_var('ntdst_page')` at `:190`. Both greps return NO hit in
+`grep -rn "function addPath\|function redirect" --include=*.php api core admin support services ntdst-core.php` → ONE
+each: `api/Response.php:150` and `core/TemplateLoader.php:31`.
+(A9 — both greps swept `api core` only, which is the two directories the
+invariant is ABOUT and not the package: a template `include` or a second
+`addPath` in `admin`, `support`, `services` or `ntdst-core.php` was outside
+what the check could see. Broadened and re-run: the answers are unchanged,
+five and one/one, so nothing was hiding there today.)
+**Status:** SATISFIED at `8338c4a` (core-shape Cluster 4b GATE-fix wave; the
+last behaviour commit of that wave is `5a32ae1`). The `db0b335` this line used
+to name was already stale when it was written: `f8626a8` — `Response::notFound()`
+sends WordPress's three lines — landed after it and was the wave's last
+behaviour commit at the time (A5). It re-pins the page-router half after
+RF-1/R-1, R-2 and R-S4; `2fbde3d` (T11) closed the Response half and `5bee797`
+(T10) first closed the page-router half.
+`NTDST_Pages::path()` (`core/Pages.php:141`) calls `add_rewrite_rule()` at
+`:165` and names its query vars on the `query_vars` filter (`queryVars()`
+`:180`); `dispatch()` (`:204`) runs on `template_redirect` and reads
+`get_query_var('ntdst_page')` at `:206`. It answers only where WordPress
+matched one of THIS router's rules — `$GLOBALS['wp']->matched_rule` against the
+route's own regex — and passes through where it did not, so a hand-written
+`?ntdst_page=` on a foreign URL reaches no callback and forces no 404 (RF-1 /
+R-1). Both greps return NO hit in
 `core/Pages.php`: the canonical-redirect filter, the `is_404` clear, the
-render-and-exit and `function redirect` are all gone (six methods, pinned in
-`bin/guard.sh` `METHOD_PINS["core/Pages.php"]` and — the five distinctive ones —
-in `PackageBootIntegrityTest::removedSymbolProvider()`). Besides the file's
-`defined('ABSPATH') || exit;` guard at `:80`, the ONE `exit` the file carries is
-`terminate()`'s at `:287` — named under `**Deliberate exceptions:**` above, and
+render-and-exit and `function redirect` are all gone (SEVEN methods now, pinned
+in `bin/guard.sh` `METHOD_PINS["core/Pages.php"]` and — the five distinctive
+ones — in `PackageBootIntegrityTest::removedSymbolProvider()`). The seventh is
+`compilePattern`, and it is the one RENAME rather than a removal: `5bee797` took
+it to `compileRule()`, which builds a REWRITE rule instead of a regex the router
+re-matches itself. It was private, so it owes README no migration row and is
+pinned in `guard.sh` alone (A2). Besides the file's
+`defined('ABSPATH') || exit;` guard at `:96`, the ONE `exit` the file carries is
+`terminate()`'s at `:331` — named under `**Deliberate exceptions:**` above, and
 matched by neither grep. `function redirect` and `function addPath` are each
-ONE: `api/Response.php:140` and `core/TemplateLoader.php:31`. `locate_template(`
+ONE: `api/Response.php:150` and `core/TemplateLoader.php:31`. `locate_template(`
 is still the single CALL at `core/TemplateLoader.php:146`, with four comment
 mentions (`:149`, `:190`, `:204`, `:215`). A route refuses by calling
 WordPress's `$wp_query->set_404()` — from `NTDST_Response::notFound()`
-(`api/Response.php:92-93`) and from `NTDST_Pages::notFound()`
-(`core/Pages.php:297`) — instead of setting a flag for something downstream to
+(`api/Response.php:99-100`) and from `NTDST_Pages::notFound()`
+(`core/Pages.php:345`) — instead of setting a flag for something downstream to
 honour. `html()` hands its data to WordPress's own
-`load_template($file, false, $data)` inside a buffer (`api/Response.php:181`),
+`load_template($file, false, $data)` inside a buffer (`api/Response.php:191`),
 which is the one way data reaches a template besides
-`NTDST_Template_Loader::page()`. Line numbers re-pinned at the Cluster 4b fix
-wave; they move again at T14.
+`NTDST_Template_Loader::page()`. Line numbers re-pinned at `8338c4a`, the last
+CODE commit of the GATE-fix wave; they move again at T14.
 
 ## INV-7 — Throttling is one primitive, charged from the permission callback
 
@@ -366,7 +407,7 @@ Every part of (A)'s form is load-bearing:
 - The last filter drops COMMENT lines, the way INV-1's does. A docblock reading
   `@param string $field Field to match (term_id, …)` is prose, not a switch.
 
-(A) returns **51 lines** and (B) returns **2**. Every one of them is named in
+(A) returns **51 lines** and (B) returns **1**. Every one of them is named in
 `## Deliberate exceptions` below, grouped by WHAT it is rather than by where it
 sits. Anything else is a bypass. (It was 59 while `services/Logger.php` still
 declared the `log_entry` model; core-trim FR-5 deleted that model and took eight
@@ -379,7 +420,7 @@ same thing, free to disagree.
 
 **Status:** established by field-types Clusters A–C, re-pinned at the core-trim
 Cluster D gate.
-(A) 51 hits / (B) 2, all named; both commands re-run verbatim at the core-shape
+(A) 51 hits / (B) 1, all named; both commands re-run verbatim at the core-shape
 cluster-3 fix wave. (A)'s TOTAL is unchanged from `96560c5` and its shape is
 not: `api/Actions.php` went 2 → 0 (T08 deleted the file, and both its hits were
 WordPress's own `callback` ARGUMENT key), and `admin/RelationField.php` went
@@ -638,7 +679,7 @@ Things core does that WordPress also does, kept on purpose. Each names why.
 
 ### INV-8 — every hit the field-type check returns
 
-(A) returns 51 lines and (B) returns 2. Each group below says WHAT the hits are,
+(A) returns 51 lines and (B) returns 1. Each group below says WHAT the hits are,
 not which line they sit on: a line number is stale after the next edit, and a
 reader matching 59 greps against stale numbers stops reading. Where a group has
 a test that holds it, the test is named — that is its mechanical home.
