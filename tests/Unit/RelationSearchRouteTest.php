@@ -504,12 +504,18 @@ final class RelationSearchRouteTest extends TestCase
 
     /**
      * The handler no longer reads the plural parameter.
+     *
+     * Matched on the SHAPE of a read — the name in quotes or opening a
+     * subscript — and not on the bare word: `get_post_types()` is WordPress's
+     * own function, the derived allow-list calls it, and a guard that cannot
+     * tell a core call from a retired parameter is a guard that has to be
+     * argued with instead of read.
      */
     public function testTheHandlerHasNoPostTypesRead(): void
     {
         $this->assertSame(
             0,
-            preg_match_all('/post_types/', $this->source('admin/RelationField.php')),
+            preg_match_all('/[\'"\[]post_types\b/', $this->source('admin/RelationField.php')),
             'The dual `post_types ?? post_type` read is deleted — one spelling, declared in the route args.',
         );
     }

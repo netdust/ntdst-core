@@ -501,6 +501,65 @@ final class PackageBootIntegrityTest extends TestCase
     }
 
     /**
+     * A REST `args` schema line is exempt in ANY file; a bare field
+     * declaration in the same file still fires.
+     *
+     * The route that declares `GET /ntdst/v1/relation/search` writes
+     * `'type' => 'string'` because WordPress's `register_rest_route()` reads
+     * JSON-Schema, and the retired type NAMES are JSON-Schema words. Without
+     * this distinction the pin turns every REST argument in the package into a
+     * retired-type declaration, and the cure an author reaches for is a
+     * per-file exemption — which is the whole-file exemption this pin exists
+     * to refuse.
+     *
+     * So it is judged on CONTENT and on a throwaway tree that is not
+     * api/FieldTypes.php: the exempt lines carry an arg key beside the type,
+     * the hit does not, and the file they sit in decides nothing.
+     */
+    public function testARestArgSchemaLineIsExemptAnywhereAndABareTypeDeclarationStillFires(): void
+    {
+        $rows = self::removedSymbolProvider();
+
+        $this->assertArrayHasKey('retired type string', $rows, "removedSymbolProvider() must pin 'retired type string'.");
+
+        [$symbol, , $exceptPath, $exceptLine] = $rows['retired type string'] + [2 => '', 3 => ''];
+
+        $lines = [
+            // WordPress's args vocabulary, one argument per line — exempt.
+            "                'search' => ['type' => 'string', 'required' => true, 'sanitize_callback' => 'sanitize_text_field'],",
+            "                'post_type' => ['type' => 'array', 'items' => ['type' => 'string']],",
+            "                'status' => ['type' => 'string', 'enum' => ['publish', 'draft']],",
+            // A field declaration wearing the retired name — still a hit, in
+            // the same file, three lines down.
+            "        'blurb' => ['type' => 'string'],",
+        ];
+
+        $root = sys_get_temp_dir() . '/ntdst-sweep-rest-' . getmypid() . '-' . uniqid();
+        mkdir($root . '/admin', 0777, true);
+        file_put_contents($root . '/admin/RelationField.php', implode("\n", ['<?php', ...$lines, '']));
+
+        try {
+            $hits = $this->sweep($root, $symbol, $exceptPath, $exceptLine);
+
+            $this->assertCount(
+                1,
+                $hits,
+                "A REST arg schema line is WordPress's vocabulary and must not be read as a field declaration:\n"
+                    . implode("\n", $hits),
+            );
+            $this->assertStringContainsString(
+                'admin/RelationField.php:' . (count($lines) + 1),
+                $hits[0],
+                'The bare `type => string` declaration is the one line that fires.',
+            );
+        } finally {
+            unlink($root . '/admin/RelationField.php');
+            rmdir($root . '/admin');
+            rmdir($root);
+        }
+    }
+
+    /**
      * A markdown HEADING is not a PHP comment.
      *
      * The sweep skips a line that opens with `*`, `//`, `#` or `/*`, because a
@@ -602,6 +661,16 @@ final class PackageBootIntegrityTest extends TestCase
                     continue;
                 }
                 if ($exempt && preg_match($exceptLine, $line) === 1) {
+                    continue;
+                }
+                // The retired-type rows, and only those: they are the family
+                // whose names collide with JSON-Schema, so they are the family
+                // a REST `args` declaration trips. No path — a route may be
+                // declared in any shipped file.
+                if (
+                    str_starts_with($symbol, "/'type' *=> *'")
+                    && preg_match(self::REST_ARG_SCHEMA_LINE, $line) === 1
+                ) {
                     continue;
                 }
                 $spelled = str_starts_with($symbol, '/')
@@ -965,6 +1034,27 @@ final class PackageBootIntegrityTest extends TestCase
      * reason, and the list is short on purpose: it is the price of narrowing a
      * whole-section exemption to a line-shaped one.
      */
+    /**
+     * A REST `args` schema line, which is WordPress's vocabulary and not a
+     * field declaration.
+     *
+     * The 13 retired type names are ordinary JSON-Schema words, and a route
+     * declares its arguments in exactly those words: `GET
+     * /ntdst/v1/relation/search` writes `'type' => 'string'` because that is
+     * what `register_rest_route()` reads, the same way api/FieldTypes.php's
+     * publish column does. The distinction this pin already makes for the
+     * registry's own leaf is made here for the route's args, and it is made by
+     * CONTENT, never by path: a line is a REST-arg schema when it carries a
+     * `'type' => '<name>'` AND one of WordPress's own arg keys on the SAME
+     * line. A bare `'type' => 'string',` is still a field declaration and
+     * still fires — which is why the two must be written on one line each, and
+     * why an author who splits them gets the pin back.
+     *
+     * bin/guard.sh mirrors this rule; the shapes are the contract, not the
+     * file they were found in.
+     */
+    private const REST_ARG_SCHEMA_LINE = "/(?=.*'type' *=> *'[a-z_]+')(?=.*'(?:required|sanitize_callback|validate_callback|items|enum)' *=>)/";
+
     private const VERSIONS_PROSE_ALLOWANCES = [
         '/one exception, and it is `signed_int`/'
             => 'the 3.x upgrade-order instruction has to name the retired type it tells that reader to KEEP until the bump',
