@@ -5,8 +5,27 @@ declare(strict_types=1);
 /**
  * NTDST Pages — front-end URL routing and WordPress template integration.
  *
- * This routes PAGES: a URL pattern resolves to a callable that renders a
+ * This routes PAGES: a URL pattern resolves to a callable that returns a
  * template for a human. It is NOT the HTTP API surface.
+ *
+ * A PAGE URL IS A REWRITE RULE (5.0.0, FR-9 / INV-6). path() hands its pattern
+ * to add_rewrite_rule() and names the pattern's placeholders on the query_vars
+ * filter, so WordPress parses the URL the way it parses every other URL on the
+ * site. Dispatch is one template_redirect callback reading get_query_var().
+ * Before 5.0.0 this class compiled its own regex, re-matched REQUEST_URI inside
+ * template_include — after WordPress had already given up and marked the
+ * request not-found — then cleared that flag again and answered the canonical
+ * redirect filter to stop the loader undoing it. That was two fights with
+ * WordPress to make one unknown URL work. There is nothing to fight now.
+ *
+ * A CALLBACK RETURNS A PATH AND NEVER EXITS. The return contract is the same
+ * for path(), template() and when():
+ *   - an existing file path  → that file is the template WordPress includes
+ *   - null (or true)         → the callback answered the request itself
+ *   - false / anything else  → WordPress's own not-found, through set_404()
+ * Returning an NTDST_Response no longer renders-and-exits from inside a
+ * template filter; build the path with NTDST_Template_Loader::page() instead,
+ * which stashes the data ntdst_page_data() reads.
  *
  * Its verb methods are deliberately absent. `get()`/`post()` used to live here
  * and meant "a page pattern matched on this request method" — which collides
@@ -18,12 +37,19 @@ declare(strict_types=1);
  *   page / template   → ntdst_pages()
  *   resource route    → ntdst_rest()
  *
+ * FLUSH ONCE, WHEN THE RULES CHANGE. Rewrite rules live in an option, so a new
+ * or edited path() is invisible until WordPress rewrites that option. This
+ * class hashes its own rule set at the end of `init` and flushes only when the
+ * hash moved (option `ntdst_pages_rules_hash`) — the plugin idiom. A consumer
+ * that prefers to control it can still flush on activation or run
+ * `wp rewrite flush`.
+ *
  * Usage:
  *
- * // Simple route (GET by default)
- * ntdst_pages()->path('/projects/:slug', function($params) {
- *     $project = get_post($params['slug']);
- *     return ntdst_response()->with('project', $project)->template('project/single');
+ * // Simple route (GET by default). Declare it on `init`.
+ * ntdst_pages()->path('/projects/:slug', function(array $params) {
+ *     $project = get_page_by_path($params['slug'], OBJECT, 'project');
+ *     return NTDST_Template_Loader::page('project/single', ['project' => $project]);
  * });
  *
  * // A page that only answers POST
@@ -31,12 +57,12 @@ declare(strict_types=1);
  *
  * // With specific template type
  * ntdst_pages()->single('project', function($post) {
- *     return ntdst_response()->with('project', $post)->template('project/detail');
+ *     return NTDST_Template_Loader::page('project/detail', ['project' => $post]);
  * });
  *
  * // With conditions
  * ntdst_pages()->when(fn() => is_singular('project'), function($post) {
- *     // Custom handling
+ *     return NTDST_Template_Loader::page('project/detail', ['project' => $post]);
  * });
  */
 
@@ -44,46 +70,26 @@ defined('ABSPATH') || exit;
 
 class NTDST_Pages
 {
+    /**
+     * The hash of the rule set this site last flushed for.
+     *
+     * One option, one question: "are the rules WordPress stored the rules this
+     * code declares?" A per-route option would be a second registry of what is
+     * already in `rewrite_rules`.
+     */
+    private const RULES_HASH_OPTION = 'ntdst_pages_rules_hash';
+
     protected array $routes = [];
     protected array $template_hooks = [];
 
     public function __construct()
     {
-        add_filter('redirect_canonical', [$this, 'preventRedirectForRoutes'], 10, 2);
-        add_filter('template_include', [$this, 'handleTemplateInclude'], 999);
-    }
-
-    /**
-     * Prevent WordPress from redirecting URLs that match our routes
-     */
-    public function preventRedirectForRoutes(string|false $redirect_url, ?string $requested_url = null): string|false
-    {
-        // Check both current URL and redirect target. Guards: $_SERVER keys
-        // can be missing under CLI/test SAPIs, and parse_url returns null on
-        // malformed URLs.
-        $urls_to_check = [
-            trim(parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH) ?? '', '/'),
-        ];
-
-        if ($redirect_url) {
-            $urls_to_check[] = trim(parse_url($redirect_url, PHP_URL_PATH) ?? '', '/');
-        }
-
-        $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-
-        foreach ($this->routes as $route) {
-            if ($route['method'] !== $method) {
-                continue;
-            }
-
-            foreach ($urls_to_check as $url) {
-                if (preg_match($route['regex'], $url)) {
-                    return false;
-                }
-            }
-        }
-
-        return $redirect_url;
+        add_filter('query_vars', [$this, 'queryVars']);
+        add_action('template_redirect', [$this, 'dispatch']);
+        // LAST on init: routes are declared on init, and WordPress runs a
+        // callback added to an action it is already running. So every path()
+        // call is in before the rule set is hashed.
+        add_action('init', [$this, 'flushWhenRulesChanged'], PHP_INT_MAX);
     }
 
     /**
@@ -93,49 +99,236 @@ class NTDST_Pages
      * ntdst_rest()'s vocabulary, and a page route matched on POST is still a
      * page, not a resource.
      *
-     * The callback receives (array $params, string $template) — $params holds
-     * the named URL placeholders. Query-string parameters are NOT passed;
-     * callbacks must read $_GET directly when needed.
+     * The callback receives (array $params) — the named URL placeholders, as
+     * WordPress parsed them out of the URL. Query-string parameters are NOT
+     * passed; callbacks read $_GET directly when they need one. See the class
+     * docblock for the return contract.
      *
-     * Return contract (resolved by resolveRouteResult(), shared with the
-     * template()/when() paths):
-     *  - string (existing file path) → success: the 404 WordPress pre-set is
-     *    cleared, a 200 committed, and the path used as the resolved template
-     *  - NTDST_Response, 2xx → success: 404 cleared, then rendered (exits)
-     *  - NTDST_Response, >=400 → REFUSE: WordPress's not-found state is left
-     *    intact and its own 404 template renders — the route says "no" through
-     *    the output class, with no status_header() hand-rolling in the callback
-     *  - null / true → the callback handled its own output (status included);
-     *    the request exits. A callback that STREAMS and returns null must set
-     *    its own status before it echoes — the 404 commit is deferred, not
-     *    pre-sent, so nothing sets 200 on its behalf beforehand
-     *  - false / anything else → no match: the 404 is left intact, fall
-     *    through to the next matching route
+     * Call this on `init` (or earlier): add_rewrite_rule() is only heard while
+     * WordPress is still building its rule set.
      *
-     * @param string $pattern URL pattern (/path/:param/:id)
+     * @param string   $pattern  URL pattern (/path/:param/:id)
      * @param callable $callback Handler function
-     * @param string $method HTTP method (GET, POST, etc.)
+     * @param string   $method   HTTP method (GET, POST, etc.)
      */
     public function path(string $pattern, callable $callback, string $method = 'GET'): self
     {
-        $regex = $this->compilePattern($pattern);
+        $rule = $this->compileRule($pattern);
+
+        if ($rule === null) {
+            return $this;
+        }
+
+        $index = count($this->routes);
+        $query = 'index.php?ntdst_page=' . $index;
+
+        foreach ($rule['params'] as $position => $name) {
+            $query .= '&ntdst_p_' . $name . '=$matches[' . ($position + 1) . ']';
+        }
 
         $this->routes[] = [
             'pattern' => $pattern,
-            'regex' => $regex,
+            'regex' => $rule['regex'],
+            'query' => $query,
+            'params' => $rule['params'],
             'callback' => $callback,
             'method' => strtoupper($method),
         ];
 
+        add_rewrite_rule($rule['regex'], $query, 'top');
+
         return $this;
+    }
+
+    /**
+     * The query vars this router's rules write.
+     *
+     * WordPress drops a query var nobody declared, so the rule and this filter
+     * are two halves of one registration — the rule writes `ntdst_page` and one
+     * `ntdst_p_{name}` per placeholder, and this is where they are named.
+     *
+     * @param  list<string> $vars
+     * @return list<string>
+     */
+    public function queryVars(array $vars): array
+    {
+        $vars[] = 'ntdst_page';
+
+        foreach ($this->routes as $route) {
+            foreach ($route['params'] as $name) {
+                $vars[] = 'ntdst_p_' . $name;
+            }
+        }
+
+        return array_values(array_unique($vars));
+    }
+
+    /**
+     * Dispatch the route WordPress matched, on template_redirect.
+     *
+     * The URL is not re-parsed here: `ntdst_page` is the route index the
+     * rewrite rule wrote, so a request either carries one of ours or it does
+     * not. A method mismatch is a pass-through — the rule matched the URL, the
+     * route did not answer this verb, and WordPress renders what it resolved.
+     */
+    public function dispatch(): void
+    {
+        $index = get_query_var('ntdst_page');
+
+        if (!is_scalar($index) || !ctype_digit((string) $index)) {
+            return;
+        }
+
+        $route = $this->routes[(int) $index] ?? null;
+
+        if ($route === null || $route['method'] !== strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET')) {
+            return;
+        }
+
+        $params = [];
+        foreach ($route['params'] as $name) {
+            $value = get_query_var('ntdst_p_' . $name);
+            if ($value !== '' && $value !== null) {
+                $params[$name] = $value;
+            }
+        }
+
+        $result = call_user_func($route['callback'], $params);
+
+        // The callback handled its own output (status included).
+        if ($result === null || $result === true) {
+            return;
+        }
+
+        if (is_string($result) && $result !== '') {
+            if (file_exists($result)) {
+                add_filter('template_include', static fn (): string => $result, PHP_INT_MAX);
+
+                return;
+            }
+
+            _doing_it_wrong(
+                __CLASS__ . '::path',
+                "the route for \"{$route['pattern']}\" returned \"{$result}\", which is not a file that exists. "
+                    . 'Build the path with NTDST_Template_Loader::page() / ::locate(), which return null when the '
+                    . 'template is missing.',
+                '5.0.0',
+            );
+        }
+
+        $this->notFound();
+    }
+
+    /**
+     * Hand the request back to WordPress as a 404.
+     *
+     * WordPress's own three lines (WP::handle_404()), because this runs after
+     * that method already decided the request was fine: the flag alone would
+     * leave a 200 on the wire.
+     */
+    protected function notFound(): void
+    {
+        global $wp_query;
+
+        if (is_object($wp_query) && method_exists($wp_query, 'set_404')) {
+            $wp_query->set_404();
+        }
+
+        status_header(404);
+        nocache_headers();
+    }
+
+    /**
+     * Flush the rewrite rules when — and only when — this router's rule set
+     * changed since the last flush.
+     *
+     * flush_rewrite_rules() rebuilds and re-saves every rule on the site, so
+     * running it on each request is a write per page view. The hash is the
+     * cheap question: same rules, no flush. Soft (`false`): the `.htaccess`
+     * file has nothing to learn from a rule that lives in the option.
+     */
+    public function flushWhenRulesChanged(): void
+    {
+        $hash = md5(implode(
+            '|',
+            array_map(
+                static fn (array $route): string => $route['regex'] . '=>' . $route['query'] . ':' . $route['method'],
+                $this->routes,
+            ),
+        ));
+
+        if (get_option(self::RULES_HASH_OPTION) === $hash) {
+            return;
+        }
+
+        flush_rewrite_rules(false);
+        update_option(self::RULES_HASH_OPTION, $hash);
+    }
+
+    /**
+     * Compile a URL pattern into a rewrite regex and its placeholder names.
+     *
+     * Literal text is preg_quote'd so dots/plus-signs/parens in the pattern
+     * aren't regex metacharacters (`v1.0/users` matches that path literally,
+     * not `v1X0/users`). WordPress applies the result with `#` as the
+     * delimiter, which is why that is the delimiter quoted for.
+     *
+     * REFUSED, both with a _doing_it_wrong() and no rule: a pattern whose first
+     * segment is entirely a placeholder, and the site root. `^([^/]+)/?$` and
+     * `^/?$` at the TOP of the rule list match every one-segment URL and the
+     * front page — every post, page, feed and admin-facing pretty URL on the
+     * site would resolve to that one route. A route needs a literal first
+     * segment of its own to own.
+     *
+     * @return array{regex: string, params: list<string>}|null
+     */
+    protected function compileRule(string $pattern): ?array
+    {
+        $path = trim($pattern, '/');
+
+        if ($path === '' || preg_match('#^:[a-zA-Z_][a-zA-Z0-9_]*(/|$)#', $path) === 1) {
+            _doing_it_wrong(
+                __CLASS__ . '::path',
+                "\"{$pattern}\" is refused: a page route's first segment must be literal text. A rule for the site "
+                    . 'root, or one that opens with a :placeholder, sits at the top of the rewrite list and matches '
+                    . 'every URL of that shape on the site.',
+                '5.0.0',
+            );
+
+            return null;
+        }
+
+        // Split on :param placeholders while keeping them via PREG_SPLIT_DELIM_CAPTURE.
+        $tokens = preg_split('/(:[a-zA-Z_][a-zA-Z0-9_]*)/', $path, -1, PREG_SPLIT_DELIM_CAPTURE);
+
+        $regex = '';
+        $params = [];
+
+        foreach ($tokens as $token) {
+            if ($token === '') {
+                continue;
+            }
+            if ($token[0] === ':') {
+                $params[] = substr($token, 1);
+                $regex .= '([^/]+)';
+            } else {
+                $regex .= preg_quote($token, '#');
+            }
+        }
+
+        return ['regex' => '^' . $regex . '/?$', 'params' => $params];
     }
 
     /**
      * Hook into specific WordPress template type
      * Smart wrapper around {$type}_template filters
      *
-     * @param string $type Template type (single, page, archive, etc.)
-     * @param callable $callback Handler receives $post or $template
+     * The callback returns a template PATH (or null to leave WordPress's own
+     * candidate alone). It does not render and it does not exit — the file it
+     * names is what WordPress includes, so the theme's own header/footer run.
+     *
+     * @param string      $type      Template type (single, page, archive, etc.)
+     * @param callable    $callback  Handler receives ($post, $template)
      * @param string|null $post_type Optional post type to filter
      */
     public function template(string $type, callable $callback, ?string $post_type = null): self
@@ -157,23 +350,8 @@ class NTDST_Pages
             }
 
             global $post;
-            $result = $callback($post, $template);
 
-            // If string returned, use as template path
-            if (is_string($result)) {
-                return $result;
-            }
-
-            // If Response object, render it
-            if ($result instanceof NTDST_Response) {
-                $template_name = $result->getTemplate();
-                if ($template_name) {
-                    $result->render($template_name);
-                }
-                exit;
-            }
-
-            return $template;
+            return $this->templateFrom($callback($post, $template), $template);
         }, 10, 1);
 
         return $this;
@@ -228,8 +406,8 @@ class NTDST_Pages
      * Note: every call to when() registers a new template_include filter.
      * Call it once per condition; do not invoke in a loop.
      *
-     * Callback receives (?WP_Post $post, string $template). See register()
-     * for the return-value contract.
+     * Callback receives (?WP_Post $post, string $template) and returns a
+     * template path — see the class docblock for the contract.
      */
     public function when(callable $condition, callable $callback): self
     {
@@ -239,193 +417,43 @@ class NTDST_Pages
             }
 
             global $post;
-            $result = $callback($post, $template);
 
-            // Return string template path
-            if (is_string($result)) {
-                return $result;
-            }
-
-            // Handle Response object
-            if ($result instanceof NTDST_Response) {
-                $template_name = $result->getTemplate();
-                if ($template_name) {
-                    $result->render($template_name);
-                }
-                exit;
-            }
-
-            return $template;
+            return $this->templateFrom($callback($post, $template), $template);
         }, 10);
 
         return $this;
     }
 
     /**
-     * Handle template_include filter
-     * Matches URL patterns and executes callbacks
+     * What a template-filter callback's return value means.
+     *
+     * ONE implementation for template() and when(), because two copies of a
+     * return contract are two contracts. A string is the path WordPress
+     * includes; anything else leaves WordPress's own candidate in place.
+     *
+     * The warning is for the 5.0.0 break and nothing else: an NTDST_Response
+     * (or any other object) used to be RENDERED here and then exit()ed, and a
+     * callback that still returns one would otherwise fall through in silence
+     * to a template with none of its data. null is not warned about — it is
+     * how page() says "not my slug".
      */
-    public function handleTemplateInclude(string $template): string
+    protected function templateFrom(mixed $result, string $template): string
     {
-        // $_SERVER keys can be missing under CLI/test SAPIs; default safely.
-        $url = trim(parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH) ?? '', '/');
-        $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
-
-        foreach ($this->routes as $route) {
-            // Check method
-            if ($route['method'] !== $method) {
-                continue;
-            }
-
-            // Try to match pattern
-            if (preg_match($route['regex'], $url, $matches)) {
-                // Extract named parameters
-                $params = array_filter($matches, 'is_string', ARRAY_FILTER_USE_KEY);
-
-                // The 404 commit is DEFERRED to resolveRouteResult(): WordPress
-                // marked this request 404 before routing, and that 404 is only
-                // cleared once the callback's RESULT proves the route handled
-                // the request. That is the whole seam — a callback can now
-                // refuse (return a >=400 Response) and WordPress renders its
-                // own not-found template, instead of the route having to
-                // hand-roll status_header(404) back after a premature 200.
-                $result = call_user_func($route['callback'], $params, $template);
-
-                $resolved = $this->resolveRouteResult($result, $template);
-                if ($resolved === false) {
-                    continue;
-                }
-                if ($resolved === null) {
-                    exit;
-                }
-
-                return $resolved;
-            }
-        }
-
-        return $template;
-    }
-
-    /**
-     * Turn a route callback's return value into a routing decision.
-     *
-     * Path-agnostic on purpose: the input is only (callback-result,
-     * original-template) and the output is a pure decision, so all three
-     * dispatch mechanisms — this regex path plus the template()/when()
-     * hierarchy filters — can share ONE implementation. (template()/when()
-     * still carry their own inline block today; wiring them to call this is a
-     * separate follow-up. This handler is already shaped for it.)
-     *
-     * Returns:
-     *  - string → render this template path (caller returns it to WordPress)
-     *  - null   → handled / exit (caller exits)
-     *  - false  → no match, pass through to the next candidate
-     *
-     * It OWNS the status/404 side effects so every caller gets them identically
-     * (see the register() docblock for the full contract). The Response arm
-     * honours getStatus(): a 2xx renders, a >=400 refuses — leaving is_404
-     * intact and handing back WordPress's own not-found template — regardless
-     * of whether the Response names a template.
-     */
-    protected function resolveRouteResult(mixed $result, string $template): string|false|null
-    {
-        if ($result instanceof NTDST_Response) {
-            if ($result->getStatus() >= 400) {
-                // Refuse: keep the 404 WordPress already set, honour the
-                // status, and let WordPress render its own not-found template.
-                status_header($result->getStatus());
-
-                return $template;
-            }
-
-            // Success: clear the pre-set 404, then render (render() exits when
-            // a template is set; with none, the caller exits — when() parity).
-            $this->commitOk();
-            $this->renderResponse($result);
-
-            return null;
-        }
-
-        if (is_string($result) && file_exists($result)) {
-            $this->commitOk();
-
+        if (is_string($result) && $result !== '') {
             return $result;
         }
 
-        if ($result === null || $result === true) {
-            // Handled output: the callback owns its status. commitOk() is a
-            // no-op if the callback already committed — which the framework's
-            // own render-and-exit path DOES via NTDST_Response::render()
-            // (commitRenderStatus), so a callback that renders through the
-            // Response object never depends on this deferred commit.
-            $this->commitOk();
-
-            return null;
+        if ($result !== null && $result !== false) {
+            _doing_it_wrong(
+                __CLASS__ . '::template',
+                'a template callback returned ' . get_debug_type($result) . '. Since 5.0.0 it must return a '
+                    . 'template PATH — build it with NTDST_Template_Loader::page($name, $data), which stashes the '
+                    . 'data ntdst_page_data() reads. Nothing renders or exits from inside a template filter.',
+                '5.0.0',
+            );
         }
 
-        // false or any unrecognized type → leave the 404 intact, pass through.
-        return false;
-    }
-
-    /**
-     * Commit the "OK" status: clear the 404 WordPress pre-set for an unmatched
-     * URL and send a 200. Guarded, so it is a safe no-op when nothing set 404
-     * or a streaming callback already committed.
-     */
-    protected function commitOk(): void
-    {
-        global $wp_query;
-        if ($wp_query && $wp_query->is_404()) {
-            $wp_query->is_404 = false;
-            status_header(200);
-        }
-    }
-
-    /**
-     * Render a Response returned by a route callback.
-     *
-     * render() never returns (it exits). A Response with no template renders
-     * nothing — the caller then exits, in parity with template()/when().
-     * Protected so tests (and the future template()/when() callers) can seam it.
-     */
-    protected function renderResponse(NTDST_Response $response): void
-    {
-        $template_name = $response->getTemplate();
-        if ($template_name) {
-            $response->render($template_name); // never returns
-        }
-    }
-
-    /**
-     * Compile URL pattern to regex.
-     *
-     * Converts /path/:param/:id to regex with named groups. Literal segments
-     * are preg_quote'd so dots/plus-signs/parens in the URL pattern aren't
-     * treated as regex metacharacters (e.g. "v1.0/users" matches that path
-     * literally, not "v1X0/users").
-     */
-    protected function compilePattern(string $pattern): string
-    {
-        $pattern = trim($pattern, '/');
-
-        // Split on :param placeholders while keeping them via PREG_SPLIT_DELIM_CAPTURE.
-        $tokens = preg_split('/(:[a-zA-Z_][a-zA-Z0-9_]*)/', $pattern, -1, PREG_SPLIT_DELIM_CAPTURE);
-
-        $regex = '';
-        foreach ($tokens as $token) {
-            if ($token === '') {
-                continue;
-            }
-            if ($token[0] === ':') {
-                $name = substr($token, 1);
-                $regex .= '(?P<' . $name . '>[^/]+)';
-            } else {
-                $regex .= preg_quote($token, '#');
-            }
-        }
-
-        // Allow optional trailing slash
-        return '#^' . $regex . '/?$#';
+        return $template;
     }
 
     /**
@@ -445,24 +473,6 @@ class NTDST_Pages
 
         return home_url($url);
     }
-
-    /**
-     * Redirect to URL.
-     *
-     * Uses wp_safe_redirect() by default — restricts the target to the same
-     * host as the site, blocking open-redirect attacks when $url is derived
-     * from user input. Pass $allowExternal=true only when the destination is
-     * trusted and intentionally off-site.
-     */
-    public function redirect(string $url, int $status = 302, bool $allowExternal = false): never
-    {
-        if ($allowExternal) {
-            wp_redirect($url, $status);
-        } else {
-            wp_safe_redirect($url, $status);
-        }
-        exit;
-    }
 }
 
 /**
@@ -480,13 +490,15 @@ if (!function_exists('ntdst_pages')) {
     }
 }
 
-// Initialise early to register the redirect-prevention hook.
+// Initialise early on init: the router's own hooks — the query_vars filter, the
+// template_redirect dispatcher and the end-of-init flush check — have to be
+// mounted before a consumer declares its first path().
 //
 // Guarded: this file is also loaded outside WordPress (the package's own unit
 // suite requires it directly). Defining a stub add_action() in the test instead
 // breaks Patchwork, which must be the one to define it so Brain Monkey can
-// reroute the call — SchedulerTest patches add_action and fails with
-// DefinedTooEarly if anything defines it first.
+// reroute the call — a test that patches add_action fails with DefinedTooEarly
+// if anything defines it first.
 if (function_exists('add_action')) {
     add_action('init', 'ntdst_pages', 1);
 }

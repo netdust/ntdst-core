@@ -6,9 +6,18 @@
 // must mean an HTTP GET resource route. Two meanings of get() one method apart
 // is the collision this task removes at its source, so after T01 an HTTP verb
 // in this codebase means a REST route and nothing else.
+//
+// T10 (core-shape FR-9 / INV-6) — a page route is a WordPress REWRITE RULE.
+// path() no longer compiles a private regex and re-matches REQUEST_URI inside
+// template_include after WordPress already gave up on the URL: it hands the
+// pattern to add_rewrite_rule(), names its placeholders on the query_vars
+// filter, and dispatches on template_redirect from get_query_var(). WordPress
+// parses the URL, so nothing un-404s a request and nothing suppresses
+// redirect_canonical. A callback returns a template PATH and never exits.
 defined('ABSPATH') || exit; // direct web hit: ABSPATH undefined → exit; the bootstrap defines it under phpunit
 
 use Brain\Monkey;
+use Brain\Monkey\Functions;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use PHPUnit\Framework\TestCase;
 
@@ -18,26 +27,245 @@ final class NtdstPagesTest extends TestCase
 {
     use MockeryPHPUnitIntegration;
 
+    /** @var list<array{0:string,1:string,2:string}> every add_rewrite_rule() call, in order */
+    private array $rules = [];
+    /** @var array<string, mixed> the option store */
+    private array $options = [];
+    /** @var array<string, mixed> what WordPress parsed out of the URL */
+    private array $queryVars = [];
+    /** @var list<bool> the $hard argument of every flush_rewrite_rules() call */
+    private array $flushes = [];
+    /** @var list<int> every status_header() call */
+    private array $statuses = [];
+    /** @var list<array{0:string,1:string}> every _doing_it_wrong() call */
+    private array $wrong = [];
+
     protected function setUp(): void
     {
         parent::setUp();
         Monkey\setUp();
-        // commitOk() reads the global $wp_query; with none set it is a no-op.
-        unset($GLOBALS['wp_query']);
+
+        $this->rules = [];
+        $this->options = [];
+        $this->queryVars = [];
+        $this->flushes = [];
+        $this->statuses = [];
+        $this->wrong = [];
+
+        // The filter recorder is a GLOBAL bag the bootstrap writes for the
+        // whole process; a case that reads back what a mount did has to start
+        // from an empty one.
+        unset(
+            $GLOBALS['_ntdst_test_filters'],
+            $GLOBALS['_ntdst_test_filters_at'],
+            $GLOBALS['_ntdst_test_filter_args'],
+            $GLOBALS['wp_query'],
+        );
+
+        Functions\when('add_action')->justReturn(true);
+        Functions\when('add_rewrite_rule')->alias(function (string $regex, string $query, string $after = 'bottom'): void {
+            $this->rules[] = [$regex, $query, $after];
+        });
+        Functions\when('get_query_var')->alias(fn (string $var, $default = '') => $this->queryVars[$var] ?? $default);
+        Functions\when('get_option')->alias(fn (string $key, $default = false) => $this->options[$key] ?? $default);
+        Functions\when('update_option')->alias(function (string $key, $value): bool {
+            $this->options[$key] = $value;
+
+            return true;
+        });
+        Functions\when('flush_rewrite_rules')->alias(function (bool $hard = true): void {
+            $this->flushes[] = $hard;
+        });
+        Functions\when('status_header')->alias(function (int $status): void {
+            $this->statuses[] = $status;
+        });
+        Functions\when('nocache_headers')->justReturn(null);
+        Functions\when('_doing_it_wrong')->alias(function (string $fn, string $message, $version = ''): void {
+            $this->wrong[] = [$fn, $message];
+        });
     }
 
     protected function tearDown(): void
     {
-        unset($_SERVER['REQUEST_URI'], $_SERVER['REQUEST_METHOD']);
+        unset($_SERVER['REQUEST_URI'], $_SERVER['REQUEST_METHOD'], $GLOBALS['wp_query']);
         Monkey\tearDown();
         parent::tearDown();
     }
 
-    private function dispatch(NTDST_Pages $pages, string $uri, string $method): void
+    /**
+     * Drive one request WordPress already parsed.
+     *
+     * T10: the URL is no longer the router's input — WordPress matched the
+     * rewrite rule and put the route's index in `ntdst_page`, so a dispatch is
+     * that query var plus the request method.
+     */
+    private function dispatch(NTDST_Pages $pages, int $index, string $method): void
     {
-        $_SERVER['REQUEST_URI'] = $uri;
+        $this->queryVars['ntdst_page'] = (string) $index;
         $_SERVER['REQUEST_METHOD'] = $method;
-        $pages->handleTemplateInclude('/tmp/theme/index.php');
+        $pages->dispatch();
+    }
+
+    /** The callback the template_include filter mounted, if any. */
+    private function templateIncludeFilter(): ?callable
+    {
+        $mounts = $GLOBALS['_ntdst_test_filters_at']['template_include'] ?? [];
+
+        return $mounts === [] ? null : reset($mounts);
+    }
+
+    public function testAPathIsARewriteRuleAndDispatchesOnTemplateRedirect(): void
+    {
+        $seen = null;
+        $pages = new NTDST_Pages();
+        $pages->path('/card/:slug', function (array $params) use (&$seen): string {
+            $seen = $params;
+
+            return __FILE__;
+        });
+
+        // 1. The URL is WordPress's to parse: ONE rule, at the top of the list.
+        $this->assertSame(
+            [['^card/([^/]+)/?$', 'index.php?ntdst_page=0&ntdst_p_slug=$matches[1]', 'top']],
+            $this->rules,
+            'path() must register the pattern as a rewrite rule that names the route and its placeholders.',
+        );
+
+        // 2. A query var WordPress does not know is a var it drops.
+        $vars = $pages->queryVars(['p']);
+        $this->assertContains('p', $vars, 'the filter must keep the vars WordPress already had.');
+        $this->assertContains('ntdst_page', $vars);
+        $this->assertContains('ntdst_p_slug', $vars);
+
+        // 3. Dispatch is template_redirect over get_query_var().
+        $this->queryVars['ntdst_p_slug'] = 'ace-of-cups';
+        $this->dispatch($pages, 0, 'GET');
+
+        $this->assertSame(['slug' => 'ace-of-cups'], $seen, 'the callback receives its named placeholders.');
+
+        // 4. The string return becomes the template, through ONE filter — no
+        //    render, no exit, no is_404 flipping.
+        $filter = $this->templateIncludeFilter();
+        $this->assertNotNull($filter, 'a resolved route must answer template_include.');
+        $this->assertCount(1, $GLOBALS['_ntdst_test_filters_at']['template_include']);
+        $this->assertSame(__FILE__, $filter('/tmp/theme/index.php'));
+        $this->assertSame([], $this->statuses, 'WordPress owns the status of a URL it parsed itself.');
+    }
+
+    public function testAPlaceholderFirstSegmentIsRefused(): void
+    {
+        $ran = 0;
+        $pages = new NTDST_Pages();
+        $pages->path('/:anything', function () use (&$ran): string {
+            $ran++;
+
+            return __FILE__;
+        });
+
+        $this->assertSame([], $this->rules, '`^([^/]+)/?$` at the top of the rule list swallows every URL on the site.');
+        $this->assertNotSame([], $this->wrong, 'a refused pattern says so through _doing_it_wrong().');
+
+        $this->dispatch($pages, 0, 'GET');
+        $this->assertSame(0, $ran, 'a refused pattern registers no route to dispatch.');
+    }
+
+    public function testAFalseReturnHandsTheRequestBackToWordPressAsNotFound(): void
+    {
+        $wp_query = new class {
+            public bool $notFound = false;
+
+            public function set_404(): void
+            {
+                $this->notFound = true;
+            }
+        };
+        $GLOBALS['wp_query'] = $wp_query;
+
+        $pages = new NTDST_Pages();
+        $pages->path('/card/:slug', fn (): bool => false);
+
+        $this->dispatch($pages, 0, 'GET');
+
+        $this->assertTrue($wp_query->notFound, 'a route that refuses asks WordPress for its own 404.');
+        $this->assertSame([404], $this->statuses);
+        $this->assertNull($this->templateIncludeFilter(), 'a refusal mounts no template.');
+    }
+
+    public function testANullReturnSetsNothing(): void
+    {
+        $wp_query = new class {
+            public bool $notFound = false;
+
+            public function set_404(): void
+            {
+                $this->notFound = true;
+            }
+        };
+        $GLOBALS['wp_query'] = $wp_query;
+
+        $pages = new NTDST_Pages();
+        $pages->path('/card/:slug', fn (): ?string => null);
+
+        $this->dispatch($pages, 0, 'GET');
+
+        $this->assertFalse($wp_query->notFound, 'null means the callback answered; it is not a refusal.');
+        $this->assertSame([], $this->statuses);
+        $this->assertNull($this->templateIncludeFilter());
+    }
+
+    public function testTheRuleSetFlushesOnceAndNotAgain(): void
+    {
+        $pages = new NTDST_Pages();
+        $pages->path('/card/:slug', fn (): string => __FILE__);
+
+        $pages->flushWhenRulesChanged();
+
+        $this->assertSame([false], $this->flushes, 'a changed rule set flushes soft, exactly once.');
+        $this->assertArrayHasKey('ntdst_pages_rules_hash', $this->options);
+
+        $pages->flushWhenRulesChanged();
+
+        $this->assertSame([false], $this->flushes, 'the same rule set on the next request must flush nothing.');
+    }
+
+    public function testTheRouterNoLongerFightsTheWordPressLoader(): void
+    {
+        // FR-9 / INV-6: WordPress parses the URL now. Nothing re-matches
+        // REQUEST_URI inside template_include, nothing clears is_404, nothing
+        // answers redirect_canonical, and the router does not redirect —
+        // NTDST_Response owns that word.
+        foreach ([
+            'handleTemplateInclude',
+            'resolveRouteResult',
+            'commitOk',
+            'renderResponse',
+            'preventRedirectForRoutes',
+            'redirect',
+        ] as $method) {
+            $this->assertFalse(
+                method_exists(NTDST_Pages::class, $method),
+                "NTDST_Pages::{$method}() must not exist — a page URL is a rewrite rule WordPress parses.",
+            );
+        }
+    }
+
+    public function testATemplateCallbackReturnsAPathAndNeverRenders(): void
+    {
+        $pages = new NTDST_Pages();
+        $pages->template('single', fn ($post, $template): string => '/tmp/x/single-gig.php');
+
+        $mount = $GLOBALS['_ntdst_test_filters_at']['single_template'][10] ?? null;
+        $this->assertNotNull($mount, 'template() must keep its consumer handler at priority 10.');
+        $this->assertSame('/tmp/x/single-gig.php', $mount('/theme/single.php'));
+
+        // A non-string return leaves WordPress's own candidate alone — the
+        // callback does not render and does not exit.
+        $pages->when(fn (): bool => true, fn () => new stdClass());
+
+        $when = $GLOBALS['_ntdst_test_filters_at']['template_include'][10] ?? null;
+        $this->assertNotNull($when);
+        $this->assertSame('/theme/index.php', $when('/theme/index.php'));
+        $this->assertNotSame([], $this->wrong, 'an object return is the retired Response contract; say so out loud.');
     }
 
     public function testPathRegistersARouteMatchedOnItsMethod(): void
@@ -46,13 +274,13 @@ final class NtdstPagesTest extends TestCase
         $pages = new NTDST_Pages();
         $pages->path('/x', function () use (&$ran) {
             $ran++;
-            // Return an existing file path: resolveRouteResult() passes it
-            // through as the template. Returning true/null instead makes the
-            // router exit(), which would kill the test process.
+            // Return an existing file path: dispatch() mounts it on
+            // template_include. Returning false instead asks WordPress for a
+            // 404, which is a different case.
             return __FILE__;
         }, 'POST');
 
-        $this->dispatch($pages, '/x', 'POST');
+        $this->dispatch($pages, 0, 'POST');
 
         $this->assertSame(1, $ran, 'path() must dispatch its callback for a matching method.');
     }
@@ -63,10 +291,11 @@ final class NtdstPagesTest extends TestCase
         $pages = new NTDST_Pages();
         $pages->path('/x', function () use (&$ran) {
             $ran++;
+
             return __FILE__;
         }, 'POST');
 
-        $this->dispatch($pages, '/x', 'GET');
+        $this->dispatch($pages, 0, 'GET');
 
         $this->assertSame(0, $ran, 'A POST-registered page route must not answer a GET.');
     }
@@ -77,10 +306,11 @@ final class NtdstPagesTest extends TestCase
         $pages = new NTDST_Pages();
         $pages->path('/y', function () use (&$ran) {
             $ran++;
+
             return __FILE__;
         });
 
-        $this->dispatch($pages, '/y', 'GET');
+        $this->dispatch($pages, 0, 'GET');
 
         $this->assertSame(1, $ran, 'path() without an explicit method must register GET.');
     }
@@ -102,7 +332,14 @@ final class NtdstPagesTest extends TestCase
     public function testTemplateHelpersSurviveTheRename(): void
     {
         // The rename must not drop the class's actual job.
-        foreach (['template', 'single', 'page', 'archive', 'when', 'url', 'redirect'] as $method) {
+        //
+        // T10 dropped `redirect` from this list, and the drop is the point
+        // rather than an erosion of the pin: it was never a template helper.
+        // wp_safe_redirect()-and-exit is a RESPONSE, NTDST_Response::redirect()
+        // is the one place that word lives (INV-6 takes `function redirect` to
+        // one), and a page router that exits is the contract FR-9 removed.
+        // testTheRouterNoLongerFightsTheWordPressLoader() pins its absence.
+        foreach (['template', 'single', 'page', 'archive', 'when', 'url'] as $method) {
             $this->assertTrue(
                 method_exists(NTDST_Pages::class, $method),
                 "NTDST_Pages::{$method}() must survive the rename — this class still routes templates.",

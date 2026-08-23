@@ -334,6 +334,28 @@ declare -A METHOD_PINS=(
     # per-file declaration pin says exactly what is true: Response declares no
     # addPath, the loader does.
     ["core/TemplateLoader.php"]="templateInclude"
+
+    # FR-9 / INV-6: a page URL is a WordPress rewrite rule, so the router has
+    # nothing left to fight. handleTemplateInclude() re-matched REQUEST_URI
+    # against a private regex INSIDE template_include — after WordPress had
+    # already parsed the URL, found nothing and marked the request not-found —
+    # and the other four were the machinery that made that work:
+    # preventRedirectForRoutes() answered the canonical-redirect filter,
+    # commitOk() cleared the not-found flag WordPress had just set,
+    # renderResponse() rendered-and-exited from inside a template filter, and
+    # resolveRouteResult() was the contract tying the three together. path()
+    # registers a rule now; WordPress parses, and a callback returns a path.
+    #
+    # `redirect` is in this table and NOT in the REMOVED sweep, and that is the
+    # whole reason this table exists: api/Response.php DECLARES a live
+    # redirect() (`ntdst_response()->redirect(...)`), README documents it, and a
+    # bare row would fire on the survivor. INV-6 takes `function redirect` in
+    # api + core to ONE, and this pin is which one went. The other five are
+    # distinctive names and are pinned as bare provider rows in
+    # PackageBootIntegrityTest — the sweep that also answers for README — so
+    # they sit in both homes on purpose: this file fails on a fresh checkout
+    # with no vendor/, that one fails with a README that never told the adopter.
+    ["core/Pages.php"]="redirect handleTemplateInclude resolveRouteResult commitOk renderResponse preventRedirectForRoutes"
 )
 for PIN_FILE in $(printf '%s\n' "${!METHOD_PINS[@]}" | sort); do
     PIN_METHODS="${METHOD_PINS[$PIN_FILE]}"

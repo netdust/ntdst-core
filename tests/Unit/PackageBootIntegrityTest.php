@@ -146,6 +146,32 @@ final class PackageBootIntegrityTest extends TestCase
             'retired type person' => ["/'type' *=> *'person'|=> *'person'|NTDST_FieldType\\('person'/", '5.0.0', 'api/FieldTypes.php', '/^\\s*(\'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)\'\\s*=>\\s*\'(bool|date|float|html|int|relation|text|textarea)\',|\\[\'type\' *=> *\'(integer|number|boolean|string|array)\'.*\\], *\'[a-z_]+\', *(true|false),)\\s*$/'],
             'retired type post_relation' => ["/'type' *=> *'post_relation'|=> *'post_relation'|NTDST_FieldType\\('post_relation'/", '5.0.0', 'api/FieldTypes.php', '/^\\s*(\'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)\'\\s*=>\\s*\'(bool|date|float|html|int|relation|text|textarea)\',|\\[\'type\' *=> *\'(integer|number|boolean|string|array)\'.*\\], *\'[a-z_]+\', *(true|false),)\\s*$/'],
             'restSchemaFor' => ['restSchemaFor', '5.0.0'],
+            // v5.0.0 core-shape (FR-9 / INV-6) — the page router's fight with
+            // the WordPress loader. A page URL is a rewrite rule now, so
+            // WordPress parses it: handleTemplateInclude() re-matched
+            // REQUEST_URI against a private regex inside `template_include`,
+            // commitOk() cleared the not-found flag WordPress had set on the
+            // way past, preventRedirectForRoutes() answered the canonical
+            // redirect filter so the loader could not undo that, and
+            // renderResponse() rendered-and-exited from inside a template
+            // filter. resolveRouteResult() was the return contract that tied
+            // them together — a Response with a >=400 status meant "refuse", a
+            // shape a callback returning a PATH has no need of.
+            //
+            // Five bare rows and not six: `redirect` is the sixth method the
+            // task removed and it CANNOT be swept bare — api/Response.php
+            // declares the surviving redirect() and README documents it, so the
+            // row would fire on the survivor. It is pinned where it can come
+            // back instead, as a `function redirect` declaration in
+            // core/Pages.php (bin/guard.sh METHOD_PINS), and
+            // NtdstPagesTest::testTheRouterNoLongerFightsTheWordPressLoader()
+            // pins its absence by reflection. Each of these five is a
+            // distinctive name no shipped line spells outside a comment.
+            'handleTemplateInclude' => ['handleTemplateInclude', '5.0.0'],
+            'resolveRouteResult' => ['resolveRouteResult', '5.0.0'],
+            'commitOk' => ['commitOk', '5.0.0'],
+            'renderResponse' => ['renderResponse', '5.0.0'],
+            'preventRedirectForRoutes' => ['preventRedirectForRoutes', '5.0.0'],
             // v5.0.0 core-trim (FR-1, INV-10) — Bootstrap's service scanner and
             // the two config keys that armed it. The scanner globbed
             // `*Service.php` under `services.discovery_paths`, `require_once`d

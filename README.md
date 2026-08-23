@@ -656,6 +656,31 @@ it with `wp.apiFetch`, which sends the `wp_rest` nonce for you (INV-2, INV-4).
 | `NTDST_Response::addPath(get_stylesheet_directory())` | delete the call. `locate()` falls through to `locate_template([$name])`, which searches the stylesheet directory LAST — the same position the per-call path held |
 | `NTDST_Response::addPath($dir)` for any other directory | `NTDST_Template_Loader::addPath($dir)` once at boot. It is the ONE registry, and it is searched FIRST. `html()` keeps its two-parameter signature and takes a NAME (`html('card', $data)`), never a path; a one-off directory for a single lookup is `NTDST_Template_Loader::locate($name, [$dir])` |
 | a registered NON-`.php` theme file answered through `theme_file_path` | WordPress's own path, unchanged. The registry answers `theme_file_path` through `locate()`, which appends `.php` to a name that has none — so registered directories answer `.php` names only. A non-PHP theme file resolves the way WordPress resolves it, as before |
+| `NTDST_Pages::handleTemplateInclude()` | nothing to write. `path()` registers a rewrite rule (`add_rewrite_rule()`) and names its placeholders on `query_vars`, so WordPress parses the URL and dispatch happens on `template_redirect` |
+| `NTDST_Pages::preventRedirectForRoutes()` | nothing. WordPress knows the URL now, so its canonical redirect has nothing to undo |
+| `NTDST_Pages::commitOk()` | nothing. A URL WordPress parsed is a 200 already; there is no not-found state to clear |
+| `NTDST_Pages::resolveRouteResult()` | the return contract itself: a path, `null`, or `false` for WordPress's own 404. There is no `NTDST_Response` arm |
+| `NTDST_Pages::renderResponse()` | `return NTDST_Template_Loader::page($name, $data);` — the callback hands back a PATH and WordPress includes it. Nothing renders or exits from inside a template filter |
+| `NTDST_Pages::redirect($url)` | `ntdst_response()->redirect($url)`, or WordPress's own `wp_safe_redirect($url); exit;` from an earlier hook. A page router that exits is the contract 5.0.0 removed |
+| a page callback signature of `function ($params, $template)` | `function (array $params)`. There is no template argument at `template_redirect` — WordPress has not chosen one yet |
+| a page callback returning `ntdst_response()->with(...)->template(...)` | `return NTDST_Template_Loader::page('project/single', ['project' => $project]);`. The same for `single()`, `page()`, `archive()`, `template()` and `when()`: a callback returns a path, and the data it stashes is read with `ntdst_page_data()` |
+| a page pattern that opens with a placeholder (`path('/:slug', …)`) or the site root (`path('/', …)`) | give the route a literal first segment (`path('/card/:slug', …)`). Both are REFUSED with a `_doing_it_wrong()` and register no rule: at the top of the rewrite list they match every one-segment URL, and the front page, on the whole site |
+
+**Page routes: declare them on `init`, and flush once.** A rewrite rule is only
+heard while WordPress is still building its rule set, so `ntdst_pages()->path()`
+belongs on `init` (any priority). The rules themselves live in an option, so a
+new or edited route is invisible until that option is rewritten: core hashes its
+own rule set at the end of `init` and calls `flush_rewrite_rules(false)` only
+when the hash moved, in the option `ntdst_pages_rules_hash`. That covers a
+normal deploy. On a plugin or theme ACTIVATION, flush once yourself — the
+activation hook runs before your routes are declared — or run
+`wp rewrite flush` after the deploy.
+
+**A page callback that still returns a `NTDST_Response` no longer renders.**
+It returns a template path now, and the old object return would otherwise fall
+through in silence to a template with none of its data. Core says so with a
+`_doing_it_wrong()` naming the type it got, which is `WP_DEBUG`-gated — check
+every page route before you bump, and do not rely on the warning on a live site.
 
 **The loader row above covers five hooks now, and three of them are new.**
 `index_template`, `singular_template` and `page_template` are mounted beside
