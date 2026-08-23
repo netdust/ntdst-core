@@ -146,7 +146,15 @@ final class NTDST_Logger
                 file_put_contents($dir . '/' . $filename, implode('', $entries), FILE_APPEND | LOCK_EX);
             }
         } catch (\Throwable $e) {
-            error_log('Logger write failed (shutdown flush, ' . count($batch) . ' file(s)): ' . $e->getMessage());
+            $lines = implode(
+                ' | ',
+                array_map(
+                    static fn (string $line): string => rtrim($line, "\n"),
+                    array_merge(...array_values($batch)),
+                ),
+            );
+
+            error_log('Logger write failed (shutdown flush): ' . $lines . ' | ' . $e->getMessage());
         }
     }
 

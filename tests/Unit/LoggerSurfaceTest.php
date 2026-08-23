@@ -596,6 +596,49 @@ final class LoggerSurfaceTest extends TestCase
         );
     }
 
+    /**
+     * A failed shutdown flush must hand the batched LINES to error_log(), not
+     * just their count.
+     *
+     * The fallback line named only `count($batch) . ' file(s)'` — the number of
+     * FILENAMES in the batch, not the entries in them. An operator staring at
+     * error_log after an incident got "3 file(s)" and nothing else: the actual
+     * warning/info payloads that were about to be written were gone, replaced
+     * by a number. The fallback must carry the drained lines themselves.
+     */
+    public function testAShutdownFlushThatCannotWriteStillHandsTheLinesToErrorLog(): void
+    {
+        $logger = new NTDST_Logger('probe');
+        $logger->warning('w1');
+        $logger->warning('w2');
+
+        $this->breakTheLogsDirectory();
+
+        try {
+            $this->throwOnWarnings();
+
+            NTDST_Logger::flushBatchedLogs();
+        } finally {
+            restore_error_handler();
+        }
+
+        $lines = file($this->sink, FILE_SKIP_EMPTY_LINES);
+
+        $this->assertCount(
+            1,
+            $lines,
+            'The fallback must be a SINGLE error_log() call, not one per batched line.',
+        );
+
+        $this->assertStringContainsString('probe.WARNING: w1', $lines[0]);
+        $this->assertStringContainsString('probe.WARNING: w2', $lines[0]);
+        $this->assertStringContainsString(
+            'Logger write failed',
+            $lines[0],
+            'The exception message must still follow the lines.',
+        );
+    }
+
     // ── 9. The channel name cannot leave the logs directory ──────────────────
 
     /**
