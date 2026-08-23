@@ -100,7 +100,7 @@ RED until: tests/Unit/PackageBootIntegrityTest.php
   Proven by: machine gate — daan's `composer gate` + the ground-truth grep at 0
   Integration test: every daan hit in `ground-truth.md` is renamed to its canonical in one commit that touches no file outside `fields`/`sub_fields` declarations; `cd ~/Sites/daan && ddev composer update netdust/ntdst-core && ddev composer gate` (or daan's gate command per its `composer.json`) exit 0; `curl -s https://daan.ddev.site/wp-json/wp/v2/gigs/297050 | jq -e '(.meta | keys) == ["venue_city","venue_country"]'`; the edit screen loads (AF-1) — recorded as Artifact-load. `[HUMAN]` — the commit is on the never-merged branch; Stefan cherry-picks it to `master` when daan updates.
 
-- [ ] T08 — josworld, stride, todai: rename commits on their current branches + TYPE_MAP key; each gated on the core it pins [Tier B]  (files: ../josworld/app/content/themes/josworld/services/yootheme/SchemaMapper.php, ../josworld/** per ground-truth.md, ../stride/web/app/mu-plugins/** per ground-truth.md)
+- [x] T08 — josworld, stride, todai: rename commits on their current branches + TYPE_MAP key; each gated on the core it pins [Tier B]  (files: ../josworld/app/content/themes/josworld/services/yootheme/SchemaMapper.php, ../josworld/** per ground-truth.md, ../stride/web/app/mu-plugins/** per ground-truth.md)
   Satisfies: FR-8 (josworld, stride, todai), SC-6
   Test-author: solo — renames, no code path
   Proven by: machine gate — three consumer gates + the ground-truth grep at 0
