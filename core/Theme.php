@@ -155,7 +155,7 @@ class NTDST_Theme
 
         // Force expected shapes for keys we iterate later — fail upfront
         // instead of crashing inside a foreach with a confusing message.
-        foreach (['theme_support', 'image_sizes', 'menus', 'sidebars'] as $arrayKey) {
+        foreach (['theme_support', 'image_sizes', 'menus', 'sidebars', 'excerpt'] as $arrayKey) {
             if (isset($config[$arrayKey]) && !is_array($config[$arrayKey])) {
                 throw new InvalidArgumentException(
                     "NTDST_Theme config['{$arrayKey}'] must be an array",

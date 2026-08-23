@@ -30,11 +30,11 @@ declare(strict_types=1);
 //   6. Malformed config for a key the class iterates (theme_support,
 //      image_sizes, menus, sidebars) throws InvalidArgumentException before
 //      setup_theme() ever runs.
-//   7. THE RED FINDING — T12's own review note: `excerpt` is not on the
-//      validated-shape list, so a scalar `'excerpt' => 55` does not throw;
-//      it silently mounts nothing. Written as the criterion (`throws
-//      InvalidArgumentException`) and marked @group red-finding because it
-//      fails against the code as shipped.
+//   7. THE RED FINDING, now fixed (RF-1) — T12's own review note: `excerpt`
+//      was not on the validated-shape list, so a scalar `'excerpt' => 55` did
+//      not throw; it silently mounted nothing. Written as the criterion
+//      (`throws InvalidArgumentException`); it was RED against the code as
+//      shipped and is GREEN since `'excerpt'` joined the shape list.
 //   8. README's `Theme::style` / `Theme::script` / `Theme::single/page/
 //      archive` migration rows name the SPECIFIC replacement calls the
 //      cluster promises (`ntdst_pages()->single(`/`page(`/`archive(` and
@@ -348,15 +348,12 @@ final class CoreShapeCluster5FeatureTest extends TestCase
     }
 
     /**
-     * RED FINDING (T12 review note): `excerpt` is NOT on validate_config()'s
-     * shape list (only theme_support/image_sizes/menus/sidebars are), so a
-     * scalar excerpt value throws NOTHING — isset() on an array offset of an
-     * int silently returns false, and setup_theme() mounts neither excerpt
-     * filter with no signal to the caller that their config was malformed.
-     * This asserts the criterion the fix owes, not the code as shipped, and
-     * is expected to be RED until that fix lands.
-     *
-     * @group red-finding
+     * RED FINDING (T12 review note), fixed by RF-1: `excerpt` was NOT on
+     * validate_config()'s shape list (only theme_support/image_sizes/menus/
+     * sidebars were), so a scalar excerpt value threw NOTHING — isset() on an
+     * array offset of an int silently returns false, and setup_theme() mounted
+     * neither excerpt filter with no signal to the caller that their config
+     * was malformed. `'excerpt'` is on that list now; this pins the criterion.
      */
     public function testAScalarExcerptValueThrowsUpFront(): void
     {
