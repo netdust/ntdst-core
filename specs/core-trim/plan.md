@@ -70,7 +70,7 @@ T13 writes both invariants and runs both checks (SC-7).
 
 ## Spec-premise ground-truth
 
-> Correction (Cluster B T04, 2026-08-23): the reader counts below swept the FLEET only, never core itself — `admin/RelationField.php:133` called `ntdst_get_formatted_posts()` and `services/Logger.php::clearOld()` called `whereDate()`; the provider-row sweep caught both. Treat each "Confirmed" count as fleet-only; grep `api core admin services support` before deleting.
+> Correction (Cluster B T04, 2026-08-23): the reader counts below swept the FLEET only, never core itself — `admin/RelationField.php:133` called `ntdst_get_formatted_posts()` and `services/Logger.php::clearOld()` called `whereDate()`; the provider-row sweep caught both. Treat each "Confirmed" count as fleet-PRODUCTION-only — it swept neither core nor the fleet's tests (Cluster B gate found ~12 daan/josworld/stride test files referencing removed symbols); grep `api core admin services support` AND each consumer's `tests/` before deleting.
 
 | Premise | Verdict |
 |---|---|
