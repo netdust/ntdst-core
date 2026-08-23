@@ -109,7 +109,7 @@ Behaviour: every template path in the package resolves through one function, Wor
 Observable: `grep -rn "locate_template(\|extract(" --include=*.php ~/Sites/ntdst-core/api ~/Sites/ntdst-core/core` prints exactly one line, inside `NTDST_Template_Loader::locate()` (today: 3 — `api/Response.php:273,311,667`).
 RED until: tests/Unit/TemplateLoaderTest.php
 
-- [ ] T09 — NTDST_Template_Loader in its own file: one locate(), {$type}_template over WP's candidates, one hand-off [Tier A]  (files: core/TemplateLoader.php, api/Response.php, ntdst-core.php, tests/bootstrap.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php, tests/Unit/TemplateLoaderTest.php)
+- [x] T09 — NTDST_Template_Loader in its own file: one locate(), {$type}_template over WP's candidates, one hand-off [Tier A]  (files: core/TemplateLoader.php, api/Response.php, ntdst-core.php, tests/bootstrap.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php, tests/Unit/TemplateLoaderTest.php)
   Satisfies: FR-10
   Test-author: solo — cluster stakes standard; template resolution, no authorization semantics
   Proven by: new test
@@ -119,6 +119,7 @@ Integration gate: `cd ~/Sites/ntdst-core && composer gate && cd ~/Sites/daan && 
 > Hardened at the Cluster 4a gate (T09 review I2): a mid-render fatal arrives after WordPress flushed a 200, so the status code alone passes a broken page; the body must carry no stack trace.
 
 ── REVIEW GATE ── *(provisional tier: STANDARD — reviewer + code-simplicity)*
+> Cluster 4a gate CLOSED 2026-08-23 at `c385163` (range 872be6d..c385163; tier escalated STANDARD → FULL for the traversal fix). T09 `740f980`/`94f1f89`/`b915973`; task review found daan's theme helper calling the deleted `NTDST_Response::addPath()` (mid-render fatal behind a 200 — gate line hardened to read the body; daan proof branch `d1ead17` deletes the redundant call); feature tests `CoreShapeCluster4aFeatureTest.php` (15) found RF-1: `locate()`'s `locate_template()` fallthrough unguarded and cached → fixed `5fa3d61` (`themeDirs()`/`isInsideTheme()`, `isInside()` byte-identical); priority-5 pin `4b9dca1`; docs `dd60842`; sentinel PASS (30 probes), its residuals landed as round 2 `02af41f`..`c385163` (cache keyed per theme, realpath returned/cached, theme-compat refusal pinned). Both scoped re-reviews APPROVED. Suite 1074, gate 0; daan `/`, `/card` 200 with clean bodies. Shakeout owes: real `switch_to_blog()`, a child theme where stylesheet ≠ template dir, TOCTOU on the resolved path (not closable in PHP's include model).
 
 ---
 
