@@ -123,7 +123,7 @@ they do not inform the design (D5).
 - **SC-6:** `grep -c "allowed_http_origins" api/Rest.php` ≥ 1; `grep -c "private static array \$surface\|private static array \$mimeTypes\|function publicSurface" api/*.php` = 0; `grep -c "wp_check_filetype\|send_nosniff_header\|load_template" api/Response.php` ≥ 3.
 - **SC-7:** `composer gate` exits 0 at the release commit with 0 failures, and the unit suite still carries ≥ 1 denial-path test for each of: the write-verb refusal, the relation-search capability gate, the anonymous-meta absence, the CORS fail-closed decision.
 - **SC-8:** README at the release commit names each of these 14 removed symbols at least once in the 5.0.0 section: `public_fields`, `publicRows`, `publicRow`, `getPublicShape`, `ntdst_actions`, `get_nonce`, `ntdst-api.js`, `apiSuccess`, `publicSurface`, `before_dispatch`, `ntdst_redirect`, `getMimeType`, `registerMimeType`, `Theme::style`.
-- **SC-9:** All 7 `ARCHITECTURE-INVARIANTS.md` mechanical checks return their stated result at the release commit (7 commands, 0 unexpected hits).
+- **SC-9:** All 10 `ARCHITECTURE-INVARIANTS.md` mechanical checks return their stated result at the release commit (0 unexpected hits). *(Amended 2026-08-23 with FR-16: ten invariants exist at release; a widening.)*
 - **SC-10:** On daan's `chore/core-path-repo` branch, after `ddev composer update netdust/ntdst-core`, `diff -rq --exclude=vendor --exclude=.git ~/Sites/ntdst-core web/app/mu-plugins/ntdst-core` reports 0 differing files at every review gate; daan `master`'s lock still points at the VCS repo.
 
 ---
