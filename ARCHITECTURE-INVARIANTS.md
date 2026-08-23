@@ -107,12 +107,22 @@ marks the ONE pending declaration it was chained onto, and nothing else.
 `true` unconditionally; `->public()` on a write; a capability check inside a
 handler body instead of on the route; a second permission registry; a
 `public_actions`-style list of names that may go without a gate.
-**Mechanical check:** `grep -rn "__return_true\|=> 'public'\|->public()\|public_actions" --include=*.php . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → every route hit is a `GET`. The comment filter drops seven lines, and all seven are prose about `ntdst/api/public_actions`: `api/Actions.php:32`, `:70`, `:306`, `:670`, `:707`, plus `core/Theme.php:202` and `admin/RelationField.php:54`. A docblock explaining the filter is not a second permission registry. What is left is six lines, all in `api/Actions.php`: `:104` (the `$public_actions` property), `:186`–`:187` and `:246`–`:247` (the filter read and the membership test, once per dispatch path), and `:673` (the registration helper that adds to it). That IS the second permission registry this invariant forbids, and it leaves with `Actions.php` in phase 3. A site asserts its anonymous surface with `rest_get_server()->get_routes($ns)` filtered on `permission_callback === '__return_true'` — WordPress's registry, not ours.
+**Mechanical check:** `grep -rn "__return_true\|=> 'public'\|->public()\|public_actions" --include=*.php . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → EMPTY. Every route hit would have to be a `GET`; there are none left to judge. The comment filter now drops nothing either — the check is empty with and without it, so the second grep is kept for the day a docblock explains the posture again, not because it is carrying anything today.
 **Status:** established by Cluster 2 (T04–T06); code holds at `d91e117` for
-routes through `ntdst_rest()`; `Actions.php:132,147` + `$public_actions` register
-their own routes outside it until phase 3; flips to holds-today at FR-16.
-Re-run verbatim at `96560c5`: six hits, all in `api/Actions.php` at the lines above,
-and seven comment lines dropped.
+routes through `ntdst_rest()`. Re-pinned at core-shape Cluster 3: the check is
+EMPTY. `api/Actions.php` carried all six hits recorded at `96560c5` (the
+`$public_actions` property, the filter read and the membership test on each of
+the two dispatch paths, and the registration helper) and T08 deleted the file,
+so the second permission registry this invariant forbids is gone rather than
+narrowed. Of the seven prose lines the comment filter used to drop, five left
+with `Actions.php`, `admin/RelationField.php:54` left with T07's rewrite, and
+`core/Theme.php:202` was the last one — its `filter()` docblock used
+`ntdst/api/public_actions` as the example of a namespaced filter name, and the
+cluster-3 fix wave (C2) replaced it with `ntdst/service/{slug}/config`, which
+the package still fires. INV-3 now HOLDS with no exception and no comment
+allowance. A site asserts its anonymous surface with
+`rest_get_server()->get_routes($ns)` filtered on `permission_callback ===
+'__return_true'` — WordPress's registry, not ours.
 
 ## INV-4 — CSRF and nonces are WordPress's; core mints nothing
 
@@ -128,16 +138,18 @@ that is the invariant.
 in `api/`, `core/` or `admin/`; a route that mints or returns a nonce; a `fetch()`
 to `/wp-json/` in core's own JS that is not `wp.apiFetch`; an `Origin`/`Referer`
 check standing in for the nonce.
-**Mechanical check:** `grep -rn "wp_create_nonce\|wp_verify_nonce\|check_ajax_referer\|get_nonce\|HTTP_ORIGIN\|HTTP_REFERER" --include=*.php --include=*.js api core admin assets` → ONE hit, `admin/MetaboxGenerator.php:1864`, which the paragraph below explains is not a violation. `grep -rn "fetch(" assets/js` → EMPTY: core's only JS reaches the REST API through `wp.apiFetch`, which the grep does not match because it is capitalised, and there is no raw `fetch()` left to find.
-**Status:** HELD, established by T08 (core-shape Cluster 3). Re-run verbatim at
-`007fb33`: core mints no nonce and reads no `Origin` or `Referer` anywhere on its
-HTTP surface. `api/Actions.php` carried all eight of the hits recorded at
+**Mechanical check:** `grep -rn "wp_create_nonce\|wp_verify_nonce\|check_ajax_referer\|wp_nonce_field\|get_nonce\|HTTP_ORIGIN\|HTTP_REFERER" --include=*.php --include=*.js api core admin assets` → THREE hits, all in `admin/MetaboxGenerator.php` and all named below: `:342` and `:712` (`wp_nonce_field()`) and `:1864` (`wp_verify_nonce()`). `wp_nonce_field` joins the pattern because a MINTING call is the half that was missing: the check hunted for verification and for `wp_create_nonce()`, and a route that emitted a token through `wp_nonce_field()` instead would not have been seen. `grep -rn "fetch(" assets/js` → EMPTY: core's only JS reaches the REST API through `wp.apiFetch`, which the grep does not match because it is capitalised, and there is no raw `fetch()` left to find.
+**Status:** HELD, established by T08 (core-shape Cluster 3), re-pinned with the
+widened pattern at the cluster-3 fix wave. Re-run verbatim: three hits, all in
+`admin/MetaboxGenerator.php` — `:342`, `:712`, `:1864` — and `grep -rn "fetch("
+assets/js` is EMPTY. Core mints no nonce and reads no `Origin` or `Referer`
+anywhere on its HTTP surface. `api/Actions.php` carried all eight of the hits recorded at
 `96560c5` and is deleted; `assets/js/ntdst-api.js` carried the ninth and its
 four raw `fetch()` calls, and is deleted too. The `wp_rest` nonce that
 `wp.apiFetch` sends and `rest_cookie_check_errors()` checks is the whole gate.
-One hit is NOT a violation and never was: `admin/MetaboxGenerator.php:1864`'s
-`wp_verify_nonce(wp_unslash($_POST[$nonce_name]), …)`, paired with the
-`wp_nonce_field()` calls at `:342` and `:712`. A classic-editor metabox is a
+The three hits are NOT a violation and never were: they are ONE pair —
+`wp_nonce_field()` at `:342` and `:712` minting, `wp_verify_nonce(
+wp_unslash($_POST[$nonce_name]), …)` at `:1864` checking. A classic-editor metabox is a
 WordPress ADMIN FORM POST, and that pair IS WordPress's own CSRF gate for one —
 core mints nothing of its own there and invents no second token. This invariant is
 about core's HTTP surface, where the token is `wp_rest` and
@@ -162,8 +174,11 @@ list of template names; a `{success, data}` array built by hand.
 **Status:** `Rest::$surface` and `Rest::$cors['origins']` are gone at `d91e117`
 (Cluster 2, T05–T06): the route register is `WP_REST_Server::get_routes()` and
 the origin list is `allowed_http_origins`. Outstanding, for phase 4:
-`Response::$mimeTypes`, `Template_Loader::templateInclude()`'s hand-listed
-hierarchy, the `api*` envelopes.
+`Response::$mimeTypes` and `Template_Loader::templateInclude()`'s hand-listed
+hierarchy. The `api*` envelopes are no longer outstanding: T08 deleted
+`apiSuccess()`, `apiError()`, `apiSuccessResponse()` and `apiErrorResponse()`
+with the dispatcher that wrapped every answer in `{success, data}` — a REST
+route returns the payload and WordPress builds the body.
 
 ## INV-6 — One template resolver; page routes are rewrite rules; a template callback returns a path
 
@@ -280,7 +295,7 @@ Every part of (A)'s form is load-bearing:
 - The last filter drops COMMENT lines, the way INV-1's does. A docblock reading
   `@param string $field Field to match (term_id, …)` is prose, not a switch.
 
-(A) returns **51 lines** and (B) returns **1**. Every one of them is named in
+(A) returns **51 lines** and (B) returns **2**. Every one of them is named in
 `## Deliberate exceptions` below, grouped by WHAT it is rather than by where it
 sits. Anything else is a bypass. (It was 59 while `services/Logger.php` still
 declared the `log_entry` model; core-trim FR-5 deleted that model and took eight
@@ -293,14 +308,23 @@ same thing, free to disagree.
 
 **Status:** established by field-types Clusters A–C, re-pinned at the core-trim
 Cluster D gate.
-(A) 51 hits / (B) 1, all named; code holds at `96560c5` — both commands were
-re-run verbatim there. The count moved from 59 to 51 because core-trim DELETED
-code, not because the check was relaxed: `services/Logger.php` has no hit left
-(−8: five field declarations, one `orderby` value, two `url` payload keys) and
-`api/Data.php` lost its `['relation' => 'OR']` (−1), while
-`admin/RelationField.php` gained an `'orderby' => 'date'` (+1). Per file, (A) is
-now MetaboxGenerator 28, Data 11, Rest 3, RelationField 3, Pages 2, Actions 2,
-LogLevel 1, Response 1.
+(A) 51 hits / (B) 2, all named; both commands re-run verbatim at the core-shape
+cluster-3 fix wave. (A)'s TOTAL is unchanged from `96560c5` and its shape is
+not: `api/Actions.php` went 2 → 0 (T08 deleted the file, and both its hits were
+WordPress's own `callback` ARGUMENT key), and `admin/RelationField.php` went
+3 → 5 — T07 moved the picker onto `GET /ntdst/v1/relation/search`, and the
+route's two `args` schema lines each spell `'type' => '<name>'`. Per file, (A)
+is now MetaboxGenerator 28, Data 11, RelationField 5, Rest 3, Pages 2,
+LogLevel 1, Response 1. (B) went 1 → 2 for the same reason (A)'s map-key
+alternative is noisy: `admin/RelationField.php:46`'s
+`const MAX_REQUESTED_TYPES = 20` is an INTEGER BOUND whose NAME carries the
+word, not a table. It is named below rather than renamed around — a check that
+only stays quiet because the constant was spelled to dodge it is a check that
+has stopped asking.
+(Earlier: the count moved from 59 to 51 at `96560c5` because core-trim DELETED
+code, not because the check was relaxed — `services/Logger.php` lost 8 and
+`api/Data.php`'s `['relation' => 'OR']` 1, while `admin/RelationField.php`
+gained an `'orderby' => 'date'`.)
 
 ## INV-9 — A public symbol has a reader, or it is a published extension point
 
@@ -540,7 +564,7 @@ Things core does that WordPress also does, kept on purpose. Each names why.
 
 ### INV-8 — every hit the field-type check returns
 
-(A) returns 51 lines and (B) returns 1. Each group below says WHAT the hits are,
+(A) returns 51 lines and (B) returns 2. Each group below says WHAT the hits are,
 not which line they sit on: a line number is stale after the next edit, and a
 reader matching 59 greps against stale numbers stops reading. Where a group has
 a test that holds it, the test is named — that is its mechanical home.
@@ -574,7 +598,19 @@ a test that holds it, the test is named — that is its mechanical home.
   about the declared type name. That is the direction this invariant wants.
 - **`admin/RelationField.php`'s two `=== 'relation'` selectors** — 2 hits. They
   pick the relation fields out of a declared `fields` array. Structural, and
-  INV-2 moves this file in phase 3.
+  INV-2 moved this file's endpoint onto the one HTTP surface at T07.
+- **A REST `args` schema line** — 2 hits, `admin/RelationField.php:95` and
+  `:96`. `register_rest_route()` reads JSON Schema, and JSON Schema's words are
+  the same bytes as four retired field-type names: the picker's route declares
+  `'type' => 'string'` and `'type' => 'array'` because that is what WordPress
+  reads. This is the same false-positive SHAPE as the JSON-Schema group above,
+  arriving from the route side instead of the publish side. The retired-type
+  PIN (`bin/guard.sh` and
+  `PackageBootIntegrityTest::removedSymbolProvider()`) exempts these two lines
+  by CONTENT and never by path: a line is a REST args schema when it carries a
+  `'type' => '<name>'` beside a `sanitize_callback`, a `validate_callback`, an
+  `items` or an `enum` — one line each, and NOT on a bare `required`, which the
+  field registry spells too (cluster-3 fix wave F1).
 - **`api/Data.php`'s `=== 'repeater'`** — 1 hit, the one structural test: a
   repeater publishes an OBJECT schema built from `sub_fields`, not a leaf. The
   registry has no "is structural" column, and one test is cheaper than one more
@@ -597,16 +633,22 @@ a test that holds it, the test is named — that is its mechanical home.
   exists to make possible. core-trim FR-5 removed the `log_entry` post type, so
   the example is gone; the shape it named is still the one to recognise, and a
   reader comparing this list to an older run needs to know why eight hits left.
-- **MAP KEYS that are not type names** — 11 hits, all from the map-key
+- **MAP KEYS that are not type names** — 9 hits, all from the map-key
   alternative, in four shapes. WordPress's own `callback` ARGUMENT key
-  (`api/Actions.php`, `api/Rest.php`, `core/Pages.php` — 5). WordPress POST
+  (`api/Rest.php`, `core/Pages.php` — 3; `api/Actions.php` carried two more
+  until T08 deleted it). WordPress POST
   COLUMN and query words as array keys in `api/Data.php`: the `content` column
   map, its `match ($key)` arm, and `content`/`date` in a projected row (4) — the
   `meta_query` `['relation' => 'OR']` left with `orWhere()`. One payload key
   named for what it carries: `url` in `api/Data.php`'s attachment payload (1);
   the two in `services/Logger.php` went with the model. And `api/Response.php`'s
   `'json' => 'application/json'` MIME entry (1), which is (B)'s hit as well.
-- **(B)'s one hit — `api/Response.php`'s `$mimeTypes`.** MIME types, not field
+- **(B)'s two hits.** `api/Response.php`'s `$mimeTypes` — MIME types, not field
   types: the `[Tt][Yy][Pp][Ee][Ss]?` fragment catches the word. It is an INV-5
   item — WordPress keeps that table as `wp_get_mime_types()` — and INV-5 already
-  lists it as outstanding for phase 4.
+  lists it as outstanding for phase 4. And `admin/RelationField.php:46`'s
+  `private const MAX_REQUESTED_TYPES = 20`, which is not a table of anything: it
+  is the most post types one relation search may name, stated once and read
+  twice (the `post_type` arg's `maxItems`, and the hard refusal at the top of
+  `mayPickFromAll()` — cluster-3 fix wave F2). (B) hunts for a second LIST; an
+  integer is the shape to recognise as a false positive.
