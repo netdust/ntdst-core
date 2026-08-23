@@ -46,6 +46,14 @@ So `registerOne()` forwards `args`, `schema`, `show_in_index` and `allow_batch`
 untouched. A wrapper that hides the thing it wraps is not a wrapper; it is a
 fork with extra steps.
 
+Loading is the same rule applied to the class loader. Core installs no
+autoloader, scans no directory and reads no PHP source: a listed service class
+is one PHP can already resolve, by the consumer's own `require_once`, by
+Composer, or by any autoloader the consumer installed (core-trim FR-1, and
+INV-10 in `ARCHITECTURE-INVARIANTS.md`). Guessing a file path from a class name
+was core re-answering a question the consumer had already answered, and a
+writable directory on the old discovery list was code execution.
+
 The hard case is where WordPress does something **badly**. That is not an
 exemption — it is the strongest reason to wrap. See §6.
 
@@ -111,16 +119,20 @@ Same test, opposite outcomes. That is what makes it a usable test.
 
 ## 4. Safe defaults where mistakes are expensive — including the one that is wrong
 
-Deny is the default. `public_actions` ships empty and the framework never adds
-to it. A REST route with no permission does not register. An unresolvable
-capability denies everyone, administrators included.
+Deny is the default. `ntdst/api/public_actions` ships empty, and the only thing
+that adds to it is an author writing `'public' => true` on a registration —
+`NTDST_Actions::register()` unifies that declaration onto the site's one filter
+(`api/Actions.php`), so anonymous reach is always a mark somebody MADE, never a
+default and never something a merge can turn on. A REST route with no permission
+does not register. An unresolvable capability denies everyone, administrators
+included.
 
-One known violation, stated here rather than discovered later:
-**`ntdst_service_{slug}_enabled` is a DENY filter that FAILS OPEN**
-(`core/Bootstrap.php`). Misspell the slug and the service you meant to switch
-off boots normally, with nothing reported. It is documented in Bootstrap's
-header and it is a wart. Anything new that gates on a filter should fail closed
-instead.
+The wart this section used to state is fixed. 5.0.0 removed the fail-open DENY
+filter `ntdst_service_{slug}_enabled` along with the whole per-service enable
+switch (core-trim FR-2): a service is off when its `metadata()` says
+`'enabled' => false`, or when its `services.conditional` condition returns
+false, and there is no third way. The rule that outlived it stands — anything
+new that gates on a filter fails closed.
 
 ## 5. Chainable for building, not for everything
 

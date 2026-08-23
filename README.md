@@ -86,11 +86,11 @@ Read every line before upgrading. Nothing here is shimmed.
    transients to measure attack volume, they will look quieter.
 4. **A declared `metadata()['name']` now really does pin the service slug.**
    It was documented as doing so and did not. If one of your services declares
-   a name whose slug differs from the class-derived one, its
-   `ntdst_service_{slug}_enabled` filter and `ntdst_service_{slug}` option
-   **change key**. Check every service that declares a `name`, and remember the
-   `_enabled` filter is a DENY filter that fails OPEN — a stale key means a
-   service you meant to switch off boots.
+   a name whose slug differs from the class-derived one, the key of that
+   service's config filter **changes**. Check every service that declares a
+   `name`. On 5.0.0 that filter is `ntdst/service/{slug}/config`, and the
+   per-service enable switch this note used to point at is gone — the core-trim
+   migration table says what replaced it.
 5. **Bootstrap derives no path from a class name.** A listed class must be
    loaded or autoloadable before `register()` (see the core-trim migration
    table).
@@ -199,10 +199,10 @@ declaration that only `->public()` can make; no option value reaches it.
 exactly as written — `'Public'` and `' public '` are capabilities nobody holds,
 not near misses that get normalised back into an opening.
 
-**Asserting your anonymous surface.** `surface()`, `publicSurface()`,
-`opaqueSurface()` and `forgetSurface()` are gone. WordPress already keeps the
-register every route lands in, and a second copy of it can only disagree with
-the original. Ask the server instead:
+**Asserting your anonymous surface.** The surface registry and its three
+helpers are gone; the core-trim migration table names each one and what to write
+instead. WordPress already keeps the register every route lands in, and a second
+copy of it can only disagree with the original. Ask the server instead:
 
 ```php
 $routes = rest_get_server()->get_routes('my/v1');
@@ -433,14 +433,209 @@ widen with a type whose sanitizer is a no-op.
 `'type' => 'callback'` draws itself, and your own code owns what it stores. It
 has no entry, and both the render side and the save side step past it.
 
+#### Extension points — published, and read from outside this repository
+
+Core publishes these and keeps them even though `bin/zero-readers.sh` finds no
+caller in the package or in the four consumer sites. That is what a published
+extension point IS: the reader is somebody else's code, written after this
+release. Each row says who, so the exemption is a statement and not a shrug —
+INV-9 in `ARCHITECTURE-INVARIANTS.md` holds the same list, and the sweep refuses
+to exempt a name this table does not carry.
+
+| Symbol | Who reads it | Kind |
+|---|---|---|
+| `ntdst/model/registering` | a consumer that adjusts a model's arguments before `register_post_type()` | filter |
+| `ntdst/model/creating`, `ntdst/model/created` | daan `PressKitService` (`created`); a consumer that reacts to a row | action |
+| `ntdst/model/updating`, `ntdst/model/updated` | daan `PressKitService` (`updated`) | action |
+| `ntdst/model/deleting`, `ntdst/model/deleted` | a consumer that cleans up beside a row | action |
+| `ntdst/metabox_saved/{model}` | a consumer that reacts to an editor save. It hands you the POSTED values — unslashed and uncleaned. Read the stored value back with `getMeta()` | action |
+| `ntdst/api/allowed_origins` | a consumer that adds CORS origins outside a `->cors()` declaration | filter |
+| `ntdst/service_before_boot/{class}`, `ntdst/service_after_boot/{class}` | a consumer that wraps one named service's boot | action |
+| `ntdst/service/{slug}/config` | stride `SecurityService`, `PerformanceService` — the ONE per-service extension key | filter |
+| `NTDST_Service_Meta` | the optional service shape. Eight implementers on the fleet, all outside the four consumer sites: bavi (six) and netdust-legacy (two) | interface |
+| `NTDST_Bootstrap::config()` | reads back the merged config a consumer passed to `register()`. Kept by FR-2 as the one read-back of that array | method |
+| `ntdst_container()` | the container accessor. Its callers are the fleet's test tearDowns and consumer bootstraps, and `tests/` is excluded from the sweep by design | function |
+| `ntdst_inline()` | the other half of the terminal response pair; `ntdst_download()` is read and this is not. Documented as a pair, and recorded as a deletion candidate for `core-shape` rather than exempted silently | function |
+
 #### Core-trim — what left the package
 
-Core keeps what only a framework can own. A primitive WordPress already ships,
-or a service with one consumer on the fleet, belongs to that consumer.
+Core keeps what only a framework can own: an API over WordPress, and the
+conventions every site shares. A primitive WordPress already ships is not one —
+`wp_schedule_event()` and `wp_mail()` are the whole of what two of the services
+below wrapped. Neither is a service the fleet reads from ONE place: it belongs
+to that place, and it moves there whole. `Mailer` is the case to read the rule
+by — five call sites, but all of them in stride's own plugins, so the class went
+to `netdust-mail` and not into core's next release. `docs/philosophy.md` §6 is
+the admission test; the rows below are what failed it.
+
+Every symbol 5.0.0 removed is written down in one of two tables. A retired field
+TYPE name is a rename and sits in the "Field types" table above; everything else
+is here, one row per symbol.
+`PackageBootIntegrityTest::testEveryRemovedFiveOhSymbolHasAMigrationRow` reads
+this table back off the release's own removal list, so a row cannot quietly go
+missing.
+
+**Loading core and your services.** Core never assumes Composer. Load
+`ntdst-core.php` as the base mu-plugin, then load your service classes any way
+you like — `require_once`, Composer PSR-4, or any autoloader you installed — and
+list them in `services`. Core derives no path from a class name: a listed class
+that PHP cannot already resolve is refused at `register()` with a
+`_doing_it_wrong()` naming the class and the sector, plus an error-level log
+line, because `_doing_it_wrong()` is `WP_DEBUG`-gated and a missing service on a
+live site would otherwise be silent.
+
+**Bootstrap — loading and the service lifecycle (FR-1, FR-2).**
 
 | Was | Now |
-| --- | --- |
-| `ntdst_mail()` | `new \Netdust\Mail\Mailer()` — the class moved into stride's `netdust-mail` plugin (netdust-mail ≥ the T11 commit). `queue()`, `toArray()`, `header()`, `ntdst_send_mail()`, `ntdst_notify()`, `ntdst_wrap_email_in_layout()` and the `ntdst_mail_*` / `ntdst_email_*` / `ntdst_wrap_all_emails` hooks are not carried; call `wp_mail()` for a plain send. |
+|---|---|
+| `discoverServices()`, `discoverServicesInPath()` | `require_once` your service files, or autoload them, and list the class names in `services` |
+| `getClassNameFromFile()` | nothing. Core never parses PHP source for a class name |
+| `isInConditionalConfig()` | nothing; the conditional sector is read directly |
+| `services.auto_discover` | not read. The key may stay in your config; it does nothing |
+| `services.discovery_paths` | not read. Same |
+| `services.handlers` | a dead key — nothing ever read it. daan declares one; delete it |
+| option `ntdst_service_{slug}`, filter `ntdst_service_{slug}_enabled` | `metadata()['enabled'] => false`, or a `services.conditional` entry whose condition returns false. There is no third way. **The retired filter FAILED OPEN**, so a site that kept a service off through it will find that service BOOTING after the upgrade — check every one before you bump |
+| `isServiceEnabled()` | nothing to call: the two ways above are read by `register()` |
+| `getServiceConfig()` | read your own config in the service: `apply_filters("ntdst/service/{$slug}/config", $defaults)` |
+| `getServices()` | nothing. WordPress's own registries answer "what is loaded"; a second one drifts |
+| `getBootedServices()` | nothing — same answer |
+| `hasService()` | `class_exists()` |
+| `isBooted()` | `did_action('ntdst/features_ready')` |
+| filter `netdust_{slug}_config`, then `ntdst_service_{slug}_config` | `ntdst/service/{slug}/config`. There is no shim: a listener on either retired spelling is never mounted and never called, and nothing says so |
+| the same filter, read from a consumer that has NOT bumped core yet | **bridge both names while you straddle the two versions** — read `ntdst/service/{slug}/config` first and fall back to `ntdst_service_{slug}_config`. A consumer that renames its READ before core is bumped stops receiving its owner's overrides, silently, because the core it runs still fires the old name. stride's theme bridges until its 5.0 bump |
+| slug `admin_u_i` (a `_` before EVERY internal capital) | `admin_ui`. `APIRouterService` is `api_router`, not `a_p_i_router`. A slug with no consecutive capitals is unmoved, and an override keyed on a mangled slug is now REFUSED at `register()` instead of ignored |
+
+Three refusals are new, and each is louder than the silence it replaces:
+
+| Shape | What happens |
+|---|---|
+| a `services.overrides` key naming no listed service | refused at `register()` with `_doing_it_wrong` |
+| a `services.overrides` key naming a listed service that does not boot | silent, on purpose — the key is legal; the service simply did not run |
+| a non-array `services.overrides.{key}` value, or a non-string list entry | refused with a notice |
+| a listed service that does not load | `_doing_it_wrong()` (WP_DEBUG only) **and** an error-level log line, so a live site is not silent |
+| a service whose `metadata()` returns a non-array | counts as declaring nothing — defaults all the way down |
+| a `metadata()['name']` whose slug differs from the class-derived one | the declared name really does pin the slug now, so the key of that service's config filter CHANGES. Check every service that declares a `name` |
+
+**Container (FR-6).**
+
+| Was | Now |
+|---|---|
+| `ntdst_make()`, `NTDST_Container::make()` | `ntdst_get()`. Constructor autowiring is unchanged |
+| `NTDST_Container::call()` and `callableReflections` (its reflection cache) | call the thing yourself |
+| `NTDST_Container::forget()`, `flush()`, `keys()` | build a fresh container: `new NTDST_Container()`. **22 test files on the fleet call `forget()` in `tearDown()`** — daan 14, josworld 3, todai 3 — and each becomes a fresh instance per test |
+
+**Logger (FR-5).** Channels, levels, the batched file handler and the
+`error_log` handler stay. `ntdst_log($channel)` and the five level methods are
+the API.
+
+| Was | Now |
+|---|---|
+| the `log_entry` post type and the `database` handler | nothing. Log lines are a file, not content |
+| `ensureModelRegistered()` | nothing — it existed for that post type |
+| filter `ntdst_log_database_enabled` | nothing |
+| `recent()`, `clearOld()` | read the log file |
+| `addHandler()`, `removeHandler()` | nothing. Two handlers, both built in |
+| `setMinLevel()` | the `ntdst_log_level` config value |
+| `setBatchingEnabled()` | nothing; the file handler batches |
+| `ntdst_log_debug()`, `ntdst_log_info()`, `ntdst_log_error()` | `ntdst_log('channel')->debug()` / `->info()` / `->error()` |
+| hooks `ntdst_log`, `ntdst_log_*` (`ntdst_log_data`, `ntdst_log_audit`) | nothing. A log line is not an event bus |
+
+**The query API (FR-4).** The chain is the one way to read rows.
+
+| Was | Now |
+|---|---|
+| `ntdst_get_formatted_posts()`, `getFormattedPosts()` | `ntdst_data('post_type')->where(…)->withMeta()->get()` |
+| `getPostMeta()` | `->withMeta()` on the chain, or `getMeta()` on a row |
+| `getPostTerms()` | `->withTerms()`, or `wp_get_object_terms()` |
+| `attachTerms()`, `syncTerms()`, `detachTerms()` | `wp_set_object_terms()` — one call, WordPress's own |
+| `whereDate()` | `->where()` with a `date_query`, or `WP_Query` args |
+| `orWhere()` | a `meta_query` with `'relation' => 'OR'` |
+
+**Model lifecycle hooks (FR-11).** Same arguments, `ntdst/*` names. There is no
+shim: a listener on a retired name is silently inert. josworld listens on the
+retired create hook, and daan's `PressKitService` on two of the renamed ones.
+
+| Was | Now |
+|---|---|
+| `ntdst_model_create_before` | `ntdst/model/creating` |
+| `ntdst_model_create_after` | `ntdst/model/created` |
+| `ntdst_model_update_before` | `ntdst/model/updating` |
+| `ntdst_model_update_after` | `ntdst/model/updated` |
+| `ntdst_model_delete_before` | `ntdst/model/deleting` |
+| `ntdst_model_delete_after` | `ntdst/model/deleted` |
+
+**Scheduler (FR-7).** 106 lines over two WordPress functions, one reader.
+
+| Was | Now |
+|---|---|
+| `NTDST_Scheduler`, `ntdst_scheduler()` | `wp_next_scheduled()` + `wp_schedule_event()` + `add_action()` |
+| `ntdst_schedule_recurring($hook, $recurrence)` | `if (!wp_next_scheduled($hook)) { wp_schedule_event(time(), $recurrence, $hook); }` |
+| `ntdst_clear_recurring($hook)` | `wp_clear_scheduled_hook($hook)` |
+
+**Theme (FR-8).** `on()` and `filter()` stay — they are the chainable
+configuration case philosophy §5 names.
+
+| Was | Now |
+|---|---|
+| `mixin()`, `__call()` and `wireMixins()` | the global helpers directly: `$theme->data()` is `ntdst_data()`, and so are `pages()`, `response()`, `log()` |
+| `$theme->mail()` | gone with `Mailer` — see below |
+| `Theme::when()` | run the condition yourself. `Pages::when()` is a different thing (a `template_include` filter) and stays |
+| `templatePath()` | `ntdst_response()->locate()` |
+
+**Mail (FR-9).** The class moved into stride's `netdust-mail` plugin as
+`Netdust\Mail\Mailer`, trimmed to what `MailService` uses.
+
+| Was | Now |
+|---|---|
+| `NTDST_Mailer` | `new \Netdust\Mail\Mailer()` — in `netdust-mail`, at or after the T11 commit |
+| `ntdst_mail()` | the same class, or `wp_mail()` for a plain send |
+| `ntdst_send_mail()`, `ntdst_notify()`, `ntdst_wrap_email_in_layout()` | not carried. `wp_mail()` |
+| `queue()`, `toArray()`, `header()` | not carried |
+| cron hook `ntdst_send_queued_mail` | not carried, and **a pending event survives the upgrade with no listener**: queued mail is dropped silently. `wp_clear_scheduled_hook('ntdst_send_queued_mail')` on upgrade |
+| filter `ntdst_wrap_all_emails` | inert. The option may still be set; nothing reads it |
+| filter `ntdst_mail_template_paths` | **the one hook `netdust-mail` carries**, under its original name, for ntdst-auth |
+| filter `ntdst_mail_attachment_bases` | not carried. Nothing fires it |
+| filter `ntdst_email_layout_paths` | not carried. Nothing fires it |
+| hook `ntdst_mail_before_send` | not carried. A listener is inert |
+| hook `ntdst_mail_sent` | not carried. A listener is inert |
+| hooks `ntdst_notification`, `ntdst_notification_*` | not carried. A listener is inert |
+| `templates/emails/` | not carried; the inline layout heredoc went with it |
+
+**RelationField (FR-10).**
+
+| Was | Now |
+|---|---|
+| `NTDST_RelationField::metadata()` | nothing. It is an admin component constructed at load, never a service, and a `metadata()` nothing boots misdescribes the wiring |
+
+**The route surface and the model's own sanitizer table.** These left in the
+same 5.0.0, from the sibling specs `core-shape` and `field-types`. They are
+here because a fatal does not care which spec removed the name.
+
+| Was | Now |
+|---|---|
+| `NTDST_Rest::surface()`, `->surface()`, `$surface` | `rest_get_server()->get_routes('my/v1')` — WordPress keeps that register |
+| `publicSurface()` | the same call, filtered on the route's `permission_callback` being `'__return_true'` |
+| `opaqueSurface()`, `forgetSurface()` | nothing. There is no second register to hide from or forget |
+| `NtdstRestSurfaceTest` | assert against `rest_get_server()->get_routes()` |
+| `getDefaultSanitizer()` | `NTDST_FieldTypes::get($type)->sanitizer` |
+| `sanitizeBoolean()`, `sanitizeDate()`, `sanitizeJson()`, `sanitizeRepeater()`, `sanitizeNestedArray()`, `sanitizeAttachmentId()` | the registry entry's sanitizer. One table, one answer |
+| `sanitize_field()` (the metabox's own) | the same registry. The metabox and the model clean a value the same way now |
+| `MARKER_ONLY_REQUIRED_TYPES` | nothing |
+| `render_repeater_media_cell()` | the `match ($control)` arm in `admin/MetaboxGenerator.php` |
+| `restSchemaFor()`, `restSubFields()` | `restFields()`. `schemaFor()` asks the publish question at every depth, and it is private |
+
+**Two behavioural changes no rename carries.** Both used to be silent when the
+logger was absent, and both are unconditional now (FR-3):
+
+- a Data model's metabox is registered automatically, and no longer skipped;
+- `isDataModel()` answers the question instead of returning `false` early.
+
+**Before you deploy.** Load order first: `ntdst-core.php` is the BASE mu-plugin.
+An mu-plugin that constructs `NTDST_Theme` while core is a regular plugin fatals
+on 5.0.0 — mu-plugins load first, and core is no longer there by luck. And
+stride keeps `v3.0.0` until its own migration lands: its security and
+performance services still read the retired config-filter spelling the table
+above renames.
 
 ### 4.4.2
 

@@ -539,7 +539,16 @@ final class PackageBootIntegrityTest extends TestCase
                 if (str_starts_with($line, '## ')) {
                     $section = trim(substr($line, 3));
                 }
-                if ($section === 'Versions') {
+                // `## Versions` is a changelog, and a MIGRATION ROW names a
+                // removed symbol because naming it is the row's whole job. The
+                // SECTION is not exempt: it is 500-odd lines, and an
+                // INSTRUCTION that still spells a removed name is a wrong
+                // instruction wherever it sits — README:90 told an adopter to
+                // check a filter 5.0.0 had deleted, inside the section this
+                // test agreed not to read. The exemption is the ROW SHAPE plus
+                // the prose lines named in VERSIONS_PROSE_ALLOWANCES, each with
+                // its reason. A further one has to be argued for.
+                if ($section === 'Versions' && $this->isExemptVersionsLine($line)) {
                     continue;
                 }
 
@@ -903,4 +912,147 @@ final class PackageBootIntegrityTest extends TestCase
             );
         }
     }
+
+    /**
+     * The prose lines inside `## Versions` that may spell a removed symbol.
+     *
+     * A migration table ROW is exempt by shape. These are the sentences that
+     * are not rows and still have to name the name — each is here with the
+     * reason, and the list is short on purpose: it is the price of narrowing a
+     * whole-section exemption to a line-shaped one.
+     */
+    private const VERSIONS_PROSE_ALLOWANCES = [
+        '/one exception, and it is `signed_int`/'
+            => 'the 3.x upgrade-order instruction has to name the retired type it tells that reader to KEEP until the bump',
+        '/must KEEP `signed_int` until the bump/'
+            => 'the second line of that same instruction',
+        '/^\$entry->schema;/'
+            => "a JSON-Schema leaf in a code sample (`['type' => 'string']`) — WordPress's vocabulary, not a field declaration",
+    ];
+
+    private function isExemptVersionsLine(string $line): bool
+    {
+        if (preg_match('/^\s*\|/', $line) === 1) {
+            return true; // a migration table row
+        }
+
+        foreach (array_keys(self::VERSIONS_PROSE_ALLOWANCES) as $allowed) {
+            if (preg_match($allowed, trim($line)) === 1) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Every symbol 5.0.0 removed has a migration row an adopter can find.
+     *
+     * The fleet upgrades by hitting a fatal and opening README. The provider
+     * above is the FACT — what the release deleted — and README is the
+     * adopter's copy of it, so the copy is read back OFF the provider by
+     * reflection rather than counted by hand: a row added to the provider and
+     * not to README fails here, which is the only moment anybody is looking.
+     *
+     * Two tables answer, and which one is not this test's business: the
+     * field-type renames have their own `| Retired | Write instead |` table
+     * (a rename, not a removal), and everything else belongs in the core-trim
+     * table. A symbol in neither is a name that fatals with no written answer.
+     */
+    public function testEveryRemovedFiveOhSymbolHasAMigrationRow(): void
+    {
+        $fieldTypes = $this->fieldTypeRows();
+        $spans = $this->coreTrimSpans();
+
+        $this->assertNotSame([], $spans, 'README must ship a `#### Core-trim` migration table.');
+
+        $missing = [];
+
+        foreach (self::removedSymbolProvider() as $key => $row) {
+            if (($row[1] ?? '') !== '5.0.0') {
+                continue;
+            }
+
+            $name = $this->migrationName($key, $row[0]);
+
+            if (isset($fieldTypes[$name])) {
+                continue;
+            }
+
+            foreach ($spans as $span) {
+                if (str_contains($span, $name)) {
+                    continue 2;
+                }
+            }
+
+            $missing[] = $key . ' → ' . $name;
+        }
+
+        $this->assertSame(
+            [],
+            $missing,
+            "5.0.0 removed these and README's migration tables name none of them. "
+            . 'An adopter meets each one as a fatal with no written answer.',
+        );
+    }
+
+    /**
+     * The name an adopter looks up, from a provider row.
+     *
+     * The row carries a SWEEP pattern — `::surface(`, `$surface`, or a regex
+     * over three declaration shapes — and a sweep pattern is not a name. The
+     * regex rows are the retired TYPE names and nothing else, and their key
+     * spells the type, which is why the key is asserted rather than parsed.
+     */
+    private function migrationName(string $key, string $symbol): string
+    {
+        if (str_starts_with($symbol, '/')) {
+            $this->assertStringStartsWith(
+                'retired type ',
+                $key,
+                "A regex row needs a name this test can look up; key it `retired type <name>` or teach migrationName().",
+            );
+
+            return substr($key, strlen('retired type '));
+        }
+
+        return trim($symbol, '$(:->');
+    }
+
+    /**
+     * Every backticked span in the core-trim table's rows.
+     *
+     * Spans, not rows: one row answers for one removed symbol and may spell
+     * several names in its "write instead" cell, and the question this test
+     * asks is only whether the removed name is written down.
+     *
+     * @return list<string>
+     */
+    private function coreTrimSpans(string $readme = ''): array
+    {
+        $readme = $readme !== '' ? $readme : file_get_contents(dirname(__DIR__, 2) . '/README.md');
+
+        $spans = [];
+        $inSection = false;
+
+        foreach (explode("\n", $readme) as $line) {
+            if (str_starts_with($line, '#### Core-trim')) {
+                $inSection = true;
+
+                continue;
+            }
+            if ($inSection && preg_match('/^#{1,3} /', $line) === 1) {
+                break; // the next version closes the table; a `####` sub-head does not
+            }
+            if (!$inSection || !str_starts_with(ltrim($line), '|')) {
+                continue;
+            }
+            if (preg_match_all('/`([^`]+)`/', $line, $matched) > 0) {
+                $spans = array_merge($spans, $matched[1]);
+            }
+        }
+
+        return $spans;
+    }
+
 }

@@ -576,7 +576,7 @@ final class BootstrapLoadsNothingByGuessingTest extends TestCase
         // deleted outright — never to make a red test green. T10 (FR-9) deleted
         // services/Mailer.php, which held two of the five (`Mailer.php:175,365`),
         // so four core files call ntdst_log() now: api/Data.php, api/Rest.php,
-        // admin/MetaboxGenerator.php and core/Theme.php. The clause still bites
+        // admin/MetaboxGenerator.php and core/Bootstrap.php. The clause still bites
         // — a regex that stopped matching would report 0, not 4 — and the real
         // property below (every caller requires after Logger) is untouched.
         $this->assertGreaterThanOrEqual(

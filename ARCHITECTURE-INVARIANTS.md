@@ -7,7 +7,9 @@ rulings in `docs/plans/2026-08-23-core-shape-brief.md` and
 `docs/session-2026-08-21-actions-to-rest.md` §1.
 
 Each entry says whether it **holds today** or is **established by** a phase of
-`specs/core-shape`; the mechanical check is what `invariant-auditor` runs verbatim.
+`specs/core-shape`, `specs/field-types` or `specs/core-trim` — INV-9 and INV-10
+are core-trim's, and core-trim re-ran INV-8's two commands at its own merge
+commit; the mechanical check is what `invariant-auditor` runs verbatim.
 The governing rule behind all of them is `docs/philosophy.md` §1: wrap WordPress,
 never replace it — where WordPress has a word, core uses it.
 
@@ -265,19 +267,155 @@ Every part of (A)'s form is load-bearing:
 - The last filter drops COMMENT lines, the way INV-1's does. A docblock reading
   `@param string $field Field to match (term_id, …)` is prose, not a switch.
 
-(A) returns **59 lines** and (B) returns **1**. Every one of them is named in
+(A) returns **51 lines** and (B) returns **1**. Every one of them is named in
 `## Deliberate exceptions` below, grouped by WHAT it is rather than by where it
-sits. Anything else is a bypass.
+sits. Anything else is a bypass. (It was 59 while `services/Logger.php` still
+declared the `log_entry` model; core-trim FR-5 deleted that model and took eight
+hits with it, and FR-4 took the `meta_query` `['relation' => 'OR']`.)
 
 **Deliberate exceptions:** in the file-wide `## Deliberate exceptions` section,
 under "INV-8 — every hit the field-type check returns". They live there once.
 A second copy here is the same defect this invariant is about: two lists of the
 same thing, free to disagree.
 
-**Status:** established by field-types Clusters A–C. (A) 59 hits / (B) 1, all
-named; code holds at `e8f1703` — both commands were re-run there, at the
-core-trim Cluster A gate fix, and returned the same 59 and 1. No hit is in
-`core/Bootstrap.php` or `ntdst-core.php`, the files that commit changed.
+**Status:** established by field-types Clusters A–C, re-pinned by core-trim T13.
+(A) 51 hits / (B) 1, all named; code holds at `<PIN>` — both commands were
+re-run verbatim there. The count moved from 59 to 51 because core-trim DELETED
+code, not because the check was relaxed: `services/Logger.php` has no hit left
+(−8: five field declarations, one `orderby` value, two `url` payload keys) and
+`api/Data.php` lost its `['relation' => 'OR']` (−1), while
+`admin/RelationField.php` gained an `'orderby' => 'date'` (+1). Per file, (A) is
+now MetaboxGenerator 28, Data 11, Rest 3, RelationField 3, Pages 2, Actions 2,
+LogLevel 1, Response 1.
+
+## INV-9 — A public symbol has a reader, or it is a published extension point
+
+Every public method, global function and hook of core is read by somebody: by
+core outside the file that defines it, by one of the four consumer sites, or —
+for a published extension point — by consumer code written after the release,
+in which case README names WHO. A symbol with no reader at all is not an API. It
+is a thing that must keep working, keep being tested, and be understood by the
+next reader of the file, in exchange for nothing. core-trim deleted ~45 of them.
+
+**Convergence point:** `bin/zero-readers.sh`, and README's
+`#### Extension points` table. The script decides the question for hooks and
+global functions; the table is the only way to exempt one, and the script
+refuses an exemption the table does not carry, so "documented extension point"
+is a fact a machine checks rather than a claim.
+**Bypass smell:** a `public` method added beside its only caller in the same
+file; a hook fired "so consumers can hook it" with no consumer; a helper added
+because the shape looked symmetrical (`ntdst_inline()` beside
+`ntdst_download()`); an exemption added to the script's `EXCEPTIONS` list with a
+reason that does not name a reader.
+**Mechanical check:**
+
+```sh
+bash bin/zero-readers.sh | wc -l   # 0
+```
+
+Every line on stdout is a finding; notes and the advisory list go to stderr, and
+the exit code is 1 when stdout is not empty. The script searches the package
+plus the twelve D4 consumer roots (`../daan/…`, `../josworld/…`, `../stride/…`,
+`../todai-client/…`, `../netdust/…`), with `vendor/` and `tests/` excluded — a
+vendored copy of core is not a reader of core, and a test that names a symbol in
+order to assert its shape is not a consumer of it. A consumer root that is not
+on this machine is a FINDING, never a skip: a sweep that quietly drops four of
+twelve roots prints 0 for the wrong reason.
+
+Three details are load-bearing, and each was got wrong first:
+
+- **`grep -e`.** This machine's grep is ugrep, which reads a pattern beginning
+  with `-` as an option, and `->NAME(` is exactly that shape.
+- **The methods half is ADVISORY and prints to stderr.** A name search is
+  receiver-blind and wrong in both directions: `->register(` cannot tell
+  `NTDST_Bootstrap::register()` from `NTDST_Data_Manager::register()`, so a
+  common name is masked by any other class's caller; and the reader of
+  `render_metabox()` is WordPress, through a callback the defining file
+  registers on itself. The script removes that second class of false positive by
+  counting the array-callable shape `[$this, 'NAME']` as a reader, including in
+  the defining file — no grep removes the first. So the half runs on every
+  sweep, prints a candidate list a human reads, and does not fail the gate. The
+  hooks and globals halves are exact, and they are what the gate counts.
+- **A dynamic hook is searched by its literal stem.**
+  `"ntdst/service/{$slug}/config"` is searched as `ntdst/service/`, because the
+  reader writes the interpolated name.
+
+**Deliberate exceptions:** README's `#### Extension points` table, listed once
+there and mirrored in the script's `EXCEPTIONS` array with a reason each. They
+are the six `ntdst/model/*` lifecycle actions and `ntdst/model/registering`,
+`ntdst/metabox_saved/{model}`, `ntdst/api/allowed_origins`, the two
+`ntdst/service_{before,after}_boot/{class}` actions, `NTDST_Service_Meta` (no
+implementer in core; eight on the fleet, in bavi and netdust-legacy, both
+outside the D4 roots), `NTDST_Bootstrap::config()` (FR-2 keeps it as the one
+read-back of the merged config), `ntdst_container()` (its callers are the
+fleet's test tearDowns, and `tests/` is excluded by design) and `ntdst_inline()`
+(the unread half of a documented pair, and a deletion candidate recorded for
+`core-shape` rather than exempted silently).
+**Status:** established by core-trim Clusters B and C. Holds at `<PIN>` —
+stdout empty and exit 0, with all twelve consumer roots present and 28 advisory
+method candidates on stderr. The file and line totals the run prints are NOT
+recorded here: they move whenever a consumer repository does, and a status line
+that goes stale on somebody else's commit teaches a reader to skip it.
+
+## INV-10 — Core loads nothing by guessing
+
+Core installs no autoloader, scans no directory, parses no PHP source and
+derives no file path from a class name. A listed service class is one PHP can
+already resolve — by the consumer's `require_once`, by Composer, or by any
+autoloader the consumer installed — and `register()` refuses anything else.
+Before 5.0.0, Bootstrap stripped `basename(get_stylesheet_directory())` off a
+namespace to build a path, `require_once`'d a `*Service.php` glob under
+`services.discovery_paths`, and regex-parsed the file for its class name: a
+writable directory on that list was code execution.
+
+**Convergence point:** `core/Bootstrap.php::registerService()`. `class_exists()`
+is the whole admission test (`:408`), after a legal-class-name check that runs
+BEFORE it because `class_exists()` hands the string it was given to every
+registered autoloader. A refusal is one `_doing_it_wrong()` naming the class and
+the sector, plus an error-level log line — `_doing_it_wrong()` is `WP_DEBUG`-
+gated, and a missing service on a live site would otherwise be silent.
+**Bypass smell:** `glob()`, `scandir()`, `opendir()`, a `require` with a
+variable in it, `spl_autoload_register()`, `file_get_contents()` on a `.php`
+path, a regex over `namespace`/`class`, a class name concatenated with `.php`,
+a second reader of the `services` config key.
+**Mechanical check:** four commands, all from the package root.
+
+```sh
+# (1) no scanner, no parser, no autoloader, in the two files that load things
+grep -c "glob(\|file_get_contents(\|preg_match('/^\\\\s*namespace\|spl_autoload_register" \
+    core/Bootstrap.php ntdst-core.php
+
+# (2) no class name concatenated with a file extension, package-wide
+grep -rnE "[Cc]lass[A-Za-z_]* *\. *['\"][^'\"]*\.php|['\"][^'\"]*\.php['\"] *\. *\\\$[a-zA-Z_]*[Cc]lass" \
+    --include=*.php . | grep -vE "(^|/)vendor/|(^|/)tests/|(^|/)specs/"
+
+# (3) the `services` config key has exactly ONE reader
+grep -rln "\['services'\]" --include=*.php . | grep -vE "vendor|tests|specs"
+
+# (4) every ntdst_set() of a class, and the gate in front of it
+grep -rn "ntdst_set(" --include=*.php api core admin services support ntdst-core.php
+```
+
+(1) prints `core/Bootstrap.php:0` and `ntdst-core.php:0`. (2) is empty. (3) is
+`core/Bootstrap.php`, one file. (4) has one call that takes a class —
+`core/Bootstrap.php:501` — and the only gate reached before it is
+`class_exists()` at `:408`; the other hits are `core/Container.php`'s own
+declaration and docblock examples, and `core/Theme.php:48` registering an
+instance of itself, which guesses nothing.
+
+**Deliberate exceptions:**
+- **`basename(str_replace('\\', '/', $class))`** (`core/Bootstrap.php:835`)
+  derives the short NAME for the slug, never a path. It is fed to the config
+  filter key, not to `require`.
+- **`core/Container.php`'s `new $class`** is a variable class name and it is
+  gated: the container instantiates only what was `set()`, and `set()` is
+  reached through `register()`'s `class_exists()`.
+- **A `conditional` entry's condition must be a Closure or an array.** Anything
+  else is refused. A string condition would be a callable name resolved at boot
+  — the same guess, in a different key.
+**Status:** established by core-trim T01 (FR-1). Holds at `<PIN>` — the four
+commands above were run verbatim and returned `0`/`0`, empty, one file, and the
+single gated `ntdst_set($class)`.
 
 ---
 
@@ -331,6 +469,18 @@ Things core does that WordPress also does, kept on purpose. Each names why.
   answer three lines is the more expensive copy. INV-8's group below names them,
   and the check surfaces them on every run.
 - **`NTDST_RateLimiter`, `NTDST_ClientIp`.** WordPress has neither.
+- **`ntdst/service_before_boot/{class}` and `ntdst/service_after_boot/{class}`
+  are fired with no reader** (INV-9). They are the documented way to wrap ONE
+  named service's boot, and the `{class}` half means the reader's spelling
+  cannot appear in this repository at all. README's `#### Extension points`
+  table is the list; `bin/zero-readers.sh` refuses to exempt a name that table
+  does not carry.
+- **`NTDST_Service_Meta` has no implementer in core** (INV-9). It is the
+  optional service shape — what a service may declare — and the fleet ships
+  eight implementers outside the four consumer roots the sweep searches: six in
+  bavi and two in netdust-legacy. An interface with no implementer HERE is the
+  normal state of a published contract, so it is kept and named rather than
+  deleted.
 - **The 13 retired type names are guarded by DECLARATION POSITION, not as bare
   words.** `signed_int` is a distinctive token and is pinned bare
   (`bin/guard.sh`, `removedSymbolProvider()`). The other 12 are ordinary
@@ -346,7 +496,7 @@ Things core does that WordPress also does, kept on purpose. Each names why.
 
 ### INV-8 — every hit the field-type check returns
 
-(A) returns 59 lines and (B) returns 1. Each group below says WHAT the hits are,
+(A) returns 51 lines and (B) returns 1. Each group below says WHAT the hits are,
 not which line they sit on: a line number is stale after the next edit, and a
 reader matching 59 greps against stale numbers stops reading. Where a group has
 a test that holds it, the test is named — that is its mechanical home.
@@ -391,19 +541,27 @@ a test that holds it, the test is named — that is its mechanical home.
   entirely different vocabulary. This is the false-positive SHAPE to recognise,
   not a second table.
 - **WordPress's own vocabularies** — 3 hits. `date` as a `WP_Query` `orderby`
-  value in `api/Data.php` and `services/Logger.php`, and as a column name.
-- **The Logger model DECLARING its own fields by canonical name** — 5 hits in
-  `services/Logger.php`. That is the registry being USED, which is the thing
-  this invariant exists to make possible.
-- **MAP KEYS that are not type names** — 14 hits, all from the map-key
+  value in `api/Data.php` and in `admin/RelationField.php`, and as a column name
+  (`'post_date' => 'date'`). The Cluster B gate named RelationField's hit for the
+  ordinary-array-key group below; it sits here instead, beside the identical
+  `orderby` in `api/Data.php`, because this section groups by WHAT a hit is and a
+  WP_Query sort value is one thing written in two files. `services/Logger.php`'s
+  `orderby` was the third hit until core-trim deleted the model that used it.
+- **The Logger model declaring its own fields** — 0 hits, and the group is kept
+  as a NOTE rather than deleted. `services/Logger.php` declared five fields by
+  canonical name, which was the registry being USED — the thing this invariant
+  exists to make possible. core-trim FR-5 removed the `log_entry` post type, so
+  the example is gone; the shape it named is still the one to recognise, and a
+  reader comparing this list to an older run needs to know why eight hits left.
+- **MAP KEYS that are not type names** — 11 hits, all from the map-key
   alternative, in four shapes. WordPress's own `callback` ARGUMENT key
   (`api/Actions.php`, `api/Rest.php`, `core/Pages.php` — 5). WordPress POST
   COLUMN and query words as array keys in `api/Data.php`: the `content` column
-  map, its `match ($key)` arm, a `meta_query` `['relation' => 'OR']`, and
-  `content`/`date` in a projected row (5). Payload keys named for what they
-  carry — `url` in `api/Data.php`'s attachment payload and twice in
-  `services/Logger.php` (3). And `api/Response.php`'s `'json' =>
-  'application/json'` MIME entry (1), which is (B)'s hit as well.
+  map, its `match ($key)` arm, and `content`/`date` in a projected row (4) — the
+  `meta_query` `['relation' => 'OR']` left with `orWhere()`. One payload key
+  named for what it carries: `url` in `api/Data.php`'s attachment payload (1);
+  the two in `services/Logger.php` went with the model. And `api/Response.php`'s
+  `'json' => 'application/json'` MIME entry (1), which is (B)'s hit as well.
 - **(B)'s one hit — `api/Response.php`'s `$mimeTypes`.** MIME types, not field
   types: the `[Tt][Yy][Pp][Ee][Ss]?` fragment catches the word. It is an INV-5
   item — WordPress keeps that table as `wp_get_mime_types()` — and INV-5 already
