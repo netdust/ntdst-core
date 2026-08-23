@@ -18,8 +18,11 @@ declare(strict_types=1);
  * redirect filter to stop the loader undoing it. That was two fights with
  * WordPress to make one unknown URL work. There is nothing to fight now.
  *
- * A CALLBACK RETURNS A PATH AND NEVER EXITS. The return contract is the same
- * for path(), template() and when():
+ * A CALLBACK RETURNS A PATH AND NEVER EXITS. There are TWO return contracts,
+ * because there are two entries — and they differ in what a non-path means.
+ *
+ * A path() callback, dispatched on template_redirect, where the route already
+ * owns the URL and nothing of WordPress's has answered yet:
  *   - an existing file path  → that file is the template WordPress includes
  *   - null (or true)         → the callback answered the request itself, and
  *                              the DISPATCHER then ends the request (nothing
@@ -30,10 +33,23 @@ declare(strict_types=1);
  *   - anything else           → a _doing_it_wrong() naming the type, then the
  *                              same not-found. A string that is not a file
  *                              that exists names the path instead
+ *
+ * A TEMPLATE FILTER callback — template(), single(), page(), archive(), when()
+ * — answers a filter WordPress is already running with a candidate of its own,
+ * so "no" means "keep yours", never a 404 (see templateFrom()):
+ *   - a non-empty string     → that string is what WordPress includes. It is
+ *                              NOT checked for existence here: the filter's
+ *                              value is a path WordPress resolves itself
+ *   - null or false          → WordPress's own candidate, unchanged. null is
+ *                              how page() says "not my slug", so neither is
+ *                              warned about
+ *   - anything else           → a _doing_it_wrong() naming the type, and then
+ *                              WordPress's own candidate all the same
+ *
  * Returning an NTDST_Response no longer renders-and-exits from inside a
  * template filter; build the path with NTDST_Template_Loader::page() instead,
  * which stashes the data ntdst_page_data() reads. README's "What a page
- * callback's return value means" table is this list, and only this list.
+ * callback's return value means" table is the path() list, and only that list.
  *
  * Its verb methods are deliberately absent. `get()`/`post()` used to live here
  * and meant "a page pattern matched on this request method" — which collides
