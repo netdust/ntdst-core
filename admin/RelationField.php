@@ -135,7 +135,13 @@ final class NTDST_RelationField
     {
         $search = trim(sanitize_text_field((string) $request->get_param('search')));
         if ($search === '') {
-            return new \WP_Error('empty_search', 'Search term required');
+            // The STATUS is the third argument or WordPress answers 500. A
+            // WP_Error returned from a REST callback carries no HTTP meaning of
+            // its own, and the deleted dispatcher's 400 default went with it —
+            // so an empty term (reachable on the first keystroke: `search=<b>`
+            // survives the wire and the arg's sanitize_callback reduces it to
+            // `''`) would be logged and alerted as a server fault.
+            return new \WP_Error('empty_search', 'Search term required', ['status' => 400]);
         }
 
         // The SAME normalization the permission ran, so the list WordPress is
@@ -151,6 +157,8 @@ final class NTDST_RelationField
             return new \WP_Error(
                 'forbidden_post_type',
                 'You are not allowed to search these post types.',
+                // A refusal, not a fault: 403, for the same reason as above.
+                ['status' => 403],
             );
         }
 
