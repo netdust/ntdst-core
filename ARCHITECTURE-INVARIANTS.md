@@ -67,14 +67,19 @@ caller of `register_rest_route()` in the package.
 **Bypass smell:** `register_rest_route(` anywhere else; `add_action('wp_ajax_`;
 an `ntdst/api_data/` or `ntdst/api/` dispatch filter; a route whose permission
 is decided somewhere other than its registration.
-**Mechanical check:** `grep -rn "register_rest_route(\|wp_ajax_\|ntdst/api_data\|ntdst_actions" --include=*.php --include=*.js . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → the hits Status names, and nothing else. (The comment filter is INV-1's, for INV-1's reason: `core/Theme.php`, `core/Pages.php` and `api/Actions.php` all NAME the v2 dispatcher in docblocks that explain what replaced it, and a docblock is not a second door.)
-**Status:** established by phase 3. Re-run verbatim at `96560c5`: the live hits are
-all of them, and there are seven — `ntdst-core.php:96` (`ntdst_actions()` booted
-at load), `admin/RelationField.php:45` (`ntdst_actions()->register()`), and
-`api/Actions.php:63`, `:132`, `:147`, `:716`, `:717` — the `ntdst/api_data/`
-filter prefix, the two `register_rest_route()` calls this invariant forbids
-outside `api/Rest.php`, and the `ntdst_actions()` accessor. All leave with
-`Actions.php` in phase 3.
+**Mechanical check:** `grep -rn "register_rest_route(\|wp_ajax_\|ntdst/api_data\|ntdst_actions" --include=*.php --include=*.js . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → EMPTY. (The comment filter is INV-1's, for INV-1's reason: `core/Theme.php` and `core/Pages.php` NAME the v2 dispatcher in docblocks that explain what replaced it, and a docblock is not a second door.)
+
+Both exclusions are anchored `(^|/)`, and that is load-bearing rather than
+tidy: this repo's `grep` is ugrep, which prints `tests/Unit/x.php` with no
+`./` prefix, so a bare `/tests/` term matches nothing at the top level and the
+check reports 33 test-file hits it meant to drop. The spec's SC-3 command
+carries the unanchored spelling and is wrong for that reason; this one is the
+form to run.
+**Status:** HELD, established by T08 (core-shape Cluster 3). Re-run verbatim at
+`007fb33` — empty. `api/Actions.php` is deleted, `ntdst-core.php` no longer requires
+or boots it, `admin/RelationField.php` moved to `ntdst_rest()` at T07, and
+`NTDST_Rest::registerOne()` is the only caller of `register_rest_route()` in the
+package. The seven live hits recorded at `96560c5` are all gone.
 
 ## INV-3 — Anonymous reach is named; internal is the default; a write names its capability
 
@@ -123,8 +128,13 @@ that is the invariant.
 in `api/`, `core/` or `admin/`; a route that mints or returns a nonce; a `fetch()`
 to `/wp-json/` in core's own JS that is not `wp.apiFetch`; an `Origin`/`Referer`
 check standing in for the nonce.
-**Mechanical check:** `grep -rn "wp_create_nonce\|wp_verify_nonce\|check_ajax_referer\|get_nonce\|HTTP_ORIGIN\|HTTP_REFERER" --include=*.php --include=*.js api core admin assets` → the hits Status names, and nothing else: `api/Actions.php:25` (a docblock listing the route), `:132`, `:134`, `:453`, `:454`, `:582`, `:592`, `:606` (core's own nonce mint and its `Origin`/`Referer` pair), `assets/js/ntdst-api.js:37`, and `admin/MetaboxGenerator.php:1864`. `grep -rn "fetch(" assets/js` → four raw `fetch()` calls in `ntdst-api.js`, none of them `wp.apiFetch`. Both leave with `Actions.php` in phase 3, except the metabox pair below.
-**Status:** established by phase 3 (today `api/Actions.php` and `assets/js/ntdst-api.js` violate it).
+**Mechanical check:** `grep -rn "wp_create_nonce\|wp_verify_nonce\|check_ajax_referer\|get_nonce\|HTTP_ORIGIN\|HTTP_REFERER" --include=*.php --include=*.js api core admin assets` → ONE hit, `admin/MetaboxGenerator.php:1864`, which the paragraph below explains is not a violation. `grep -rn "fetch(" assets/js` → EMPTY: core's only JS reaches the REST API through `wp.apiFetch`, which the grep does not match because it is capitalised, and there is no raw `fetch()` left to find.
+**Status:** HELD, established by T08 (core-shape Cluster 3). Re-run verbatim at
+`007fb33`: core mints no nonce and reads no `Origin` or `Referer` anywhere on its
+HTTP surface. `api/Actions.php` carried all eight of the hits recorded at
+`96560c5` and is deleted; `assets/js/ntdst-api.js` carried the ninth and its
+four raw `fetch()` calls, and is deleted too. The `wp_rest` nonce that
+`wp.apiFetch` sends and `rest_cookie_check_errors()` checks is the whole gate.
 One hit is NOT a violation and never was: `admin/MetaboxGenerator.php:1864`'s
 `wp_verify_nonce(wp_unslash($_POST[$nonce_name]), …)`, paired with the
 `wp_nonce_field()` calls at `:342` and `:712`. A classic-editor metabox is a
