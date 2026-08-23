@@ -481,19 +481,23 @@ class NTDST_Logger
 }
 
 /**
- * Global helper - get logger instance
+ * Global helper - get logger instance.
+ *
+ * Declared UNCONDITIONALLY. ntdst-core.php requires this file once, first, and
+ * every core caller now calls ntdst_log() without asking whether it exists
+ * (FR-3). A !function_exists() wrapper here would let a second, older copy of
+ * core on the same request win the declaration and silently serve every log
+ * line — a redeclare fatal names that collision instead.
  */
-if (!function_exists('ntdst_log')) {
-    function ntdst_log(string $channel = 'app'): NTDST_Logger
-    {
-        static $loggers = [];
+function ntdst_log(string $channel = 'app'): NTDST_Logger
+{
+    static $loggers = [];
 
-        if (!isset($loggers[$channel])) {
-            $loggers[$channel] = new NTDST_Logger($channel);
-        }
-
-        return $loggers[$channel];
+    if (!isset($loggers[$channel])) {
+        $loggers[$channel] = new NTDST_Logger($channel);
     }
+
+    return $loggers[$channel];
 }
 
 /**

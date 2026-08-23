@@ -25,6 +25,16 @@ define('NTDST_URL', plugins_url('', __FILE__));
 
 // Load core foundation
 require_once NTDST_PATH . '/core/Container.php';
+
+// Logger loads FIRST — immediately after the container, before core/, support/,
+// api/ and admin/. It used to load LAST, which is why every caller in this
+// package guarded its logging with function_exists('ntdst_log'): by the time
+// Logger existed, api/Actions.php had already been INVOKED below and anything
+// it wanted to say went nowhere. Those guards are deleted (FR-3) and this line
+// is what makes that safe. bin/guard.sh asserts both halves — no call-site
+// function_exists() guard on a core helper, and this require above api/.
+require_once NTDST_PATH . '/services/Logger.php';
+
 require_once NTDST_PATH . '/core/Pages.php';
 require_once NTDST_PATH . '/core/Theme.php';
 require_once NTDST_PATH . '/core/ServiceInterface.php';
@@ -49,8 +59,7 @@ require_once NTDST_PATH . '/api/Rest.php';
 require_once NTDST_PATH . '/api/Actions.php';
 ntdst_actions(); // Initialise the command service to register its REST routes
 
-// Load services
-require_once NTDST_PATH . '/services/Logger.php';
+// Load services (Logger is required above, before api/)
 require_once NTDST_PATH . '/services/Mailer.php';
 require_once NTDST_PATH . '/services/Scheduler.php';
 

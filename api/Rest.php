@@ -398,12 +398,10 @@ final class NTDST_Rest
         try {
             return $resolver($origin) === true;
         } catch (Throwable $error) {
-            if (function_exists('ntdst_log')) {
-                ntdst_log('api')->error('CORS resolver threw — the origin is refused', [
-                    'origin' => $origin,
-                    'error'  => $error->getMessage(),
-                ]);
-            }
+            ntdst_log('api')->error('CORS resolver threw — the origin is refused', [
+                'origin' => $origin,
+                'error'  => $error->getMessage(),
+            ]);
 
             return false;
         }
@@ -1121,10 +1119,6 @@ final class NTDST_Rest
             $fatal ? sprintf('Route was not registered — %s.', $why) : $why,
             $since ?? '3.0.0',
         );
-
-        if (!function_exists('ntdst_log')) {
-            return;
-        }
 
         $entry = [
             'namespace' => $this->namespace,

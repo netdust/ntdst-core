@@ -115,6 +115,86 @@ if [ -n "$REMOVED" ]; then
     exit 1
 fi
 
+# v5.0.0 core-trim (FR-3): no CALL-SITE function_exists() guard on a core helper.
+#
+# Core's helpers are not optional. Every one of them is defined by a file on
+# ntdst-core.php's own require list, so a call site that asks whether
+# ntdst_log() exists is asking whether core finished loading — and then
+# answering "no" by silently skipping the work. That is load-order duct tape:
+# the guards existed because services/Logger.php was required LAST, after
+# api/ and admin/ had already run. Logger is required FIRST now (asserted
+# below), so the answer is always yes and the question is dead weight. A
+# missing helper must fatal at boot, which is the correct moment to learn that
+# core is half-loaded — not produce a request that quietly logs nothing.
+#
+# DEFINITION wrappers are exempt, and the exemption is BY SHAPE rather than by
+# file: `if (!function_exists('ntdst_x')) {` whose very NEXT line declares that
+# same ntdst_x(). Those are include-idempotency, not load-order — they answer
+# "has this file already run", which is a real question. Anchoring to the shape
+# and not to the file is what keeps a real call-site guard from sneaking back
+# into services/Logger.php or api/Response.php, the two files where a blanket
+# file exemption would hide it. FR-5/6/9/10 delete the helpers those wrappers
+# still protect; when the last one goes, this exemption matches nothing and the
+# literal SC-2 sweep (`grep -c "function_exists('ntdst_" ... ` = 0) lands with
+# no further change here.
+#
+# ONE row-anchored exemption: admin/RelationField.php's prefixedMetaKey() still
+# guards on ntdst_data(). It is a REAL call-site guard and a real FR-3 target —
+# it is exempted here only because FR-10/T11 owns that file and deletes it with
+# the rest of the class's trim. The exemption is anchored to that exact guard
+# line, never to the file, so any OTHER call-site guard in RelationField.php
+# still fires. When T11 lands, this exemption matches nothing and must be
+# deleted with it; SC-2 is not met until it is gone.
+CALLGUARDS=$(awk '
+    FNR == 1                  { pend = "" }
+    /^[ \t]*(\*|\/\/|#|\/\*)/ { next }
+    /^[ \t]*$/                { next }
+    {
+        if (pend != "" && $0 ~ /^[ \t]*function[ \t]+ntdst_[A-Za-z0-9_]*[ \t]*\(/) {
+            name = $0
+            sub(/^[ \t]*function[ \t]+/, "", name)
+            sub(/[ \t]*\(.*$/, "", name)
+            if (viol[pend] ~ ("function_exists\\(\047" name "\047\\)")) {
+                delete viol[pend]
+            }
+        }
+        pend = ""
+        if ($0 ~ /function_exists\(\047ntdst_/) {
+            pend = FILENAME ":" FNR
+            viol[pend] = $0
+        }
+    }
+    END { for (k in viol) print k ": " viol[k] }
+' api/*.php core/*.php admin/*.php services/*.php \
+    | grep -vE "^admin/RelationField\.php:[0-9]+: *if \(!function_exists\('ntdst_data'\)\) \{$" \
+    | sort || true)
+if [ -n "$CALLGUARDS" ]; then
+    echo "Call-site function_exists() guard on a core helper (FR-3 deleted these;"
+    echo "core's helpers load before every caller, so the guard only hides a half-load):"
+    echo "$CALLGUARDS"
+    exit 1
+fi
+
+# v5.0.0 core-trim (FR-3): services/Logger.php is required BEFORE the api/ layer.
+# This is the other half of the sweep above — deleting the call-site guards is
+# only safe while ntdst_log() is defined before anything that calls it. api/
+# opens with FieldTypes.php, and api/Actions.php is INVOKED at load time
+# (`ntdst_actions();`), so a Logger that loads after api/ means core's own boot
+# path can log into a function that does not exist yet. Pinned against
+# api/FieldTypes.php, the first api/ require; INV-8 keeps FieldTypes before
+# api/Data.php, so Logger precedes Data transitively.
+LOGGER_AT=$(grep -n "require_once NTDST_PATH \. '/services/Logger\.php'" ntdst-core.php | head -1 | cut -d: -f1)
+FIELDTYPES_AT=$(grep -n "require_once NTDST_PATH \. '/api/FieldTypes\.php'" ntdst-core.php | head -1 | cut -d: -f1)
+if [ -z "$LOGGER_AT" ] || [ -z "$FIELDTYPES_AT" ]; then
+    echo "ntdst-core.php no longer requires services/Logger.php and api/FieldTypes.php by name."
+    exit 1
+fi
+if [ "$LOGGER_AT" -ge "$FIELDTYPES_AT" ]; then
+    echo "ntdst-core.php requires services/Logger.php (line $LOGGER_AT) AFTER api/FieldTypes.php (line $FIELDTYPES_AT)."
+    echo "Logger must load first: api/ calls ntdst_log() and api/Actions.php runs at load time."
+    exit 1
+fi
+
 if ! grep -q "PHP_SAPI === 'cli'" tests/bootstrap.php; then
     echo "tests/bootstrap.php is missing its CLI guard (PHP_SAPI === 'cli' || exit;)"
     exit 1

@@ -213,12 +213,6 @@ class NTDST_Data_Model
             return;
         }
 
-        if (!function_exists('ntdst_log')) {
-            // Do NOT burn the once-per-model flag on a process where the logger is
-            // not loaded yet: the refusal would then be silent for the whole request.
-            return;
-        }
-
         $warnedModels[$this->post_type] = true;
 
         ntdst_log('data')->warning(
@@ -514,15 +508,13 @@ class NTDST_Data_Model
             return $data;
         }
 
-        if (function_exists('ntdst_log')) {
-            ntdst_log('data')->warning(
-                sprintf('Unregistered key(s) passed to %s on %s', $operation, $this->post_type),
-                [
-                    'post_type' => $this->post_type,
-                    'keys'      => array_keys($unknown),
-                ],
-            );
-        }
+        ntdst_log('data')->warning(
+            sprintf('Unregistered key(s) passed to %s on %s', $operation, $this->post_type),
+            [
+                'post_type' => $this->post_type,
+                'keys'      => array_keys($unknown),
+            ],
+        );
 
         return array_diff_key($data, $unknown);
     }
@@ -1802,10 +1794,6 @@ class NTDST_Data_Manager
      */
     private function logRegistrationFailure(string $name, string $stage, WP_Error $error): void
     {
-        if (!function_exists('ntdst_log')) {
-            return;
-        }
-
         ntdst_log('data')->error(
             sprintf('Failed to register %s for model "%s": %s', $stage, $name, $error->get_error_message()),
             [
@@ -1834,7 +1822,7 @@ class NTDST_Data_Manager
         /** @var array<string, true> $warned */
         static $warned = [];
 
-        if (isset($warned[$name]) || !function_exists('ntdst_log')) {
+        if (isset($warned[$name])) {
             return;
         }
 
@@ -1981,10 +1969,7 @@ class NTDST_Data_Manager
 
         // Auto-register metabox if this model has fields and is registered as a post type
         if (!empty($config['fields']) && isset($config['label']) && ($config['auto_metabox'] ?? true)) {
-            // Assumes ntdst_metabox() returns a valid metabox manager object
-            if (function_exists('ntdst_metabox')) {
-                ntdst_metabox()->register($name, $config);
-            }
+            ntdst_metabox()->register($name, $config);
         }
 
         // Fire hook after registration complete

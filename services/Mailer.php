@@ -172,9 +172,7 @@ class NTDST_Mailer
             }
         }
 
-        if (function_exists('ntdst_log')) {
-            ntdst_log('mail')->warning('Refused attachment outside allowed bases: ' . $path);
-        }
+        ntdst_log('mail')->warning('Refused attachment outside allowed bases: ' . $path);
         return $this;
     }
 
@@ -362,9 +360,7 @@ class NTDST_Mailer
         try {
             $content = $response->withData($data)->html($template);
         } catch (\Throwable $e) {
-            if (function_exists('ntdst_log')) {
-                ntdst_log('mail')->error('Email template render failed: ' . $e->getMessage());
-            }
+            ntdst_log('mail')->error('Email template render failed: ' . $e->getMessage());
             return $this->getDefaultTemplate($data);
         }
 

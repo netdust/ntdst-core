@@ -76,10 +76,8 @@ final class NTDST_MetaboxGenerator
 
         $deps = ['jquery', 'jquery-ui-sortable'];
 
-        if (function_exists('ntdst_enqueue_api_client')) {
-            ntdst_enqueue_api_client();
-            $deps[] = 'ntdst-api';
-        }
+        ntdst_enqueue_api_client();
+        $deps[] = 'ntdst-api';
 
         $path = dirname(__DIR__) . '/assets/js/metabox-fields.js';
         wp_enqueue_script(
@@ -295,7 +293,7 @@ final class NTDST_MetaboxGenerator
             }
         }
 
-        if (empty($offending) || !function_exists('ntdst_log')) {
+        if (empty($offending)) {
             return;
         }
 
@@ -2065,19 +2063,17 @@ final class NTDST_MetaboxGenerator
 
         set_transient(self::SAVE_ERROR_TRANSIENT_PREFIX . $post_id, $message, MINUTE_IN_SECONDS * 5);
 
-        if (function_exists('ntdst_log')) {
-            $context = ['code' => $error->get_error_code()];
+        $context = ['code' => $error->get_error_code()];
 
-            $detail = $error->get_error_data();
-            if (is_string($detail) && $detail !== '') {
-                $context['detail'] = $detail;
-            }
-
-            ntdst_log('metabox')->error(
-                "Save failed for {$model_name} (post {$post_id}): {$message}",
-                $context,
-            );
+        $detail = $error->get_error_data();
+        if (is_string($detail) && $detail !== '') {
+            $context['detail'] = $detail;
         }
+
+        ntdst_log('metabox')->error(
+            "Save failed for {$model_name} (post {$post_id}): {$message}",
+            $context,
+        );
     }
 
     /**
@@ -2149,7 +2145,7 @@ final class NTDST_MetaboxGenerator
      */
     private function isDataModel(string $model_name): bool
     {
-        return function_exists('ntdst_data') && ntdst_data()->isRegistered($model_name);
+        return ntdst_data()->isRegistered($model_name);
     }
 }
 

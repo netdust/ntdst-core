@@ -95,26 +95,20 @@ class NTDST_Theme
      * Wire up NTDST service instances as mixins.
      * Called automatically in constructor.
      *
-     * Each helper is guarded so missing optional services (e.g. ntdst_mail
-     * when the mail plugin isn't installed) don't break theme construction.
+     * Every helper wired here is core's own, defined by a file on
+     * ntdst-core.php's require list long before a theme can be constructed.
+     * None of them is optional, so none of them is guarded: a missing one is a
+     * fatal that says core is half-loaded, which is worth far more than a theme
+     * whose ->log() silently never wired (that is exactly how ntdst_router()
+     * stopped registering in Cluster A and nothing said so).
      */
     private function wireMixins(): void
     {
-        if (function_exists('ntdst_data')) {
-            $this->mixin('data', ntdst_data());
-        }
-        if (function_exists('ntdst_pages')) {
-            $this->mixin('pages', ntdst_pages());
-        }
-        if (function_exists('ntdst_response')) {
-            $this->mixin('response', ntdst_response());
-        }
-        if (function_exists('ntdst_log')) {
-            $this->mixin('log', ntdst_log());
-        }
-        if (function_exists('ntdst_mail')) {
-            $this->mixin('mail', ntdst_mail());
-        }
+        $this->mixin('data', ntdst_data());
+        $this->mixin('pages', ntdst_pages());
+        $this->mixin('response', ntdst_response());
+        $this->mixin('log', ntdst_log());
+        $this->mixin('mail', ntdst_mail());
     }
 
     private function init(): void
