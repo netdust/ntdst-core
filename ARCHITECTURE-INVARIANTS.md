@@ -275,8 +275,9 @@ A second copy here is the same defect this invariant is about: two lists of the
 same thing, free to disagree.
 
 **Status:** established by field-types Clusters A–C. (A) 59 hits / (B) 1, all
-named; code holds at `ba283d3` (the last commit that changed code), and the
-check was last run at the Cluster D gate-fix commit.
+named; code holds at `e8f1703` — both commands were re-run there, at the
+core-trim Cluster A gate fix, and returned the same 59 and 1. No hit is in
+`core/Bootstrap.php` or `ntdst-core.php`, the files that commit changed.
 
 ---
 
