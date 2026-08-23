@@ -44,19 +44,19 @@ Integration gate: `cd ~/Sites/ntdst-core && composer gate && cd ~/Sites/daan && 
 
 Stakes: standard — deletions and a rename; the risk is a daan listener left silently inert, which T06 pins by name and T12 renames.
 
-- [ ] T04 — Data: the second query API and the term helpers go; the model's public surface is pinned [Tier A]  (files: api/Data.php, tests/Unit/DataSurfaceTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
+- [x] T04 — Data: the second query API and the term helpers go; the model's public surface is pinned [Tier A]  (files: api/Data.php, tests/Unit/DataSurfaceTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
   Satisfies: FR-4, SC-3
   Test-author: solo — cluster stakes standard; deletions pinned by a surface test, no new behaviour
   Proven by: new test
   Unit test: `ReflectionClass(NTDST_Data_Manager)` static public methods are exactly `addScope`, `getScope`; instance public methods exactly `register`, `registerTaxonomy`, `get`, `isRegistered`; `function_exists('ntdst_get_formatted_posts')` is false; `ReflectionClass(NTDST_Data_Model)` has no method named `attachTerms`, `syncTerms`, `detachTerms`, `whereDate`, `orWhere`; the model's public non-chain, non-CRUD methods are exactly `getSchema`, `getMetaPrefix`, `restFields`, `registerRestMeta` (the list the field-types spec pinned, unchanged); `->withMeta()->withTerms()->get()` on a model still returns rows carrying `meta` and `terms` keys (Brain Monkey `WP_Query` stub with 1 post). `removedSymbolProvider()` gains `getFormattedPosts`, `ntdst_get_formatted_posts`, `getPostTerms`, `attachTerms`, `syncTerms`, `detachTerms`, `whereDate`, `orWhere` (`5.0.0`).
 
-- [ ] T05 — Logger: channels, levels, file and error_log; the database half and the handler API go [Tier A]  (files: services/Logger.php, tests/Unit/LoggerSurfaceTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
+- [x] T05 — Logger: channels, levels, file and error_log; the database half and the handler API go [Tier A]  (files: services/Logger.php, tests/Unit/LoggerSurfaceTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
   Satisfies: FR-5, SC-3
   Test-author: solo — cluster stakes standard; removal pinned by a surface test plus one kept-behaviour test
   Proven by: new test
   Unit test: constructing `new NTDST_Logger('probe')` with `Functions\expect('ntdst_data')->never()` and `Functions\expect('register_post_type')->never()` holds (no `log_entry` post type); `ReflectionClass(NTDST_Logger)` public methods are exactly `__construct`, `flushBatchedLogs`, `flush`, `debug`, `info`, `warning`, `error`, `critical`; `function_exists()` is false for `ntdst_log_debug`, `ntdst_log_info`, `ntdst_log_error`; `Filters\expectApplied('ntdst_log_database_enabled')->never()` and `Actions\expectDone('ntdst_log')->never()` hold across one `->error('x')`; after `->error('probe', ['k' => 'v'])` and `flushBatchedLogs()`, the file `WP_CONTENT_DIR/logs/probe-<Y-m-d>.log` (temp dir in the test) contains one line ending `probe.ERROR: probe {"k":"v"}`; `error_log` is called once for that error (`Functions\expect('error_log')->once()`) and never for `->info()`. `removedSymbolProvider()` gains `log_entry`, `ntdst_log_database_enabled`, `addHandler`, `removeHandler`, `setMinLevel`, `setBatchingEnabled`, `ntdst_log_debug`, `ntdst_log_info`, `ntdst_log_error` (`5.0.0`).
 
-- [ ] T06 — the six model hooks are spelled ntdst/model/* [Tier A]  (files: api/Data.php, tests/Unit/DataModelHooksTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
+- [x] T06 — the six model hooks are spelled ntdst/model/* [Tier A]  (files: api/Data.php, tests/Unit/DataModelHooksTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
   Satisfies: FR-11, SC-4
   Test-author: solo — cluster stakes standard; a rename pinned by hook-name assertions
   Proven by: new test
