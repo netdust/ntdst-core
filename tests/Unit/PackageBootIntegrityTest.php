@@ -501,6 +501,42 @@ final class PackageBootIntegrityTest extends TestCase
     }
 
     /**
+     * A markdown HEADING is not a PHP comment.
+     *
+     * The sweep skips a line that opens with `*`, `//`, `#` or `/*`, because a
+     * PHP comment may DISCUSS a removed name. README is swept by the same
+     * loop, and in markdown `#` opens a HEADING — so `### Configuring
+     * discovery_paths` was exempt, which is the loudest possible place to
+     * still name a symbol the release deleted. The `#` rule is PHP's, and it
+     * applies to PHP files only. The other three shapes stay whole-corpus:
+     * README's code fences are PHP, and a `//` line inside one is a comment
+     * wherever it sits.
+     */
+    public function testAReadmeHeadingIsSweptAndNotSkippedAsAPhpComment(): void
+    {
+        $root = sys_get_temp_dir() . '/ntdst-sweep-md-' . getmypid() . '-' . uniqid();
+        mkdir($root, 0777, true);
+        file_put_contents(
+            $root . '/README.md',
+            "# ntdst-core\n\n### Configuring discovery_paths\n\nList the folders to scan.\n",
+        );
+
+        try {
+            $hits = $this->sweep($root, 'discovery_paths');
+
+            $this->assertCount(
+                1,
+                $hits,
+                "A README heading naming a removed symbol is a wrong instruction, not a comment:\n" . implode("\n", $hits),
+            );
+            $this->assertStringContainsString('README.md:3', $hits[0]);
+        } finally {
+            unlink($root . '/README.md');
+            rmdir($root);
+        }
+    }
+
+    /**
      * Every shipped line under $root that spells $symbol, except a line that
      * matches BOTH $exceptPath and $exceptLine.
      *
@@ -552,9 +588,17 @@ final class PackageBootIntegrityTest extends TestCase
                     continue;
                 }
 
-                // A comment may discuss a removed name; a call may not.
+                // A comment may discuss a removed name; a call may not. `#`
+                // is the one shape that is not portable: in markdown it opens
+                // a HEADING, and a heading naming a removed symbol is the
+                // loudest wrong instruction in the file. So `#` is skipped in
+                // PHP only. The other three are PHP-comment shapes wherever
+                // they sit, README's code fences included.
                 $code = trim($line);
-                if ($code === '' || str_starts_with($code, '*') || str_starts_with($code, '//') || str_starts_with($code, '#') || str_starts_with($code, '/*')) {
+                if ($code === '' || str_starts_with($code, '*') || str_starts_with($code, '//') || str_starts_with($code, '/*')) {
+                    continue;
+                }
+                if (str_ends_with($path, '.php') && str_starts_with($code, '#')) {
                     continue;
                 }
                 if ($exempt && preg_match($exceptLine, $line) === 1) {
@@ -795,7 +839,7 @@ final class PackageBootIntegrityTest extends TestCase
      */
     private function fieldTypesSection(string $readme = ''): string
     {
-        $readme = $readme !== '' ? $readme : file_get_contents(dirname(__DIR__, 2) . '/README.md');
+        $readme = $this->readmeText($readme);
 
         $this->assertMatchesRegularExpression(
             '/^\*\*Field types — .*$/m',
@@ -926,14 +970,20 @@ final class PackageBootIntegrityTest extends TestCase
             => 'the 3.x upgrade-order instruction has to name the retired type it tells that reader to KEEP until the bump',
         '/must KEEP `signed_int` until the bump/'
             => 'the second line of that same instruction',
-        '/^\$entry->schema;/'
-            => "a JSON-Schema leaf in a code sample (`['type' => 'string']`) — WordPress's vocabulary, not a field declaration",
+        '/Fall back to `ntdst_service_\{slug\}_config`/'
+            => 'the bridge instruction names the retired spelling a straddling consumer must KEEP reading — the core it still runs fires that one',
+        '/^\$entry->schema; +\/\/ \[\x27type\x27 => \x27string\x27\] \x{2014} the REST leaf shape, or null$/u'
+            => "a JSON-Schema leaf in a code sample (`['type' => 'string']`) — WordPress's vocabulary, not a field declaration. Anchored to the WHOLE line: `^\$entry->schema;` alone exempts anything a future sample appends to that statement",
     ];
 
     private function isExemptVersionsLine(string $line): bool
     {
+        // ANY `|` row inside `## Versions`, not only a migration row: the
+        // section is all changelog, every table in it answers "what was
+        // removed and what replaces it", and a shape that tried to tell those
+        // tables apart would be a second copy of their layout.
         if (preg_match('/^\s*\|/', $line) === 1) {
-            return true; // a migration table row
+            return true;
         }
 
         foreach (array_keys(self::VERSIONS_PROSE_ALLOWANCES) as $allowed) {
@@ -1020,6 +1070,19 @@ final class PackageBootIntegrityTest extends TestCase
     }
 
     /**
+     * The document a README reader reads: the text a test hands over, or the
+     * shipped file.
+     *
+     * Both section readers below opened with this same line, and a second copy
+     * of it is a second answer to "which README is under test" — the question
+     * the throwaway-document tests exist to control.
+     */
+    private function readmeText(string $readme = ''): string
+    {
+        return $readme !== '' ? $readme : file_get_contents(dirname(__DIR__, 2) . '/README.md');
+    }
+
+    /**
      * Every backticked span in the core-trim table's rows.
      *
      * Spans, not rows: one row answers for one removed symbol and may spell
@@ -1028,9 +1091,9 @@ final class PackageBootIntegrityTest extends TestCase
      *
      * @return list<string>
      */
-    private function coreTrimSpans(string $readme = ''): array
+    private function coreTrimSpans(): array
     {
-        $readme = $readme !== '' ? $readme : file_get_contents(dirname(__DIR__, 2) . '/README.md');
+        $readme = $this->readmeText();
 
         $spans = [];
         $inSection = false;

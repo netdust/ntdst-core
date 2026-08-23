@@ -101,7 +101,7 @@ marks the ONE pending declaration it was chained onto, and nothing else.
 `true` unconditionally; `->public()` on a write; a capability check inside a
 handler body instead of on the route; a second permission registry; a
 `public_actions`-style list of names that may go without a gate.
-**Mechanical check:** `grep -rn "__return_true\|=> 'public'\|->public()\|public_actions" --include=*.php . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → every route hit is a `GET`. The comment filter drops `services/Mailer.php:574`, a DOCBLOCK IDIOM (`add_filter('ntdst_wrap_all_emails', '__return_true')` — a filter switch, not a route permission), and the docblocks in `core/Theme.php` and `admin/RelationField.php` that name the filter in prose. What is left is six lines, all in `api/Actions.php`: `:104` (the `$public_actions` property), `:186`–`:187` and `:246`–`:247` (the filter read and the membership test, once per dispatch path), and `:673` (the registration helper that adds to it). That IS the second permission registry this invariant forbids, and it leaves with `Actions.php` in phase 3. A site asserts its anonymous surface with `rest_get_server()->get_routes($ns)` filtered on `permission_callback === '__return_true'` — WordPress's registry, not ours.
+**Mechanical check:** `grep -rn "__return_true\|=> 'public'\|->public()\|public_actions" --include=*.php . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → every route hit is a `GET`. The comment filter drops seven lines, and all seven are prose about `ntdst/api/public_actions`: `api/Actions.php:32`, `:70`, `:306`, `:670`, `:707`, plus `core/Theme.php:202` and `admin/RelationField.php:54`. A docblock explaining the filter is not a second permission registry. What is left is six lines, all in `api/Actions.php`: `:104` (the `$public_actions` property), `:186`–`:187` and `:246`–`:247` (the filter read and the membership test, once per dispatch path), and `:673` (the registration helper that adds to it). That IS the second permission registry this invariant forbids, and it leaves with `Actions.php` in phase 3. A site asserts its anonymous surface with `rest_get_server()->get_routes($ns)` filtered on `permission_callback === '__return_true'` — WordPress's registry, not ours.
 **Status:** established by Cluster 2 (T04–T06); code holds at `d91e117` for
 routes through `ntdst_rest()`; `Actions.php:132,147` + `$public_actions` register
 their own routes outside it until phase 3; flips to holds-today at FR-16.
@@ -315,12 +315,17 @@ bash bin/zero-readers.sh | wc -l   # 0
 
 Every line on stdout is a finding; notes and the advisory list go to stderr, and
 the exit code is 1 when stdout is not empty. The script searches the package
-plus the twelve D4 consumer roots (`../daan/…`, `../josworld/…`, `../stride/…`,
-`../todai-client/…`, `../netdust/…`), with `vendor/` and `tests/` excluded — a
-vendored copy of core is not a reader of core, and a test that names a symbol in
-order to assert its shape is not a consumer of it. A consumer root that is not
-on this machine is a FINDING, never a skip: a sweep that quietly drops four of
-twelve roots prints 0 for the wrong reason.
+plus the roots in its own `CONSUMER_ROOTS` array — that array is the list, and
+this document does not keep a second copy of it. `vendor/` and `tests/` are
+excluded: a vendored copy of core is not a reader of core, and a test that names
+a symbol in order to assert its shape is not a consumer of it. A consumer root
+that is not on this machine is a FINDING, never a skip: a sweep that quietly
+drops four roots prints 0 for the wrong reason.
+
+The script answers for HOOKS and GLOBAL FUNCTIONS. It cannot answer for an
+INTERFACE at all — an implementer names the interface in a `implements` clause
+in a repository the sweep may never see — so for `NTDST_Service_Meta` README's
+table is the only check there is.
 
 Three details are load-bearing, and each was got wrong first:
 
@@ -340,17 +345,10 @@ Three details are load-bearing, and each was got wrong first:
   `"ntdst/service/{$slug}/config"` is searched as `ntdst/service/`, because the
   reader writes the interpolated name.
 
-**Deliberate exceptions:** README's `#### Extension points` table, listed once
-there and mirrored in the script's `EXCEPTIONS` array with a reason each. They
-are the six `ntdst/model/*` lifecycle actions and `ntdst/model/registering`,
-`ntdst/metabox_saved/{model}`, `ntdst/api/allowed_origins`, the two
-`ntdst/service_{before,after}_boot/{class}` actions, `NTDST_Service_Meta` (no
-implementer in core; eight on the fleet, in bavi and netdust-legacy, both
-outside the D4 roots), `NTDST_Bootstrap::config()` (FR-2 keeps it as the one
-read-back of the merged config), `ntdst_container()` (its callers are the
-fleet's test tearDowns, and `tests/` is excluded by design) and `ntdst_inline()`
-(the unread half of a documented pair, and a deletion candidate recorded for
-`core-shape` rather than exempted silently).
+**Deliberate exceptions:** 19 published symbols, each with its reader named in
+README's `#### Extension points` table (the human home) and its reason in
+`bin/zero-readers.sh`'s `EXCEPTIONS` array (the machine home). This document
+kept a third copy and it went stale; the two homes above are the list.
 **Status:** established by core-trim Clusters B and C. Holds at `3b41562` —
 stdout empty and exit 0, with all twelve consumer roots present and 28 advisory
 method candidates on stderr. The file and line totals the run prints are NOT
@@ -385,8 +383,14 @@ a second reader of the `services` config key.
 grep -c "glob(\|file_get_contents(\|preg_match('/^\\\\s*namespace\|spl_autoload_register" \
     core/Bootstrap.php ntdst-core.php
 
-# (2) no class name concatenated with a file extension, package-wide
-grep -rnE "[Cc]lass[A-Za-z_]* *\. *['\"][^'\"]*\.php|['\"][^'\"]*\.php['\"] *\. *\\\$[a-zA-Z_]*[Cc]lass" \
+# (2) no file path derived from a class name, package-wide — five shapes:
+#     `$class . '.php'`, `'.php' . $class`, `"{$class}.php"`, a CALL whose
+#     arguments mention a class variable concatenated with a `.php` literal
+#     (the deleted line was `str_replace('\\', '/', $class) . '.php'`), and a
+#     sprintf whose arguments carry one. `[$]` and never `\$`: bash reads
+#     `$[…]` as arithmetic expansion, and a mangled pattern returns nothing on
+#     every input — which looks exactly like a pass.
+grep -rnE "[Cc]lass[A-Za-z_]* *\. *['\"][^'\"]*\.php|['\"][^'\"]*\.php['\"] *\. *[$][[:alpha:]_]*[Cc]lass|\{[$][[:alpha:]_]*[Cc]lass[A-Za-z_]*\}[^'\"]*\.php|\([^)]*[$][[:alpha:]_]*[Cc]lass[A-Za-z_]*[^)]*\) *\. *['\"][^'\"]*\.php|sprintf *\([^)]*[$][[:alpha:]_]*[Cc]lass" \
     --include=*.php . | grep -vE "(^|/)vendor/|(^|/)tests/|(^|/)specs/"
 
 # (3) the `services` config key has exactly ONE reader
@@ -396,12 +400,22 @@ grep -rln "\['services'\]" --include=*.php . | grep -vE "vendor|tests|specs"
 grep -rn "ntdst_set(" --include=*.php api core admin services support ntdst-core.php
 ```
 
-(1) prints `core/Bootstrap.php:0` and `ntdst-core.php:0`. (2) is empty. (3) is
+(1) prints `0` for `core/Bootstrap.php` and `0` for `ntdst-core.php` — an
+unordered pair; grep prints the files in the order it was given them, and a
+reader checking a fixed order is checking the argument list. (2) is empty. (3) is
 `core/Bootstrap.php`, one file. (4) has one call that takes a class —
 `core/Bootstrap.php:501` — and the only gate reached before it is
 `class_exists()` at `:408`; the other hits are `core/Container.php`'s own
 declaration and docblock examples, and `core/Theme.php:48` registering an
 instance of itself, which guesses nothing.
+
+The PROOF of this invariant is the pair of autoload-recorder tests —
+`BootstrapRefusesMalformedServiceListsTest` and
+`BootstrapWalksItsServiceListOnceTest` — which register an autoloader, drive
+`register()`, and record every path core asked for. (2) is the cheap net beside
+them: a grep cannot prove a negative about runtime, but it fails on a fresh
+checkout with no vendor/ and no PHP run, and it names the shape in a line a
+reviewer can read.
 
 **Deliberate exceptions:**
 - **`basename(str_replace('\\', '/', $class))`** (`core/Bootstrap.php:835`)
@@ -476,11 +490,20 @@ Things core does that WordPress also does, kept on purpose. Each names why.
   table is the list; `bin/zero-readers.sh` refuses to exempt a name that table
   does not carry.
 - **`NTDST_Service_Meta` has no implementer in core** (INV-9). It is the
-  optional service shape — what a service may declare — and the fleet ships
-  eight implementers outside the four consumer roots the sweep searches: six in
-  bavi and two in netdust-legacy. An interface with no implementer HERE is the
-  normal state of a published contract, so it is kept and named rather than
-  deleted.
+  optional service shape — what a service may declare — and the fleet ships its
+  implementers outside the roots the sweep searches: six in bavi, and dozens in
+  netdust-legacy. An interface with no implementer HERE is the normal state of a
+  published contract, so it is kept and named rather than deleted. The count is
+  a hand count on purpose: the sweep cannot enumerate an interface, so no
+  machine check will correct this number when it drifts.
+- **Seven of the 19 `EXCEPTIONS` rows are INERT** (INV-9). Drop the row and the
+  sweep still says nothing, because the symbol has a reader the script can see
+  or is a shape it cannot judge: `ntdst/model/created`, `ntdst/model/updated`,
+  `ntdst/model/registering`, `ntdst/service/`, `ntdst_container`,
+  `NTDST_Bootstrap::config()` and `NTDST_Service_Meta`. They are kept so the
+  array reads as the WHOLE published set — a reader should not have to ask which
+  extension point was left out for being called somewhere. The other twelve are
+  load-bearing: drop one and a finding appears.
 - **The 13 retired type names are guarded by DECLARATION POSITION, not as bare
   words.** `signed_int` is a distinctive token and is pinned bare
   (`bin/guard.sh`, `removedSymbolProvider()`). The other 12 are ordinary

@@ -117,22 +117,22 @@ harder.
 
 Same test, opposite outcomes. That is what makes it a usable test.
 
-## 4. Safe defaults where mistakes are expensive — including the one that is wrong
+## 4. Safe defaults where mistakes are expensive
 
-Deny is the default. `ntdst/api/public_actions` ships empty, and the only thing
-that adds to it is an author writing `'public' => true` on a registration —
-`NTDST_Actions::register()` unifies that declaration onto the site's one filter
-(`api/Actions.php`), so anonymous reach is always a mark somebody MADE, never a
-default and never something a merge can turn on. A REST route with no permission
+Deny is the default. `ntdst/api/public_actions` ships empty. Two things add to
+it, and both are a mark somebody MADE: an author writing `'public' => true` on a
+registration, which `NTDST_Actions::register()` unifies onto the site's one
+filter (`api/Actions.php`), and a site listening on that filter directly —
+stride's `QuestionnaireHandler` does. Anonymous reach is never a default and
+never something a merge can turn on. A REST route with no permission
 does not register. An unresolvable capability denies everyone, administrators
 included.
 
-The wart this section used to state is fixed. 5.0.0 removed the fail-open DENY
-filter `ntdst_service_{slug}_enabled` along with the whole per-service enable
-switch (core-trim FR-2): a service is off when its `metadata()` says
-`'enabled' => false`, or when its `services.conditional` condition returns
-false, and there is no third way. The rule that outlived it stands — anything
-new that gates on a filter fails closed.
+A service is off when `metadata()` returns `'enabled' => false`, or when its
+`services.conditional` condition returns false. There is no third way. Anything
+new that gates on a filter fails closed. 5.0.0 removed the fail-open
+`ntdst_service_{slug}_enabled` filter and the whole per-service enable switch
+with it (core-trim FR-2).
 
 ## 5. Chainable for building, not for everything
 

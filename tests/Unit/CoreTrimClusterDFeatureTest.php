@@ -132,25 +132,43 @@ final class CoreTrimClusterDFeatureTest extends TestCase
 
     /**
      * A check nobody has seen fail is a check nobody knows works. The same
-     * regex, over a file that DOES derive a path from a class name.
+     * regex, over files that DO derive a path from a class name.
+     *
+     * The last case is the LINE 5.0.0 DELETED, character for character. A check
+     * that misses the shape it was written for is the whole failure mode here:
+     * the auditor found (2) blind to it, and blind is indistinguishable from
+     * clean on stdout.
+     *
+     * @dataProvider guessingLineProvider
      */
-    public function testInvTenPartTwoBitesOnAPathDerivedFromAClassName(): void
+    public function testInvTenPartTwoBitesOnAPathDerivedFromAClassName(string $case, string $line): void
     {
-        $dir = sys_get_temp_dir() . '/inv10-bite-' . getmypid();
+        $dir = sys_get_temp_dir() . '/inv10-bite-' . getmypid() . '-' . md5($case);
         @mkdir($dir, 0o777, true);
-        file_put_contents($dir . '/Guesser.php', "<?php\nfunction load(\$dir, \$class) {\n    require_once \$dir . '/' . \$class . '.php';\n}\n");
+        file_put_contents($dir . '/Guesser.php', "<?php\n" . $line . "\n");
 
         try {
             $run = $this->run_check($this->inv_ten_part_two(escapeshellarg($dir)));
             $this->assertCount(
                 1,
                 $this->lines($run['out']),
-                "INV-10 (2) did not bite on `require_once \$dir . '/' . \$class . '.php';` — the check passes for the wrong reason. Output:\n" . $run['out']
+                "INV-10 (2) did not bite on {$case} — the check passes for the wrong reason. Output:\n" . $run['out']
             );
         } finally {
             @unlink($dir . '/Guesser.php');
             @rmdir($dir);
         }
+    }
+
+    /** @return array<string, array{0: string, 1: string}> */
+    public static function guessingLineProvider(): array
+    {
+        return [
+            'concatenated onto a directory' => ['$dir . \'/\' . $class . \'.php\'', 'require_once $dir . \'/\' . $class . \'.php\';'],
+            'interpolated into a string' => ['"{$class}.php"', 'require_once "{$class}.php";'],
+            'built by sprintf' => ["sprintf('%s/%s.php', ...)", '$path = sprintf(\'%s/%s.php\', $dir, $class);'],
+            'the line 5.0.0 deleted' => ["str_replace('\\\\', '/', \$class) . '.php'", '$relativePath = str_replace(\'\\\\\', \'/\', $class) . \'.php\';'],
+        ];
     }
 
     public function testInvTenPartThreeShowsExactlyOneReaderOfTheServicesConfigKey(): void
@@ -353,12 +371,14 @@ final class CoreTrimClusterDFeatureTest extends TestCase
      * INV-10 (2), copied from the document as a NOWDOC — no PHP interpolation
      * touches it. The first draft of this helper used an interpolating heredoc
      * and bash read `$[a-zA-Z_]` as arithmetic expansion, so the check returned
-     * nothing on every input. It looked green. That is why the bite test exists.
+     * nothing on every input. It looked green. That is why the bite test exists,
+     * and why the pattern now spells the variable `[$][[:alpha:]_]`: the `$[`
+     * adjacency that bash misreads never occurs.
      */
     private function inv_ten_part_two(string $root): string
     {
         $command = <<<'SH'
-        grep -rnE "[Cc]lass[A-Za-z_]* *\. *['\"][^'\"]*\.php|['\"][^'\"]*\.php['\"] *\. *\\\$[a-zA-Z_]*[Cc]lass" \
+        grep -rnE "[Cc]lass[A-Za-z_]* *\. *['\"][^'\"]*\.php|['\"][^'\"]*\.php['\"] *\. *[$][[:alpha:]_]*[Cc]lass|\{[$][[:alpha:]_]*[Cc]lass[A-Za-z_]*\}[^'\"]*\.php|\([^)]*[$][[:alpha:]_]*[Cc]lass[A-Za-z_]*[^)]*\) *\. *['\"][^'\"]*\.php|sprintf *\([^)]*[$][[:alpha:]_]*[Cc]lass" \
             --include=*.php {ROOT} | grep -vE "(^|/)vendor/|(^|/)tests/|(^|/)specs/"
         SH;
 

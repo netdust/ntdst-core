@@ -120,7 +120,7 @@ defined('ABSPATH') || exit;
  * WHAT MOVED AND WHAT BREAKS. The retired filter and option spellings, the
  * deleted per-service enable switch, the retired slug derivation
  * (`admin_u_i`) and the F7 call-order fix are recorded once, in README's
- * `#### Core-trim — what left the package` migration table. That is where a
+ * `#### Core-trim — what left the package` migration section. That is where a
  * consumer looks after a fatal; a migration log inside a class docblock is read
  * by nobody upgrading and by everybody maintaining.
  */

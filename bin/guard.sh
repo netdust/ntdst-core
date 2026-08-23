@@ -30,10 +30,11 @@ fi
 # a row spelled differently here sweeps something the test does not. This copy
 # exists because the gate has to fail on a fresh checkout with no vendor/ and
 # no PHP test run, and the two lists being the same list is the property an
-# audit checks. Six names were behind the provider when the invariant auditor
-# last compared them (getServices, NTDST_SectorRegistry, ntdst_sectors,
-# ntdst_endpoints, MARKER_ONLY_REQUIRED_TYPES, render_repeater_media_cell);
-# deriving this pattern FROM the provider is the parked fix.
+# audit checks. The Cluster D audit found `wireMixins` and `templatePath`
+# behind the provider — the same drift, a second time — and they are in the
+# alternation now. Deriving this pattern FROM the provider is the parked fix,
+# and it stays parked because the provider carries per-row exemption columns
+# (`signed_int`) that a joined string cannot express.
 #
 # v3.0.0: the v2 routing facades.
 # v5.0.0: the NTDST_Rest surface registry — WordPress's get_routes() is the
@@ -197,7 +198,7 @@ fi
 #         `ntdst_mail_before_send`, `_sent`, `_template_paths` and
 #         `_attachment_bases`. README is not swept by this line (*.php only),
 #         so the migration table needs no exemption here.
-REMOVED=$(grep -rnE "NTDST_Mailer|ntdst_mail|ntdst_send_mail|ntdst_send_queued_mail|ntdst_notify|ntdst_notification|ntdst_wrap_email_in_layout|ntdst_wrap_all_emails|ntdst_email_layout_paths|NTDST_Scheduler|ntdst_scheduler|ntdst_schedule_recurring|ntdst_clear_recurring|ntdst_model_create_before|ntdst_model_create_after|ntdst_model_update_before|ntdst_model_update_after|ntdst_model_delete_before|ntdst_model_delete_after|log_entry|ntdst_log_database_enabled|addHandler|removeHandler|setMinLevel|setBatchingEnabled|ntdst_log_debug|ntdst_log_info|ntdst_log_error|getFormattedPosts|ntdst_get_formatted_posts|ntdst_make|callableReflections|getPostMeta|getPostTerms|attachTerms|syncTerms|detachTerms|whereDate|orWhere|discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
+REMOVED=$(grep -rnE "NTDST_Mailer|ntdst_mail|ntdst_send_mail|ntdst_send_queued_mail|ntdst_notify|ntdst_notification|ntdst_wrap_email_in_layout|ntdst_wrap_all_emails|ntdst_email_layout_paths|NTDST_Scheduler|ntdst_scheduler|ntdst_schedule_recurring|ntdst_clear_recurring|ntdst_model_create_before|ntdst_model_create_after|ntdst_model_update_before|ntdst_model_update_after|ntdst_model_delete_before|ntdst_model_delete_after|log_entry|ntdst_log_database_enabled|addHandler|removeHandler|setMinLevel|setBatchingEnabled|ntdst_log_debug|ntdst_log_info|ntdst_log_error|getFormattedPosts|ntdst_get_formatted_posts|ntdst_make|callableReflections|wireMixins|templatePath|getPostMeta|getPostTerms|attachTerms|syncTerms|detachTerms|whereDate|orWhere|discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
     --include='*.php' . \
     | grep -v /vendor/ \
     | grep -vE "^(\./)?tests/|^(\./)?specs/" \
@@ -225,9 +226,12 @@ fi
 # are what fail on a fresh checkout with no vendor/ and no PHP test run.
 #
 # `templatePath` and `wireMixins` are NOT here: both are distinctive names that
-# appear nowhere else in the tree or in README, so they are pinned as ordinary
-# bare rows in the REMOVED sweep above, mirroring
-# PackageBootIntegrityTest::removedSymbolProvider() exactly.
+# appear nowhere else in shipped PHP, so they are pinned as ordinary bare rows
+# in the REMOVED sweep above, mirroring
+# PackageBootIntegrityTest::removedSymbolProvider() exactly. core/Theme.php:23
+# says the word once, in the docblock recording what left; the sweep's
+# comment-line filter is what makes that legal, and prose in README and specs/
+# is out of scope because the sweep reads `*.php` only.
 declare -A METHOD_PINS=(
     # FR-6 / SC-3: the container declares set/get/has, and no second way to ask
     # one of them. make() resolved WITHOUT the singleton cache, call() injected

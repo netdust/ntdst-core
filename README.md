@@ -2,8 +2,9 @@
 
 NTDST Core Framework — DI container, Bootstrap, routing, Data layer, admin form
 layer for WordPress. This is the canonical framework repo: `main` is the
-ground truth consumed by every adopter project (daan, josworld, and later
-Stride) instead of a per-project vendored copy that drifts.
+ground truth consumed by every adopter project instead of a per-project
+vendored copy that drifts. `bin/zero-readers.sh` sweeps six of them for readers
+— daan, josworld, stride, todai-client, netdust and ludoluykx.
 
 ## What it is
 
@@ -90,10 +91,10 @@ Read every line before upgrading. Nothing here is shimmed.
    service's config filter **changes**. Check every service that declares a
    `name`. On 5.0.0 that filter is `ntdst/service/{slug}/config`, and the
    per-service enable switch this note used to point at is gone — the core-trim
-   migration table says what replaced it.
+   migration section says what replaced it.
 5. **Bootstrap derives no path from a class name.** A listed class must be
    loaded or autoloadable before `register()` (see the core-trim migration
-   table).
+   section).
 6. **A CORS preflight is charged against a rate-limited route.** `OPTIONS` used
    to cost nothing. It now spends one unit from a bucket of its own
    (`ntdst_rest_pf_*`), so a preflight flood can now return 429. It does **not**
@@ -200,7 +201,7 @@ exactly as written — `'Public'` and `' public '` are capabilities nobody holds
 not near misses that get normalised back into an opening.
 
 **Asserting your anonymous surface.** The surface registry and its three
-helpers are gone; the core-trim migration table names each one and what to write
+helpers are gone; the core-trim migration section names each one and what to write
 instead. WordPress already keeps the register every route lands in, and a second
 copy of it can only disagree with the original. Ask the server instead:
 
@@ -436,11 +437,14 @@ has no entry, and both the render side and the save side step past it.
 #### Extension points — published, and read from outside this repository
 
 Core publishes these and keeps them even though `bin/zero-readers.sh` finds no
-caller in the package or in the four consumer sites. That is what a published
-extension point IS: the reader is somebody else's code, written after this
-release. Each row says who, so the exemption is a statement and not a shrug —
-INV-9 in `ARCHITECTURE-INVARIANTS.md` holds the same list, and the sweep refuses
-to exempt a name this table does not carry.
+caller in the package or in the swept consumer roots. That is what a published
+extension point IS: the reader is somebody else's code. It may be written after
+this release, and it may already exist in a consumer at a commit the sweep is
+not looking at — the sweep reads each root's working tree, and nothing else.
+Each row says who, so the exemption is a statement and not a shrug. An
+INTERFACE the script cannot enumerate at all: for `NTDST_Service_Meta` this
+table is the only check there is. INV-9 in `ARCHITECTURE-INVARIANTS.md` points
+here, and the sweep refuses to exempt a name this table does not carry.
 
 | Symbol | Who reads it | Kind |
 |---|---|---|
@@ -452,10 +456,17 @@ to exempt a name this table does not carry.
 | `ntdst/api/allowed_origins` | a consumer that adds CORS origins outside a `->cors()` declaration | filter |
 | `ntdst/service_before_boot/{class}`, `ntdst/service_after_boot/{class}` | a consumer that wraps one named service's boot | action |
 | `ntdst/service/{slug}/config` | stride `SecurityService`, `PerformanceService` — the ONE per-service extension key | filter |
-| `NTDST_Service_Meta` | the optional service shape. Eight implementers on the fleet, all outside the four consumer sites: bavi (six) and netdust-legacy (two) | interface |
+| `NTDST_Service_Meta` | the optional service shape. Six implementers in bavi and dozens in netdust-legacy, all outside the swept roots. The script cannot enumerate an interface, so this row is its only check | interface |
 | `NTDST_Bootstrap::config()` | reads back the merged config a consumer passed to `register()`. Kept by FR-2 as the one read-back of that array | method |
-| `ntdst_container()` | the container accessor. Its callers are the fleet's test tearDowns and consumer bootstraps, and `tests/` is excluded from the sweep by design | function |
+| `ntdst_container()` | the container accessor. ludoluykx's `FluentCRMIntegrationService` calls it twice (`:328`, `:335`); the rest of its callers are the fleet's test tearDowns and consumer bootstraps, and `tests/` is excluded from the sweep by design | function |
 | `ntdst_inline()` | the other half of the terminal response pair; `ntdst_download()` is read and this is not. Documented as a pair, and recorded as a deletion candidate for `core-shape` rather than exempted silently | function |
+| `ntdst_api_floor_cap()` | the capability floor a public API action falls back to. It leaves with `api/Actions.php` at `core-shape` T08, so it is recorded there rather than deleted here | function |
+| `ntdst/core_ready` | stride — `stride-core.php` and `ProfileTypePolicy` hang their own wiring on it | action |
+| `ntdst/services_registered` | `netdust-mail`, which registers its own service once core's list is in | action |
+| `ntdst/model/registered` | josworld — `functions.php` and `YOOthemeSourcesService` | action |
+| `ntdst/api/rate_limit/{action}` | stride's admin controllers, which raise the limit on one action | filter |
+| `ntdst/api/rate_window/{action}` | a site's config, which sets the window beside that limit. No fleet reader today | filter |
+| `ntdst/trusted_proxies` | a site's config, which names the proxies `NTDST_ClientIp::detect()` may believe. No fleet reader today | filter |
 
 #### Core-trim — what left the package
 
@@ -502,10 +513,15 @@ live site would otherwise be silent.
 | `hasService()` | `class_exists()` |
 | `isBooted()` | `did_action('ntdst/features_ready')` |
 | filter `netdust_{slug}_config`, then `ntdst_service_{slug}_config` | `ntdst/service/{slug}/config`. There is no shim: a listener on either retired spelling is never mounted and never called, and nothing says so |
-| the same filter, read from a consumer that has NOT bumped core yet | **bridge both names while you straddle the two versions** — read `ntdst/service/{slug}/config` first and fall back to `ntdst_service_{slug}_config`. A consumer that renames its READ before core is bumped stops receiving its owner's overrides, silently, because the core it runs still fires the old name. stride's theme bridges until its 5.0 bump |
 | slug `admin_u_i` (a `_` before EVERY internal capital) | `admin_ui`. `APIRouterService` is `api_router`, not `a_p_i_router`. A slug with no consecutive capitals is unmoved, and an override keyed on a mangled slug is now REFUSED at `register()` instead of ignored |
 
-Three refusals are new, and each is louder than the silence it replaces:
+**While you straddle the two versions, bridge both names.** Read
+`ntdst/service/{slug}/config` first. Fall back to `ntdst_service_{slug}_config`,
+the spelling the core you still run fires. A consumer that renames its read
+before core is bumped stops receiving its owner's overrides, silently, and
+nothing says so. stride's theme bridges until its 5.0 bump.
+
+These refusals are new, and each is louder than the silence it replaces:
 
 | Shape | What happens |
 |---|---|
@@ -522,7 +538,12 @@ Three refusals are new, and each is louder than the silence it replaces:
 |---|---|
 | `ntdst_make()`, `NTDST_Container::make()` | `ntdst_get()`. Constructor autowiring is unchanged |
 | `NTDST_Container::call()` and `callableReflections` (its reflection cache) | call the thing yourself |
-| `NTDST_Container::forget()`, `flush()`, `keys()` | build a fresh container: `new NTDST_Container()`. **22 test files on the fleet call `forget()` in `tearDown()`** — daan 14, josworld 3, todai 3 — and each becomes a fresh instance per test |
+| `NTDST_Container::forget()`, `flush()`, `keys()` | build a fresh container: `new NTDST_Container()`. **22 test files on the fleet call `forget()` in `tearDown()`** — daan 15, josworld 4, todai-client 1, stride 1 (`NtdstContainerTest`, four removed members), netdust 1 — and each becomes a fresh instance per test |
+
+todai-client and netdust hold one of those files each, and neither has an adapt
+commit. That is a decision, not an oversight: both run against their own pinned
+core, so the file keeps passing until that repo bumps, and it is adapted then.
+`specs/core-trim/spec.md` SC-5 carries the same note.
 
 **Logger (FR-5).** Channels, levels, the batched file handler and the
 `error_log` handler stay. `ntdst_log($channel)` and the five level methods are
@@ -552,8 +573,10 @@ the API.
 | `orWhere()` | a `meta_query` with `'relation' => 'OR'` |
 
 **Model lifecycle hooks (FR-11).** Same arguments, `ntdst/*` names. There is no
-shim: a listener on a retired name is silently inert. josworld listens on the
-retired create hook, and daan's `PressKitService` on two of the renamed ones.
+shim: a listener on a retired name is silently inert. josworld's integration
+test listens on the retired create-after hook
+(`tests/Integration/DataLayerRoundTripTest.php:38`), and daan's `PressKitService`
+on two of the renamed ones.
 
 | Was | Now |
 |---|---|
@@ -587,7 +610,7 @@ configuration case philosophy §5 names.
 
 | Was | Now |
 |---|---|
-| `NTDST_Mailer` | `new \Netdust\Mail\Mailer()` — in `netdust-mail`, at or after the T11 commit |
+| `NTDST_Mailer` | `new \Netdust\Mail\Mailer()` — in `netdust-mail`, at or after `f48a8bf` |
 | `ntdst_mail()` | the same class, or `wp_mail()` for a plain send |
 | `ntdst_send_mail()`, `ntdst_notify()`, `ntdst_wrap_email_in_layout()` | not carried. `wp_mail()` |
 | `queue()`, `toArray()`, `header()` | not carried |
@@ -633,9 +656,9 @@ logger was absent, and both are unconditional now (FR-3):
 **Before you deploy.** Load order first: `ntdst-core.php` is the BASE mu-plugin.
 An mu-plugin that constructs `NTDST_Theme` while core is a regular plugin fatals
 on 5.0.0 — mu-plugins load first, and core is no longer there by luck. And
-stride keeps `v3.0.0` until its own migration lands: its security and
-performance services still read the retired config-filter spelling the table
-above renames.
+stride keeps `v3.0.0` until stride's `chore/core-trim` branch lands and its pin
+is bumped: its security and performance services still read the retired
+config-filter spelling the section above renames.
 
 ### 4.4.2
 
