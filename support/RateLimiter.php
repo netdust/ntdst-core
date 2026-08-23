@@ -225,16 +225,17 @@ final class NTDST_RateLimiter
         // permanent lockout removable only by hand from wp_options. A negative
         // window writes a timeout in the past, so get_transient() treats the
         // counter as already expired and the limit is silently never enforced.
-        // Both are one filter typo away (`fn() => 0`), and (int) casting turns
-        // any non-numeric filter return into 0. Neither failure is one a
-        // limiter may accept: clamp to a sane window and say so.
+        // Both are one typo away in whatever resolved the number — a route's
+        // `rate_window` option, or a consumer's own filter — and (int) casting
+        // turns any non-numeric value into 0. Neither failure is one a limiter
+        // may accept: clamp to a sane window and say so.
         if ($window <= 0) {
             $window = self::FALLBACK_WINDOW;
 
             if (function_exists('error_log')) {
                 error_log(sprintf(
                     'NTDST_RateLimiter: a window of <= 0 was requested for a bucket and would '
-                    . 'never expire; clamped to %ds. Check the rate-window filter for this action.',
+                    . 'never expire; clamped to %ds. Check the window the caller passed in.',
                     self::FALLBACK_WINDOW
                 ));
             }
