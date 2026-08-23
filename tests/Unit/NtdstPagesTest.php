@@ -60,6 +60,7 @@ final class NtdstPagesTest extends TestCase
             $GLOBALS['_ntdst_test_filters_at'],
             $GLOBALS['_ntdst_test_filter_args'],
             $GLOBALS['wp_query'],
+            $GLOBALS['wp_rewrite'],
         );
 
         Functions\when('add_action')->justReturn(true);
@@ -93,7 +94,7 @@ final class NtdstPagesTest extends TestCase
 
     protected function tearDown(): void
     {
-        unset($_SERVER['REQUEST_URI'], $_SERVER['REQUEST_METHOD'], $GLOBALS['wp_query']);
+        unset($_SERVER['REQUEST_URI'], $_SERVER['REQUEST_METHOD'], $GLOBALS['wp_query'], $GLOBALS['wp_rewrite']);
         Monkey\tearDown();
         parent::tearDown();
     }
@@ -414,6 +415,62 @@ final class NtdstPagesTest extends TestCase
         $pages->flushWhenRulesChanged();
 
         $this->assertSame([false], $this->flushes, 'the same rule set on the next request must flush nothing.');
+    }
+
+    public function testAFlushHappensWhenTheLiveRulesLostOurRoutes(): void
+    {
+        // I-3. The hash answers "did OUR rule set change?" and nothing else.
+        // A Permalinks save, or another plugin calling flush_rewrite_rules()
+        // on a request where this consumer never registered, rewrites the
+        // option WITHOUT our rules — and the hash still matches, so nothing
+        // ever flushes again and every page route 404s, silently, forever.
+        $pages = new NTDST_Pages();
+        $pages->path('/card/:slug', fn (): string => __FILE__);
+
+        // The hash of exactly these rules, already stored: a same-rules run.
+        $pages->flushWhenRulesChanged();
+        $this->assertSame([false], $this->flushes);
+
+        // What WordPress actually has now — everything except ours.
+        $GLOBALS['wp_rewrite'] = new class {
+            /** @return array<string, string> */
+            public function wp_rewrite_rules(): array
+            {
+                return ['^feed/?$' => 'index.php?feed=1'];
+            }
+        };
+
+        $pages->flushWhenRulesChanged();
+
+        $this->assertSame(
+            [false, false],
+            $this->flushes,
+            'rules that are gone from the live set must be flushed back, exactly once, hash or no hash.',
+        );
+    }
+
+    public function testNoFlushWhenTheLiveRulesStillCarryOurRoutes(): void
+    {
+        $pages = new NTDST_Pages();
+        $pages->path('/card/:slug', fn (): string => __FILE__);
+
+        $pages->flushWhenRulesChanged();
+
+        $GLOBALS['wp_rewrite'] = new class {
+            /** @return array<string, string> */
+            public function wp_rewrite_rules(): array
+            {
+                return ['^card/([^/]+)/?$' => 'index.php?ntdst_page=0&ntdst_p_slug=$matches[1]'];
+            }
+        };
+
+        $pages->flushWhenRulesChanged();
+
+        $this->assertSame(
+            [false],
+            $this->flushes,
+            'the presence check must not turn the hash into a flush on every request.',
+        );
     }
 
     public function testTheRouterNoLongerFightsTheWordPressLoader(): void

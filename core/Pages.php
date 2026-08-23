@@ -41,9 +41,12 @@ declare(strict_types=1);
  *
  * FLUSH ONCE, WHEN THE RULES CHANGE. Rewrite rules live in an option, so a new
  * or edited path() is invisible until WordPress rewrites that option. This
- * class hashes its own rule set at the end of `init` and flushes only when the
- * hash moved (option `ntdst_pages_rules_hash`) — the plugin idiom. A consumer
- * that prefers to control it can still flush on activation or run
+ * class hashes its own rule set at the end of `init` and flushes when the hash
+ * moved (option `ntdst_pages_rules_hash`) — the plugin idiom — OR when the
+ * rules WordPress actually has no longer carry this router's first rule, which
+ * is how an outside flush (a Permalinks save, another plugin) is caught: it
+ * rewrites the option without our rules and leaves the hash matching. A
+ * consumer that prefers to control it can still flush on activation or run
  * `wp rewrite flush`.
  *
  * Usage:
@@ -316,12 +319,39 @@ class NTDST_Pages
             ),
         ));
 
-        if (get_option(self::RULES_HASH_OPTION) === $hash) {
+        if (get_option(self::RULES_HASH_OPTION) === $hash && !$this->rulesAreMissing()) {
             return;
         }
 
         flush_rewrite_rules(false);
         update_option(self::RULES_HASH_OPTION, $hash);
+    }
+
+    /**
+     * Are this router's rules absent from the rules WordPress actually has?
+     *
+     * The hash answers one question — "did OUR rule set change?" — and a
+     * rewrite option can be rewritten by someone else: a Permalinks save, or
+     * another plugin's flush_rewrite_rules() on a request where this consumer
+     * had not registered yet. The stored rules then lack every route here
+     * while the hash still matches, so nothing flushes again and every page
+     * route 404s in silence until a human runs `wp rewrite flush`.
+     *
+     * The FIRST rule is the whole probe. All of this router's rules go into
+     * the option in one flush, so they are present together or absent
+     * together; asking about every one of them would be the same answer N
+     * times. wp_rewrite_rules() reads the option and rebuilds it when it is
+     * empty — which is the rebuild this method is here to trigger anyway.
+     */
+    protected function rulesAreMissing(): bool
+    {
+        global $wp_rewrite;
+
+        if ($this->routes === [] || !is_object($wp_rewrite) || !method_exists($wp_rewrite, 'wp_rewrite_rules')) {
+            return false;
+        }
+
+        return !array_key_exists($this->routes[0]['regex'], (array) $wp_rewrite->wp_rewrite_rules());
     }
 
     /**
