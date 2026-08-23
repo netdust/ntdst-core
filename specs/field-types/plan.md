@@ -33,6 +33,8 @@ cherry-pickable to `master`). JOSWORLD = `~/Sites/josworld` (`chore/ntdst-core-4
 pins the `5.0.0` tag). STRIDE = `~/Sites/stride` (`staging`, pins `v3.0.0`).
 TODAI = `~/Sites/todai` (`master`) — T02 found it is not an ntdst-core consumer at all (no `composer.json`, static site); FR-8's todai gate is vacuous and T08 records that.
 
+- Amendment 2026-08-23 (pane w1:p3, approved by Stefan): before core-shape T07 — after core-trim Cluster D closes — `netdust-agent:planning` runs a Class B freshness review of core-shape T07–T14 against the tree as it is then (known drift: T07's MetaboxGenerator citations, T08's `ntdst-core.php`/`core/Theme.php`, T09's `services/Mailer.php`, T12's `ThemeTrimTest` mixin assertion); gate-check re-run; seam stop for Stefan; then Cluster 3. One wake.
+
 ## Global Constraints
 
 - Target release **v5.0.0**, breaking, unreleased; no alias, shim or deprecation path (spec Assumptions).
