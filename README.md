@@ -625,9 +625,9 @@ here because a fatal does not care which spec removed the name.
 | `restSchemaFor()`, `restSubFields()` | `restFields()`. `schemaFor()` asks the publish question at every depth, and it is private |
 
 A rate-limited public route registers `guard()`'s closure as its
-`permission_callback`, not the literal string `'__return_true'`, so the
-`publicSurface()` recipe above does not list it — see "Asserting your
-anonymous surface" above for the honest way to settle a route.
+`permission_callback`, not the literal string `'__return_true'`, so the row
+above does not list it — see "Asserting your anonymous surface" above for the
+honest way to settle a route.
 
 **The command dispatcher (FR-7).** There is ONE HTTP surface now, and it is
 `ntdst_rest()`. The command dispatcher ran a second one: `POST /ntdst/v1/action`
