@@ -170,8 +170,11 @@ class NTDST_Pages
      *
      * The URL is not re-parsed here: `ntdst_page` is the route index the
      * rewrite rule wrote, so a request either carries one of ours or it does
-     * not. A method mismatch is a pass-through — the rule matched the URL, the
-     * route did not answer this verb, and WordPress renders what it resolved.
+     * not. An index naming NO route of ours is a pass-through: nothing of ours
+     * claimed this URL. A MATCHED route whose verb is wrong is a 404 — the
+     * rule owns the URL, the URL has no representation for this method, and
+     * leaving WordPress to render its fallback would answer 200 with the blog
+     * index instead.
      */
     public function dispatch(): void
     {
@@ -183,7 +186,13 @@ class NTDST_Pages
 
         $route = $this->routes[(int) $index] ?? null;
 
-        if ($route === null || $route['method'] !== strtoupper($_SERVER['REQUEST_METHOD'] ?? 'GET')) {
+        if ($route === null) {
+            return;
+        }
+
+        if ($route['method'] !== strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'))) {
+            $this->notFound();
+
             return;
         }
 

@@ -388,6 +388,20 @@ final class NtdstPagesTest extends TestCase
 
     public function testPathDoesNotMatchADifferentMethod(): void
     {
+        // I-2. The rule MATCHED — WordPress resolved this URL to our route and
+        // nothing else. Returning would leave WordPress rendering whatever the
+        // query fell back to (the blog index) with a 200 on a URL that has no
+        // GET representation. A matched rule whose verb is wrong is a 404.
+        $wp_query = new class {
+            public bool $notFound = false;
+
+            public function set_404(): void
+            {
+                $this->notFound = true;
+            }
+        };
+        $GLOBALS['wp_query'] = $wp_query;
+
         $ran = 0;
         $pages = new NTDST_Pages();
         $pages->path('/x', function () use (&$ran) {
@@ -399,6 +413,33 @@ final class NtdstPagesTest extends TestCase
         $this->dispatch($pages, 0, 'GET');
 
         $this->assertSame(0, $ran, 'A POST-registered page route must not answer a GET.');
+        $this->assertTrue($wp_query->notFound, 'a matched rule with the wrong verb is WordPress\'s own 404.');
+        $this->assertSame([404], $this->statuses);
+        $this->assertNull($this->templateIncludeFilter());
+    }
+
+    public function testAnUnknownRouteIndexIsNotOurRequestAtAll(): void
+    {
+        // The other half of I-2: `ntdst_page=7` with no route 7 is not a
+        // matched rule — nothing of ours claimed this URL, so WordPress keeps
+        // whatever it resolved. Only a MATCHED route refuses.
+        $wp_query = new class {
+            public bool $notFound = false;
+
+            public function set_404(): void
+            {
+                $this->notFound = true;
+            }
+        };
+        $GLOBALS['wp_query'] = $wp_query;
+
+        $pages = new NTDST_Pages();
+        $pages->path('/x', fn (): string => __FILE__);
+
+        $this->dispatch($pages, 7, 'GET');
+
+        $this->assertFalse($wp_query->notFound, 'a query var naming no route of ours is not ours to refuse.');
+        $this->assertSame([], $this->statuses);
     }
 
     public function testPathDefaultsToGet(): void
