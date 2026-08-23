@@ -183,15 +183,25 @@ named here: `Rest::OWN`, `Rest::READ`, `Rest::RETIRED`,
 surface's OWN option keys, read verbs, retired option names and refused
 `->public()` verbs — words WordPress keeps no table for), `Rest::$limits`,
 `$reported`, `$instances`, `$cors` (declared/max_age only), `$corsOrigins`,
-`$corsResolvers`, `$defaults`, `Response::$mimeTypes`,
+`$corsResolvers`, `$defaults`,
 `Template_Loader::$custom_paths`, `$template_cache`, `$page_data`,
 `Logger::$batchedLogs`, `Data::$models`, `Data::$globalScopes`,
 `FieldTypes::$table`/`::RETIRED` and `ClientIp::DEFAULT_TRUSTED_PROXIES` — the
 loader's three moved file with the class and are unchanged in number. (The four
 `Rest` consts were always in the grep's output; the earlier enumeration listed
-17 of the 21 and read as if that were the whole answer.) Only
-`Response::$mimeTypes` is still outstanding, for T10. The `api*` envelopes are
-no longer outstanding: T08 deleted `apiSuccess()`, `apiError()`,
+17 of the 21 and read as if that were the whole answer.) SATISFIED at `2fbde3d`
+(Cluster 4b, T11), which closed the last outstanding item: `Response::$mimeTypes`
+is deleted with `getMimeType()` and `registerMimeType()`, and the check returns
+20 hits — the same list minus that one, with nothing new added. A download
+resolves its type through `wp_check_filetype($name, wp_get_mime_types())`, and
+the four types WordPress's table lacks arrive through the filter WordPress
+provides for exactly that: `NTDST_Response::mimeTypes()` on `mime_types`
+(`api/Response.php:348`, mounted by `init()` `:388`), which ADDS and never
+overrides. `uploadMimes()` (`:375`) reads those four back OFF `upload_mimes`,
+because `mime_types` is also the base of `get_allowed_mime_types()` and core may
+not widen what a site accepts on upload; it derives them from `mimeTypes([])`
+rather than listing them a second time, so the grep gains no hit.
+The `api*` envelopes are no longer outstanding: T08 deleted `apiSuccess()`, `apiError()`,
 `apiSuccessResponse()` and `apiErrorResponse()` with the dispatcher that wrapped
 every answer in `{success, data}` — a REST route returns the payload and
 WordPress builds the body.
@@ -213,8 +223,9 @@ phase 4); `NTDST_Pages::path()` → `add_rewrite_rule()` + the `query_vars` filt
 way to pass data to a template (`extract()` over a caller array); a second
 `addPath`.
 **Mechanical check:** `grep -rn "is_404 = false\|redirect_canonical\|locate_template(\|extract(" --include=*.php api core` → the hits Status names: `core/Pages.php:53` (a `redirect_canonical` filter) and `:380`, and `api/Response.php:273`, `:290`, `:311`, `:667` (two `extract()` calls over a caller array, a second `is_404 = false`, and a `locate_template()` outside the loader). `grep -rn "function addPath\|function redirect" --include=*.php api core` → two each, not one: `api/Response.php:126` + `:579` and `api/Response.php:235` + `core/Pages.php:458`. Phase 4 takes both counts to one.
-**Status:** partially satisfied at `5bee797` (Cluster 4b, T10), which closed the
-page-router half. `NTDST_Pages::path()` (`core/Pages.php:114`) calls
+**Status:** SATISFIED at `2fbde3d` (Cluster 4b, T11), which closed the Response
+half; `5bee797` (T10) closed the page-router half.
+`NTDST_Pages::path()` (`core/Pages.php:114`) calls
 `add_rewrite_rule()` at `:138` and names its query vars on the `query_vars`
 filter (`queryVars()` `:153`); `dispatch()` (`:174`) runs on `template_redirect`
 and reads `get_query_var('ntdst_page')` at `:176`. `core/Pages.php` returns NO hit from either
@@ -222,15 +233,20 @@ command now: the canonical-redirect filter, the `is_404` clear, the
 render-and-exit and `function redirect` are all gone (six methods, pinned in
 `bin/guard.sh` `METHOD_PINS["core/Pages.php"]` and — the five distinctive ones —
 in `PackageBootIntegrityTest::removedSymbolProvider()`). `function redirect` and
-`function addPath` are each ONE: `api/Response.php:177` and
+`function addPath` are each ONE: `api/Response.php:140` and
 `core/TemplateLoader.php:31`. `locate_template(` is still the single CALL at
-`core/TemplateLoader.php:151`, with four comment mentions documenting the guard
-on its result (`:154`, `:195`, `:209`, `:220` — refused unless the hit lies
-inside a theme directory, `5fa3d61`). Outstanding, all in the file T11 owns:
-`api/Response.php:215` and `:253` (two `extract()` calls over a caller array)
-and `:232` (the last `is_404 = false`). Two stale comments there name
-`NTDST_Pages::commitOk()` (`:193`, `:224`), which no longer exists — T11 scrubs
-them with the rest. Line numbers re-pinned at T14.
+`core/TemplateLoader.php:146`, with four comment mentions documenting the guard
+on its result (`:149`, `:190`, `:204`, `:215` — refused unless the hit lies
+inside a theme directory, `5fa3d61`; T11's deletion of `getCustomPaths()` moved
+all five up by five lines). `api/Response.php` returns ZERO hits from
+the first command at `2fbde3d`: both `extract()` calls went with `render()` and the rewritten `html()`, which hands
+its data to WordPress's own `load_template($file, false, $data)` inside a buffer
+(`:166`), and the last `is_404 = false` went with `commitRenderStatus()`. A
+route refuses by calling WordPress's `$wp_query->set_404()` from `notFound()`
+(`:78-80`) instead of setting a flag for something downstream to honour — since
+T10 nothing downstream reads this object. The two stale comments naming
+`NTDST_Pages::commitOk()` are gone with the methods whose docblocks carried
+them. Line numbers re-pinned at T14.
 
 ## INV-7 — Throttling is one primitive, charged from the permission callback
 
@@ -679,10 +695,10 @@ a test that holds it, the test is named — that is its mechanical home.
   named for what it carries: `url` in `api/Data.php`'s attachment payload (1);
   the two in `services/Logger.php` went with the model. And `api/Response.php`'s
   `'json' => 'application/json'` MIME entry (1), which is (B)'s hit as well.
-- **(B)'s two hits.** `api/Response.php`'s `$mimeTypes` — MIME types, not field
-  types: the `[Tt][Yy][Pp][Ee][Ss]?` fragment catches the word. It is an INV-5
-  item — WordPress keeps that table as `wp_get_mime_types()` — and INV-5 already
-  lists it as outstanding for phase 4. And `admin/RelationField.php:46`'s
+- **(B)'s hits, now one.** `api/Response.php`'s `$mimeTypes` — MIME types, not field
+  types: the `[Tt][Yy][Pp][Ee][Ss]?` fragment catches the word. It was an INV-5
+  item — WordPress keeps that table as `wp_get_mime_types()` — and T11 deleted it
+  at `2fbde3d`, so (B) has ONE hit now. That one is `admin/RelationField.php:46`'s
   `private const MAX_REQUESTED_TYPES = 20`, which is not a table of anything: it
   is the most post types one relation search may name, stated once and read
   twice (the `post_type` arg's `maxItems`, and the hard refusal at the top of
