@@ -165,6 +165,8 @@ final class ResponseTrimTest extends TestCase
             }
         };
         $GLOBALS['wp_query'] = $wpQuery;
+        Functions\when('status_header')->justReturn(null);
+        Functions\when('nocache_headers')->justReturn(null);
 
         $response = (new NTDST_Response())->notFound();
 
@@ -177,8 +179,36 @@ final class ResponseTrimTest extends TestCase
         // The denial path: a route can refuse before WordPress built $wp_query
         // (CLI, an early hook). It must set the status and never fatal.
         unset($GLOBALS['wp_query']);
+        Functions\when('status_header')->justReturn(null);
+        Functions\when('nocache_headers')->justReturn(null);
 
         $this->assertSame(404, (new NTDST_Response())->notFound()->getStatus());
+    }
+
+    public function testNotFoundSendsWordPressesThreeLines(): void
+    {
+        // T11-I1: set_404() alone is not a refusal. WP::handle_404() has
+        // already queued status_header(200) by the time a route answers, so
+        // outside a Pages route notFound() rendered 404.php at HTTP 200 (soft
+        // 404). core/Pages.php's own notFound() already writes all three
+        // lines; Response::notFound() must match it exactly.
+        $wpQuery = new class {
+            public bool $set = false;
+
+            public function set_404(): void
+            {
+                $this->set = true;
+            }
+        };
+        $GLOBALS['wp_query'] = $wpQuery;
+
+        Functions\expect('status_header')->once()->with(404);
+        Functions\expect('nocache_headers')->once();
+
+        $response = (new NTDST_Response())->notFound();
+
+        $this->assertTrue($wpQuery->set, 'notFound() must still call $wp_query->set_404().');
+        $this->assertSame(404, $response->getStatus());
     }
 
     // -----------------------------------------------------------------------

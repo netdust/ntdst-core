@@ -293,6 +293,10 @@ class NTDST_Pages
      * WordPress's own three lines (WP::handle_404()), because this runs after
      * that method already decided the request was fine: the flag alone would
      * leave a 200 on the wire.
+     *
+     * api/Response.php's NTDST_Response::notFound() writes the same three
+     * lines for the same reason (T11-I1); the two should converge on one home
+     * later rather than staying two hand-kept copies.
      */
     protected function notFound(): void
     {

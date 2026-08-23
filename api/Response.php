@@ -78,20 +78,30 @@ class NTDST_Response
      * It CALLS $wp_query->set_404() rather than recording a flag for somebody
      * else to honour: since 5.0.0 nothing downstream inspects this object, and
      * WP::handle_404() has already run by the time a route answers.
+     *
+     * T11-I1: set_404() alone left a soft 404 — WP::handle_404() has already
+     * queued status_header(200) by the time a route answers, so outside a
+     * Pages route the 404 template rendered at HTTP 200. This now writes the
+     * same three lines core/Pages.php's own notFound() writes. The two are
+     * one contract in two places; longer-term one should call the other, but
+     * that refactor is out of scope here.
      */
     public function notFound(): self
     {
         $this->status = 404;
 
-        // WordPress's own line, because the FLAG alone is not a refusal:
-        // WP::handle_404() has already decided the request was fine by the time
-        // a route answers, so a 404 nothing tells WordPress about leaves a 200
-        // on the wire. set_404() is the one call that says it (INV-6).
+        // WordPress's own three lines, because the FLAG alone is not a
+        // refusal: WP::handle_404() has already decided the request was fine
+        // by the time a route answers, so a 404 nothing tells WordPress about
+        // leaves a 200 on the wire (INV-6).
         global $wp_query;
 
         if (is_object($wp_query) && method_exists($wp_query, 'set_404')) {
             $wp_query->set_404();
         }
+
+        status_header(404);
+        nocache_headers();
 
         return $this;
     }
