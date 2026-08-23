@@ -279,7 +279,7 @@ A second copy here is the same defect this invariant is about: two lists of the
 same thing, free to disagree.
 
 **Status:** established by field-types Clusters A–C, re-pinned by core-trim T13.
-(A) 51 hits / (B) 1, all named; code holds at `<PIN>` — both commands were
+(A) 51 hits / (B) 1, all named; code holds at `3b41562` — both commands were
 re-run verbatim there. The count moved from 59 to 51 because core-trim DELETED
 code, not because the check was relaxed: `services/Logger.php` has no hit left
 (−8: five field declarations, one `orderby` value, two `url` payload keys) and
@@ -351,7 +351,7 @@ read-back of the merged config), `ntdst_container()` (its callers are the
 fleet's test tearDowns, and `tests/` is excluded by design) and `ntdst_inline()`
 (the unread half of a documented pair, and a deletion candidate recorded for
 `core-shape` rather than exempted silently).
-**Status:** established by core-trim Clusters B and C. Holds at `<PIN>` —
+**Status:** established by core-trim Clusters B and C. Holds at `3b41562` —
 stdout empty and exit 0, with all twelve consumer roots present and 28 advisory
 method candidates on stderr. The file and line totals the run prints are NOT
 recorded here: they move whenever a consumer repository does, and a status line
@@ -413,7 +413,7 @@ instance of itself, which guesses nothing.
 - **A `conditional` entry's condition must be a Closure or an array.** Anything
   else is refused. A string condition would be a callable name resolved at boot
   — the same guess, in a different key.
-**Status:** established by core-trim T01 (FR-1). Holds at `<PIN>` — the four
+**Status:** established by core-trim T01 (FR-1). Holds at `3b41562` — the four
 commands above were run verbatim and returned `0`/`0`, empty, one file, and the
 single gated `ntdst_set($class)`.
 
