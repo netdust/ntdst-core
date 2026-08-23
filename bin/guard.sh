@@ -114,7 +114,25 @@ fi
 #         All five are pinned bare and mirror PackageBootIntegrityTest's rows.
 #         That sweep also reads README.md and exempts its migration ROWS; this
 #         one greps *.php only, so it needs no exemption.
-REMOVED=$(grep -rnE "discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
+# v5.0.0 core-trim: the SECOND query API and the term helpers (FR-4).
+#         `getFormattedPosts` and its global front door
+#         `ntdst_get_formatted_posts` returned rows without naming a model, and
+#         therefore without the schema that says what the rows mean — a second
+#         read path beside the chain, which is the shape that already produced a
+#         gate-with-one, read-with-the-other bypass in this layer. The engine
+#         survives as a PRIVATE method of NTDST_Data_Model under a different
+#         name; `getPostTerms` was its public half. `attachTerms`, `syncTerms`
+#         and `detachTerms` wrapped one `wp_set_post_terms()` call each with
+#         zero readers on the fleet, and `whereDate` / `orWhere` restate
+#         `date_query` and a flat root-level OR `meta_query`.
+#         These eight are why the sweep exists rather than a reflection test:
+#         two live callers sat OUTSIDE api/Data.php when the names went —
+#         admin/RelationField.php's relation picker and services/Logger.php's
+#         clearOld() — and no test touched either, so both would have shipped
+#         as a call-time fatal with the suite green. All eight are pinned bare
+#         (none is a substring of another; `detachTerms` does not contain
+#         `attachTerms`) and mirror PackageBootIntegrityTest's rows exactly.
+REMOVED=$(grep -rnE "getFormattedPosts|ntdst_get_formatted_posts|getPostTerms|attachTerms|syncTerms|detachTerms|whereDate|orWhere|discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
     --include='*.php' . \
     | grep -v /vendor/ \
     | grep -vE "^(\./)?tests/|^(\./)?specs/" \

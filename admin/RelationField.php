@@ -130,7 +130,34 @@ final class NTDST_RelationField implements NTDST_Service_Meta
             $args['post_status'] = ['publish', 'inherit'];
         }
 
-        return ['results' => ntdst_get_formatted_posts($args)];
+        // The picker needs an id and a label and nothing else — metabox-fields.js
+        // reads `id` and `title` off each row and discards the rest.
+        //
+        // This used to call `ntdst_get_formatted_posts()`, the Data layer's
+        // second query API, which core-trim FR-4 removed: a global that returned
+        // rows without naming a model, and therefore without the schema that
+        // says what the rows mean. It also built a permalink, an excerpt and two
+        // thumbnail URLs for twenty rows on every keystroke, none of which ever
+        // reached the screen.
+        //
+        // The four defaults below are the ones that helper applied to this call,
+        // restated so the picker's result set does not change with its removal:
+        // `$args` is merged LAST because it already decides `post_status` for
+        // the attachment case above.
+        $query = new \WP_Query(array_merge([
+            'post_status'         => 'publish',
+            'orderby'             => 'date',
+            'order'               => 'DESC',
+            'ignore_sticky_posts' => true,
+        ], $args));
+
+        return ['results' => array_map(
+            static fn($post): array => [
+                'id'    => (int) $post->ID,
+                'title' => $post->post_title,
+            ],
+            $query->posts,
+        )];
     }
 
     /**

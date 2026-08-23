@@ -205,6 +205,41 @@ final class PackageBootIntegrityTest extends TestCase
             'getBootedServices' => ['getBootedServices', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
             'hasService' => ['hasService', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
             'isBooted' => ['isBooted', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            // v5.0.0 core-trim (FR-4) — the SECOND query API and the term
+            // helpers. `getFormattedPosts()` and its global front door
+            // `ntdst_get_formatted_posts()` answered "give me rows" without a
+            // model and therefore without a schema, beside the chain that
+            // answers it with one. Two read paths on one layer is the defect
+            // find()/getMeta() already produced here once: a consumer that
+            // gates with the path carrying the declaration and reads with the
+            // path that does not has a bypass, and neither call site looks
+            // wrong. The engine survives as the model's private business;
+            // `getPostTerms()` was its public half and goes with it.
+            //
+            // The three term writers wrapped one `wp_set_post_terms()` call
+            // each and had zero readers on the fleet, and `whereDate()`/
+            // `orWhere()` restate `date_query` and a flat root-level OR
+            // `meta_query` — arguments WordPress names better than the builder
+            // does, since the builder cannot express the nested groups an
+            // `orWhere()` caller usually means.
+            //
+            // These rows are what make the removal LOUD rather than silent.
+            // Two shipped callers were live when the rows landed — admin/
+            // RelationField.php's relation picker on the global, and
+            // services/Logger.php's clearOld() on whereDate() — and neither is
+            // covered by a test, so without this sweep both would have shipped
+            // as a fatal nobody's suite could see. Each name is its own word
+            // here: none is a substring of another (`detachTerms` does not
+            // contain `attachTerms`), and none appears in README or docs, so
+            // all eight are pinned bare with no exemption.
+            'getFormattedPosts' => ['getFormattedPosts', '5.0.0'],
+            'ntdst_get_formatted_posts' => ['ntdst_get_formatted_posts', '5.0.0'],
+            'getPostTerms' => ['getPostTerms', '5.0.0'],
+            'attachTerms' => ['attachTerms', '5.0.0'],
+            'syncTerms' => ['syncTerms', '5.0.0'],
+            'detachTerms' => ['detachTerms', '5.0.0'],
+            'whereDate' => ['whereDate', '5.0.0'],
+            'orWhere' => ['orWhere', '5.0.0'],
         ];
     }
 

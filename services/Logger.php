@@ -446,38 +446,14 @@ class NTDST_Logger
         }
     }
 
-    /**
-     * Clear old logs
-     * Uses Data.php for deletion
-     */
-    public function clearOld(int $days = 30): int
-    {
-        try {
-            $model = ntdst_data()->get('log_entry');
-
-            // Calculate cutoff date
-            $cutoff_date = date('Y-m-d', strtotime("-{$days} days"));
-
-            // Query old logs for this channel
-            $old_logs = $model->where('channel', $this->channel)
-                              ->whereDate('post_date', '<', $cutoff_date)
-                              ->get();
-
-            // Delete each log
-            $deleted = 0;
-            foreach ($old_logs as $log) {
-                $result = $model->delete($log->ID);
-                if (!is_wp_error($result)) {
-                    $deleted++;
-                }
-            }
-
-            return $deleted;
-        } catch (\Throwable $e) {
-            error_log('Logger clearOld() failed: ' . $e->getMessage());
-            return 0;
-        }
-    }
+    // clearOld() lived here. It was the one shipped caller of the model's
+    // whereDate(), which core-trim FR-4 removed with the rest of the second
+    // query API — so it is deleted HERE rather than left calling a method that
+    // no longer exists. It was already on FR-5's list (it is part of the
+    // database log half, along with the log_entry post type and recent()), it
+    // had no reader anywhere on the fleet, and no test covered it: a caller
+    // left behind would have fataled at call time with the whole suite green.
+    // T05 removes the rest of that half.
 }
 
 /**

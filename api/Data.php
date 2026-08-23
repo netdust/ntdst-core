@@ -787,7 +787,7 @@ class NTDST_Data_Model
             }
         }
 
-        $post->meta = NTDST_Data_Manager::getPostMeta($id);
+        $post->meta = $this->readPostMeta($id);
         $post->fields = $this->formatMeta($post->meta);
 
         return $post;
@@ -1273,141 +1273,6 @@ class NTDST_Data_Model
     }
 
     /**
-     * Query builder - date where clause
-     *
-     * @param string $column Date column (post_date, post_modified, etc.)
-     * @param string $compare Comparison operator (=, !=, >, >=, <, <=, BETWEEN, NOT BETWEEN)
-     * @param string|array $value Date value or array of dates for BETWEEN
-     * @return $this
-     *
-     * Example:
-     * $model->whereDate('post_date', '>=', '2024-01-01')->get();
-     * $model->whereDate('post_date', 'BETWEEN', ['2024-01-01', '2024-12-31'])->get();
-     */
-    public function whereDate(string $column = 'post_date', string $compare = '=', $value = null): self
-    {
-        if (!isset($this->query_args['date_query'])) {
-            $this->query_args['date_query'] = [];
-        }
-
-        if ($compare === 'BETWEEN' || $compare === 'NOT BETWEEN') {
-            $dates = is_array($value) ? $value : [$value, $value];
-            $this->query_args['date_query'][] = [
-                'column' => $column,
-                'after' => $dates[0],
-                'before' => $dates[1] ?? $dates[0],
-                'inclusive' => true,
-            ];
-        } else {
-            $this->query_args['date_query'][] = [
-                'column' => $column,
-                'compare' => $compare,
-                'value' => $value,
-            ];
-        }
-
-        return $this;
-    }
-
-    /**
-     * Query builder - OR where clause (starts a new OR relation)
-     *
-     * @return $this
-     *
-     * Note: this creates one flat root-level OR meta_query. It cannot express
-     * nested groups like A AND (B OR C); use a custom meta_query for those cases.
-     *
-     * Example:
-     * $model->where('featured', true)
-     * ->orWhere('price', ['<', 100])
-     * ->get();
-     */
-    public function orWhere(string $field, $value): self
-    {
-        if (!isset($this->query_args['meta_query'])) {
-            $this->query_args['meta_query'] = ['relation' => 'OR'];
-        } elseif (!isset($this->query_args['meta_query']['relation'])) {
-            // Convert existing queries to OR relation
-            $this->query_args['meta_query']['relation'] = 'OR';
-        }
-
-        $metaKey = $this->prefixMetaKey($field);
-        $this->query_args['meta_query'][] = is_array($value) && count($value) === 2
-            ? ['key' => $metaKey, 'value' => $value[1], 'compare' => $value[0]]
-            : ['key' => $metaKey, 'value' => $value];
-
-        return $this;
-    }
-
-    /**
-     * Attach taxonomy terms to a post
-     *
-     * @param int $post_id Post ID
-     * @param string $taxonomy Taxonomy name
-     * @param array $term_ids Array of term IDs
-     * @param bool $append Append to existing terms (true) or replace (false)
-     * @return bool|WP_Error
-     *
-     * Example:
-     * $model->attachTerms(123, 'category', [1, 2, 3]);
-     */
-    public function attachTerms(int $post_id, string $taxonomy, array $term_ids, bool $append = true)
-    {
-        $result = wp_set_post_terms($post_id, $term_ids, $taxonomy, $append);
-
-        if (is_wp_error($result)) {
-            return $result;
-        }
-
-        return true;
-    }
-
-    /**
-     * Sync taxonomy terms (replace all existing terms)
-     *
-     * @param int $post_id Post ID
-     * @param string $taxonomy Taxonomy name
-     * @param array $term_ids Array of term IDs
-     * @return bool|WP_Error
-     *
-     * Example:
-     * $model->syncTerms(123, 'category', [1, 2, 3]);
-     */
-    public function syncTerms(int $post_id, string $taxonomy, array $term_ids)
-    {
-        return $this->attachTerms($post_id, $taxonomy, $term_ids, false);
-    }
-
-    /**
-     * Detach taxonomy terms from a post
-     *
-     * @param int $post_id Post ID
-     * @param string $taxonomy Taxonomy name
-     * @param array $term_ids Array of term IDs to remove (empty array removes all)
-     * @return bool|WP_Error
-     *
-     * Example:
-     * $model->detachTerms(123, 'category', [1, 2]);
-     * $model->detachTerms(123, 'category', []); // Remove all
-     */
-    public function detachTerms(int $post_id, string $taxonomy, array $term_ids = [])
-    {
-        if (empty($term_ids)) {
-            $result = wp_set_post_terms($post_id, [], $taxonomy, false);
-        } else {
-            $existing = wp_get_post_terms($post_id, $taxonomy, ['fields' => 'ids']);
-            $remaining = array_diff($existing, $term_ids);
-            $result = wp_set_post_terms($post_id, $remaining, $taxonomy, false);
-        }
-
-        if (is_wp_error($result)) {
-            return $result;
-        }
-
-        return true;
-    }
-
-    /**
      * Include post meta in results
      *
      * @return self
@@ -1441,7 +1306,7 @@ class NTDST_Data_Model
     public function get(): array
     {
         try {
-            return $this->projectRowsMeta(NTDST_Data_Manager::getFormattedPosts(array_merge([
+            return $this->projectRowsMeta($this->queryRows(array_merge([
                 'post_type' => $this->post_type,
             ], $this->query_args)));
         } finally {
@@ -1454,8 +1319,8 @@ class NTDST_Data_Model
      *
      * THE MISSING HALF OF THE READ SURFACE. `formatMeta()` has always given
      * `find()` a projected shape under `->fields`; the query builder had NO
-     * projected form at all, only the raw bag `getFormattedPosts()` builds from
-     * `getPostMeta()`. So a service writing a list handler could not obtain a
+     * projected form at all, only the raw bag `queryRows()` builds from
+     * `readPostMeta()`. So a service writing a list handler could not obtain a
      * safe shape from `get()` — its only options were the raw bag, or
      * re-reading every row through `find()`.
      *
@@ -1558,7 +1423,7 @@ class NTDST_Data_Model
             $this->query_args['posts_per_page'] = $per_page;
             $this->query_args['offset'] = $offset;
 
-            $posts = $this->projectRowsMeta(NTDST_Data_Manager::getFormattedPosts(array_merge([
+            $posts = $this->projectRowsMeta($this->queryRows(array_merge([
                 'post_type' => $this->post_type,
             ], $this->query_args)));
 
@@ -1622,7 +1487,7 @@ class NTDST_Data_Model
         // `->meta` the PROJECTED set while find()'s `->meta` stays raw — a new
         // asymmetry between two methods documented as returning the same shape.
         // One cache read (already primed by the query above) buys exact parity.
-        $post->meta = NTDST_Data_Manager::getPostMeta($id);
+        $post->meta = $this->readPostMeta($id);
         $post->fields = $this->formatMeta($post->meta);
         if (isset($item['terms'])) {
             $post->terms = $item['terms'];
@@ -1737,6 +1602,246 @@ class NTDST_Data_Model
         $entry = NTDST_FieldTypes::get(NTDST_FieldTypes::declaredType($config));
 
         return ($entry->read ?? $entry->sanitize)($value, is_array($config) ? $config : []);
+    }
+
+    /**
+     * Read a post's meta as a flat key => value map.
+     *
+     * Prefers core's `post_meta` cache — primed by `WP_Query` on any read and
+     * invalidated by core on any write — and falls back to one SQL statement
+     * when it is cold. The layer stores nothing of its own either way (T04).
+     *
+     * @param int $post_id Post ID
+     * @return array Post meta data
+     */
+    private function readPostMeta(int $post_id): array
+    {
+        $wp_cached = wp_cache_get($post_id, 'post_meta');
+        if ($wp_cached !== false && is_array($wp_cached)) {
+            $meta = [];
+            foreach ($wp_cached as $meta_key => $values) {
+                // WordPress stores meta as array of values, we want single value
+                $meta[$meta_key] = maybe_unserialize($values[0] ?? $values);
+            }
+
+            return $meta;
+        }
+
+        global $wpdb;
+        $results = $wpdb->get_results($wpdb->prepare(
+            "SELECT meta_key, meta_value FROM {$wpdb->postmeta} WHERE post_id = %d",
+            $post_id,
+        ));
+
+        $meta = [];
+        foreach ($results as $row) {
+            $meta[$row->meta_key] = maybe_unserialize($row->meta_value);
+        }
+
+        return $meta;
+    }
+
+    /**
+     * Read a post's terms, grouped by taxonomy and reduced to id/name/slug.
+     *
+     * Prefers core's `{$taxonomy}_relationships` cache — primed by `WP_Query`
+     * and invalidated by core on any term write — and falls back to one SQL
+     * statement when it is cold. Stores nothing of its own (T04).
+     *
+     * @param int $post_id Post ID
+     * @param string $post_type Post type for taxonomy lookup
+     * @return array Post terms grouped by taxonomy
+     */
+    private function readPostTerms(int $post_id, string $post_type): array
+    {
+        $taxonomies = get_object_taxonomies($post_type);
+        $terms = [];
+
+        foreach ($taxonomies as $taxonomy) {
+            $wp_cached = wp_cache_get($post_id, "{$taxonomy}_relationships");
+            if ($wp_cached !== false && is_array($wp_cached)) {
+                foreach ($wp_cached as $term) {
+                    if (!is_object($term)) {
+                        $term = get_term((int) $term, $taxonomy);
+                    }
+
+                    if (is_object($term) && !is_wp_error($term)) {
+                        $terms[$taxonomy][] = [
+                            'id'   => (int) $term->term_id,
+                            'name' => $term->name,
+                            'slug' => $term->slug,
+                        ];
+                    }
+                }
+            }
+        }
+
+        if (!empty($terms)) {
+            return $terms;
+        }
+
+        global $wpdb;
+        $results = $wpdb->get_results($wpdb->prepare(
+            "SELECT t.term_id, t.name, t.slug, tt.taxonomy
+             FROM {$wpdb->term_relationships} tr
+             INNER JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
+             INNER JOIN {$wpdb->terms} t ON tt.term_id = t.term_id
+             WHERE tr.object_id = %d",
+            $post_id,
+        ));
+
+        $terms = [];
+        foreach ($results as $term) {
+            $terms[$term->taxonomy][] = [
+                'id'   => (int) $term->term_id,
+                'name' => $term->name,
+                'slug' => $term->slug,
+            ];
+        }
+
+        return $terms;
+    }
+
+    /**
+     * Run a WP_Query with core's defaults and format the rows.
+     *
+     * That is the whole job, and the name says so (core-shape T04 renamed this
+     * from `getPostsFast()`, which advertised a speed property it did not have
+     * — the priming it did was itself the cost, and it is gone).
+     *
+     * PRIVATE, AND THAT IS THE POINT (core-trim FR-4). This was
+     * `NTDST_Data_Manager::getFormattedPosts()`, a public static with a global
+     * front door, so any caller could obtain rows without naming a model —
+     * and therefore without the schema that says what the rows mean. The chain
+     * is the one way in now, and it enters here after the builder has
+     * assembled the arguments and before `projectRowsMeta()` reads the bag
+     * back through the declaration.
+     *
+     * The only defaults set here are the SHAPE of the answer: which type,
+     * which status, how many, what order. Everything WordPress decides about
+     * priming, counting and caching, WordPress keeps deciding — a caller who
+     * wants `no_found_rows` or a warm thumbnail cache asks for it here, at a
+     * call site that can justify it.
+     *
+     * @param array $args Query arguments (WP_Query compatible)
+     * @return array Array of post data
+     */
+    private function queryRows(array $args = []): array
+    {
+        // Extract custom args
+        $include_meta = (bool) ($args['include_meta'] ?? false);
+        $include_terms = (bool) ($args['include_terms'] ?? false);
+
+        // Remove custom args so WP_Query doesn't get confused
+        unset($args['include_meta'], $args['include_terms']);
+
+        // Set defaults
+        $defaults = [
+            'post_type' => 'post',
+            'post_status' => 'publish',
+            'posts_per_page' => 10,
+            'orderby' => 'date',
+            'order' => 'DESC',
+            'ignore_sticky_posts' => true, // Skip sticky posts logic
+            'fields' => '', // Get all fields (important!)
+        ];
+
+        $args = wp_parse_args($args, $defaults);
+
+        // CRITICAL FIX: Convert 'p' parameter to 'post__in' for non-public post types
+        // WP_Query with 'p' parameter has issues with non-public/non-publicly-queryable post types
+        if (isset($args['p']) && $args['p']) {
+            $args['post__in'] = [(int) $args['p']];
+            $args['posts_per_page'] = 1;
+            unset($args['p']);
+        }
+
+        // WP_Query primes the post, meta and term caches for this result set
+        // itself — its `update_post_meta_cache` / `update_post_term_cache`
+        // defaults are TRUE, and T04 stopped overriding them. Nothing is
+        // primed here on top of that.
+        //
+        // The thumbnail prime is gone with them. Core does not prime thumbnails
+        // by default; a consumer that needs it calls
+        // `update_post_thumbnail_cache()` itself. So is the author prime, which
+        // ran `get_users(['include' => $author_ids])` unconditionally — for
+        // rows with `post_author = 0` that is `WHERE ID IN (0)`, a statement
+        // per read that can never return anything. `get_the_author_meta()`
+        // below reads core's user cache and answers the same question.
+        $query = new WP_Query($args);
+        $raw_posts = $query->posts;
+
+        if (empty($raw_posts)) {
+            return [];
+        }
+
+        // Format results
+        $posts = [];
+        foreach ($raw_posts as $post) {
+            // A post password is enforced by WordPress at the DISPLAY layer —
+            // `the_content` swaps the body for `get_the_password_form()` when
+            // `post_password_required()` says so. `WP_Query` returns the row
+            // either way, so a projection that reads `post_content` off the
+            // row publishes precisely what the password withholds. Reproduced
+            // anonymously over the wire on 2026-08-07 before this line existed.
+            //
+            // The two predicates are core's own and are deliberately different:
+            // the REDACTION asks whether THIS viewer has supplied the password
+            // (so a reader who has stays served), while the `protected` MARKER
+            // states whether the post has one at all. Both are copied from
+            // `WP_REST_Posts_Controller::prepare_item_for_response()` rather
+            // than reasoned out again here — the layer's job is to ask
+            // WordPress its question, not to re-derive the answer.
+            $requires_password = post_password_required($post);
+
+            $post_data = [
+                'id' => (int) $post->ID,
+                'title' => $post->post_title,
+                // Fallback excerpt generation. Withheld with the body it trims:
+                // an excerpt derived from protected content leaks the same text.
+                'excerpt' => $requires_password
+                    ? ''
+                    : ($post->post_excerpt ?: wp_trim_words(strip_tags($post->post_content), 55)),
+                'content' => $requires_password ? '' : $post->post_content,
+                'protected' => (bool) $post->post_password,
+                'permalink' => get_permalink($post->ID),
+                'slug' => $post->post_name,
+                // ISO 8601 date format for consistency
+                'date' => mysql2date('c', $post->post_date),
+                'modified' => mysql2date('c', $post->post_modified),
+                'author' => [
+                    'id' => (int) $post->post_author,
+                    'name' => get_the_author_meta('display_name', $post->post_author),
+                ],
+            ];
+
+            $thumbnail_id = get_post_thumbnail_id($post->ID);
+            if ($thumbnail_id) {
+                $post_data['thumbnail'] = [
+                    'id' => $thumbnail_id,
+                    'url' => wp_get_attachment_image_url($thumbnail_id, 'medium'),
+                    'full' => wp_get_attachment_image_url($thumbnail_id, 'full'),
+                ];
+            } else {
+                $post_data['thumbnail'] = null;
+            }
+
+            // Include post meta if requested (served from core's primed cache)
+            if ($include_meta) {
+                $post_data['meta'] = $this->readPostMeta($post->ID);
+            }
+
+            // Include taxonomy terms if requested (served from core's primed cache).
+            // Keyed off the ROW's own type, not the query's: `post_type` may be
+            // an array, and readPostTerms() takes one type.
+            if ($include_terms) {
+                $post_data['terms'] = $this->readPostTerms($post->ID, $post->post_type);
+            }
+
+            $posts[] = $post_data;
+        }
+
+        return $posts;
     }
 }
 
@@ -2061,238 +2166,6 @@ class NTDST_Data_Manager
     {
         return isset(self::$models[$name]);
     }
-
-    /**
-     * Read a post's meta as a flat key => value map.
-     *
-     * Prefers core's `post_meta` cache — primed by `WP_Query` on any read and
-     * invalidated by core on any write — and falls back to one SQL statement
-     * when it is cold. The layer stores nothing of its own either way (T04).
-     *
-     * @param int $post_id Post ID
-     * @return array Post meta data
-     */
-    public static function getPostMeta(int $post_id): array
-    {
-        $wp_cached = wp_cache_get($post_id, 'post_meta');
-        if ($wp_cached !== false && is_array($wp_cached)) {
-            $meta = [];
-            foreach ($wp_cached as $meta_key => $values) {
-                // WordPress stores meta as array of values, we want single value
-                $meta[$meta_key] = maybe_unserialize($values[0] ?? $values);
-            }
-
-            return $meta;
-        }
-
-        global $wpdb;
-        $results = $wpdb->get_results($wpdb->prepare(
-            "SELECT meta_key, meta_value FROM {$wpdb->postmeta} WHERE post_id = %d",
-            $post_id,
-        ));
-
-        $meta = [];
-        foreach ($results as $row) {
-            $meta[$row->meta_key] = maybe_unserialize($row->meta_value);
-        }
-
-        return $meta;
-    }
-
-    /**
-     * Read a post's terms, grouped by taxonomy and reduced to id/name/slug.
-     *
-     * Prefers core's `{$taxonomy}_relationships` cache — primed by `WP_Query`
-     * and invalidated by core on any term write — and falls back to one SQL
-     * statement when it is cold. Stores nothing of its own (T04).
-     *
-     * @param int $post_id Post ID
-     * @param string $post_type Post type for taxonomy lookup
-     * @return array Post terms grouped by taxonomy
-     */
-    public static function getPostTerms(int $post_id, string $post_type): array
-    {
-        $taxonomies = get_object_taxonomies($post_type);
-        $terms = [];
-
-        foreach ($taxonomies as $taxonomy) {
-            $wp_cached = wp_cache_get($post_id, "{$taxonomy}_relationships");
-            if ($wp_cached !== false && is_array($wp_cached)) {
-                foreach ($wp_cached as $term) {
-                    if (!is_object($term)) {
-                        $term = get_term((int) $term, $taxonomy);
-                    }
-
-                    if (is_object($term) && !is_wp_error($term)) {
-                        $terms[$taxonomy][] = [
-                            'id'   => (int) $term->term_id,
-                            'name' => $term->name,
-                            'slug' => $term->slug,
-                        ];
-                    }
-                }
-            }
-        }
-
-        if (!empty($terms)) {
-            return $terms;
-        }
-
-        global $wpdb;
-        $results = $wpdb->get_results($wpdb->prepare(
-            "SELECT t.term_id, t.name, t.slug, tt.taxonomy
-             FROM {$wpdb->term_relationships} tr
-             INNER JOIN {$wpdb->term_taxonomy} tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
-             INNER JOIN {$wpdb->terms} t ON tt.term_id = t.term_id
-             WHERE tr.object_id = %d",
-            $post_id,
-        ));
-
-        $terms = [];
-        foreach ($results as $term) {
-            $terms[$term->taxonomy][] = [
-                'id'   => (int) $term->term_id,
-                'name' => $term->name,
-                'slug' => $term->slug,
-            ];
-        }
-
-        return $terms;
-    }
-
-    /**
-     * Run a WP_Query with core's defaults and format the rows.
-     *
-     * That is the whole job, and the name says so (T04 renamed this from
-     * `getPostsFast()`, which advertised a speed property it did not have —
-     * the priming it did was itself the cost, and it is gone).
-     *
-     * The only defaults set here are the SHAPE of the answer: which type,
-     * which status, how many, what order. Everything WordPress decides about
-     * priming, counting and caching, WordPress keeps deciding — a caller who
-     * wants `no_found_rows` or a warm thumbnail cache asks for it here, at a
-     * call site that can justify it.
-     *
-     * @param array $args Query arguments (WP_Query compatible)
-     * @return array Array of post data
-     */
-    public static function getFormattedPosts(array $args = []): array
-    {
-        // Extract custom args
-        $include_meta = (bool) ($args['include_meta'] ?? false);
-        $include_terms = (bool) ($args['include_terms'] ?? false);
-
-        // Remove custom args so WP_Query doesn't get confused
-        unset($args['include_meta'], $args['include_terms']);
-
-        // Set defaults
-        $defaults = [
-            'post_type' => 'post',
-            'post_status' => 'publish',
-            'posts_per_page' => 10,
-            'orderby' => 'date',
-            'order' => 'DESC',
-            'ignore_sticky_posts' => true, // Skip sticky posts logic
-            'fields' => '', // Get all fields (important!)
-        ];
-
-        $args = wp_parse_args($args, $defaults);
-
-        // CRITICAL FIX: Convert 'p' parameter to 'post__in' for non-public post types
-        // WP_Query with 'p' parameter has issues with non-public/non-publicly-queryable post types
-        if (isset($args['p']) && $args['p']) {
-            $args['post__in'] = [(int) $args['p']];
-            $args['posts_per_page'] = 1;
-            unset($args['p']);
-        }
-
-        // WP_Query primes the post, meta and term caches for this result set
-        // itself — its `update_post_meta_cache` / `update_post_term_cache`
-        // defaults are TRUE, and T04 stopped overriding them. Nothing is
-        // primed here on top of that.
-        //
-        // The thumbnail prime is gone with them. Core does not prime thumbnails
-        // by default; a consumer that needs it calls
-        // `update_post_thumbnail_cache()` itself. So is the author prime, which
-        // ran `get_users(['include' => $author_ids])` unconditionally — for
-        // rows with `post_author = 0` that is `WHERE ID IN (0)`, a statement
-        // per read that can never return anything. `get_the_author_meta()`
-        // below reads core's user cache and answers the same question.
-        $query = new WP_Query($args);
-        $raw_posts = $query->posts;
-
-        if (empty($raw_posts)) {
-            return [];
-        }
-
-        // Format results
-        $posts = [];
-        foreach ($raw_posts as $post) {
-            // A post password is enforced by WordPress at the DISPLAY layer —
-            // `the_content` swaps the body for `get_the_password_form()` when
-            // `post_password_required()` says so. `WP_Query` returns the row
-            // either way, so a projection that reads `post_content` off the
-            // row publishes precisely what the password withholds. Reproduced
-            // anonymously over the wire on 2026-08-07 before this line existed.
-            //
-            // The two predicates are core's own and are deliberately different:
-            // the REDACTION asks whether THIS viewer has supplied the password
-            // (so a reader who has stays served), while the `protected` MARKER
-            // states whether the post has one at all. Both are copied from
-            // `WP_REST_Posts_Controller::prepare_item_for_response()` rather
-            // than reasoned out again here — the layer's job is to ask
-            // WordPress its question, not to re-derive the answer.
-            $requires_password = post_password_required($post);
-
-            $post_data = [
-                'id' => (int) $post->ID,
-                'title' => $post->post_title,
-                // Fallback excerpt generation. Withheld with the body it trims:
-                // an excerpt derived from protected content leaks the same text.
-                'excerpt' => $requires_password
-                    ? ''
-                    : ($post->post_excerpt ?: wp_trim_words(strip_tags($post->post_content), 55)),
-                'content' => $requires_password ? '' : $post->post_content,
-                'protected' => (bool) $post->post_password,
-                'permalink' => get_permalink($post->ID),
-                'slug' => $post->post_name,
-                // ISO 8601 date format for consistency
-                'date' => mysql2date('c', $post->post_date),
-                'modified' => mysql2date('c', $post->post_modified),
-                'author' => [
-                    'id' => (int) $post->post_author,
-                    'name' => get_the_author_meta('display_name', $post->post_author),
-                ],
-            ];
-
-            $thumbnail_id = get_post_thumbnail_id($post->ID);
-            if ($thumbnail_id) {
-                $post_data['thumbnail'] = [
-                    'id' => $thumbnail_id,
-                    'url' => wp_get_attachment_image_url($thumbnail_id, 'medium'),
-                    'full' => wp_get_attachment_image_url($thumbnail_id, 'full'),
-                ];
-            } else {
-                $post_data['thumbnail'] = null;
-            }
-
-            // Include post meta if requested (served from core's primed cache)
-            if ($include_meta) {
-                $post_data['meta'] = self::getPostMeta($post->ID);
-            }
-
-            // Include taxonomy terms if requested (served from core's primed cache).
-            // Keyed off the ROW's own type, not the query's: `post_type` may be
-            // an array, and getPostTerms() takes one type.
-            if ($include_terms) {
-                $post_data['terms'] = self::getPostTerms($post->ID, $post->post_type);
-            }
-
-            $posts[] = $post_data;
-        }
-
-        return $posts;
-    }
 }
 
 /**
@@ -2304,13 +2177,3 @@ function ntdst_data(): NTDST_Data_Manager
     return $manager ??= new NTDST_Data_Manager();
 }
 
-/**
- * Global helper - run a WP_Query with core's defaults and format the rows
- *
- * @param array $args Query arguments
- * @return array Array of post data
- */
-function ntdst_get_formatted_posts(array $args = []): array
-{
-    return NTDST_Data_Manager::getFormattedPosts($args);
-}
