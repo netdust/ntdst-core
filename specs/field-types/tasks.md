@@ -68,13 +68,13 @@ Behaviour: a metabox save of a Data model reaches the model unsanitized and is s
 Observable: on daan's edit screen for gig 297050 every declared field renders its FR-2 control (the `html` field shows the editor) and `ddev exec wp post meta get 297050 venue_city` after a save through the screen equals the typed value, stripped of tags, once.
 RED until: tests/Unit/MetaboxGeneratorSaveTest.php
 
-- [ ] T05 — save path: sanitize_field() and its nested switch go; Data models sanitize once; non-Data post types use the registry [Tier A]  (files: admin/MetaboxGenerator.php, tests/Unit/MetaboxGeneratorSaveTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
+- [x] T05 — save path: sanitize_field() and its nested switch go; Data models sanitize once; non-Data post types use the registry [Tier A]  (files: admin/MetaboxGenerator.php, tests/Unit/MetaboxGeneratorSaveTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
   Satisfies: FR-6, SC-4
   Test-author: split
   Proven by: new test
   Unit test: with `wp_verify_nonce`, `current_user_can`, `wp_unslash`, `update_post_meta`, `get_post_meta` stubbed and `ntdst_data()` returning a manager with a model whose sanitizer is a counting spy, `save_metabox_data()` for that model's post type with `$_POST['ntdst_fields'] = ['venue_city' => '  <b>x</b>  ']` calls the model's `update()` once with the unslashed value unchanged (`'  <b>x</b>  '`) and the spy counts exactly 1 invocation per submitted field and 0 for a field the model does not declare; for a post type with a metabox but no model, `update_post_meta()` receives the registry-sanitized value (`"false"` → `false` for `bool`; `'<b>x</b>'` → `'x'` for `text`; a repeater row's `html` cell cannot exist — the type was refused at registration) and the registry sanitizer is invoked exactly once per field; a `relation` field absent from `$_POST` is stored as `[]` (today's rule); a repeater row whose only filled cell is `0` or `false` is KEPT (the metabox's `!== '' && !== null` rule survives; `array_filter()`'s drop-falsy rule does not — ruled at the Cluster A gate); `ReflectionClass(NTDST_MetaboxGenerator)` has no `sanitize_field`; the unslash/sanitize loop runs INSIDE the save's `try` so a sanitizer throw surfaces as the existing save-error notice, never a white screen with all meta lost; `bin/guard.sh` + the provider gain `sanitize_field(`.
 
-- [ ] T06 — one renderer: render_control(control, …, inCell) keyed by the registry; the two switches go; unknown control is a LogicException [Tier A]  (files: admin/MetaboxGenerator.php, tests/Unit/MetaboxGeneratorRenderTest.php)
+- [x] T06 — one renderer: render_control(control, …, inCell) keyed by the registry; the two switches go; unknown control is a LogicException [Tier A]  (files: admin/MetaboxGenerator.php, tests/Unit/MetaboxGeneratorRenderTest.php)
   Satisfies: FR-7
   Test-author: solo — rendering, no authorization semantics; the denial path (`LogicException`) is pinned
   Proven by: new test
