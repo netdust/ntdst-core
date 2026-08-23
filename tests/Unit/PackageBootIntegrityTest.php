@@ -172,6 +172,49 @@ final class PackageBootIntegrityTest extends TestCase
             'commitOk' => ['commitOk', '5.0.0'],
             'renderResponse' => ['renderResponse', '5.0.0'],
             'preventRedirectForRoutes' => ['preventRedirectForRoutes', '5.0.0'],
+            // v5.0.0 core-shape (FR-11 / INV-5, INV-6) — Response keeps only
+            // what WordPress has no word for.
+            //
+            // jsonPayload() built the `{success, error}` body wp_send_json_error()
+            // already spells. renderError() and getErrorHtml() echoed a red
+            // core-styled <div> — markup no theme could reach — and exit()ed
+            // from wherever they were called. commitRenderStatus() cleared the
+            // `is_404` WordPress had just set, and was the LAST such write in
+            // the package. getMimeType() and registerMimeType() read and wrote
+            // a 19-row copy of wp_get_mime_types(), three rows of which already
+            // disagreed with WordPress's own values.
+            //
+            // ntdst_redirect() was the THIRD redirect wrapper in core, and the
+            // only one with nothing of its own to say: wp_safe_redirect($url);
+            // exit;. Response::redirect() survives because it carries the
+            // ?error= contract across the hop.
+            //
+            // `$mimeTypes` is pinned WITH ITS DOLLAR, the way `$surface` is,
+            // and that is load-bearing: mimeTypes() SURVIVES as the
+            // `mime_types` filter callback adding the four types WordPress's
+            // table lacks (json, xml, vcf, svg), so a bare row would fire on
+            // the convergence point itself. migrationName() trims the sigil, so
+            // README answers for it under the name an adopter greps.
+            //
+            // `json`, `render` and `addPath` get no row and cannot: the first
+            // two are words this codebase and README write constantly, and
+            // addPath names a LIVE method of NTDST_Template_Loader. All three
+            // are pinned where a method can actually come back —
+            // bin/guard.sh's METHOD_PINS["api/Response.php"] — which is also
+            // the check that runs on a fresh checkout with no vendor/.
+            //
+            // getCustomPaths() is the T11 carry from the Cluster 4a simplicity
+            // review: a read-only copy of the loader's registry, zero readers
+            // on the fleet. Bare here, per-file in guard.sh, README row below.
+            'jsonPayload' => ['jsonPayload', '5.0.0'],
+            'renderError' => ['renderError', '5.0.0'],
+            'getErrorHtml' => ['getErrorHtml', '5.0.0'],
+            'commitRenderStatus' => ['commitRenderStatus', '5.0.0'],
+            'getMimeType' => ['getMimeType', '5.0.0'],
+            'registerMimeType' => ['registerMimeType', '5.0.0'],
+            'ntdst_redirect' => ['ntdst_redirect', '5.0.0'],
+            'Response $mimeTypes' => ['$mimeTypes', '5.0.0'],
+            'getCustomPaths' => ['getCustomPaths', '5.0.0'],
             // v5.0.0 core-trim (FR-1, INV-10) — Bootstrap's service scanner and
             // the two config keys that armed it. The scanner globbed
             // `*Service.php` under `services.discovery_paths`, `require_once`d

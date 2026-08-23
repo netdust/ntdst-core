@@ -17,6 +17,7 @@
 defined('ABSPATH') || exit; // direct web hit: ABSPATH undefined → exit; the bootstrap defines it under phpunit
 
 use Brain\Monkey;
+use Brain\Monkey\Functions;
 use Mockery\Adapter\Phpunit\MockeryPHPUnitIntegration;
 use PHPUnit\Framework\TestCase;
 
@@ -30,6 +31,34 @@ final class DownloadHeadersTest extends TestCase
     {
         parent::setUp();
         Monkey\setUp();
+
+        // T11: the type comes from WordPress's table and nosniff goes out
+        // through WordPress's emitter, so both are stubbed here — the table
+        // with WordPress's own rows (alternation keys and all), and the check
+        // with WordPress's own algorithm, so this file asserts on the policy
+        // and not on an approximation of WordPress.
+        $GLOBALS['_ntdst_test_nosniff'] = 0;
+        Functions\when('send_nosniff_header')->alias(static function (): void {
+            $GLOBALS['_ntdst_test_nosniff']++;
+        });
+        Functions\when('wp_get_mime_types')->alias(static fn (): array => NTDST_Response::mimeTypes([
+            'jpg|jpeg|jpe' => 'image/jpeg',
+            'png' => 'image/png',
+            'pdf' => 'application/pdf',
+            'zip' => 'application/zip',
+            'csv' => 'text/csv',
+            'txt|asc|c|cc|h|srt' => 'text/plain',
+            'ics' => 'text/calendar',
+        ]));
+        Functions\when('wp_check_filetype')->alias(static function (string $filename, $mimes = null): array {
+            foreach (($mimes ?: wp_get_mime_types()) as $exts => $type) {
+                if (preg_match('!\.(' . $exts . ')$!i', $filename, $m) === 1) {
+                    return ['ext' => strtolower($m[1]), 'type' => $type];
+                }
+            }
+
+            return ['ext' => false, 'type' => false];
+        });
     }
 
     protected function tearDown(): void
@@ -64,7 +93,13 @@ final class DownloadHeadersTest extends TestCase
         // The header a hand-rolled block forgets. A body whose bytes look like
         // HTML or SVG must never be sniffed into executing markup in the site
         // origin — and an archive of user-supplied assets is exactly that risk.
-        $this->assertSame('nosniff', $this->headers(10, 'kit.zip')['x-content-type-options']);
+        //
+        // Since T11 it is SENT rather than returned: WordPress's own
+        // send_nosniff_header() fires inside downloadHeaders(), so a streaming
+        // caller that emits only some of the returned lines still cannot drop
+        // it. The wire is unchanged; the way it cannot be lost is stronger.
+        $this->assertArrayNotHasKey('x-content-type-options', $this->headers(10, 'kit.zip'));
+        $this->assertSame(1, $GLOBALS['_ntdst_test_nosniff'], 'send_nosniff_header() must fire exactly once.');
     }
 
     public function testBothFilenameFormsAreSent(): void

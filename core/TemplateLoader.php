@@ -36,11 +36,6 @@ final class NTDST_Template_Loader
         self::$custom_paths[] = rtrim($path, '/');
     }
 
-    public static function getCustomPaths(): array
-    {
-        return self::$custom_paths;
-    }
-
     /**
      * Serve a WordPress-rendered page from a route.
      *

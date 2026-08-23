@@ -218,6 +218,21 @@ fi
 #         PHP because ntdst-core.php used to PRINT it (`window.ntdstAPIConfig`)
 #         from an inline script; the JS file itself is gone, so there is no
 #         *.js half left to sweep.
+# v5.0.0 core-shape: Response keeps only what WordPress has no word for
+#         (FR-11 / INV-5). Two rows here, and the eight retired METHODS go to
+#         METHOD_PINS instead — see that table for why.
+#         `ntdst_redirect` was wp_safe_redirect() plus an exit, spelled a third
+#         time (Response::redirect() and Pages::redirect() were the other two);
+#         it is pinned BARE because nothing else in shipped PHP contains the
+#         word, and README is out of scope here (*.php only).
+#         `$mimeTypes` was a 19-row copy of a table WordPress keeps as
+#         wp_get_mime_types(), read through getMimeType() — three rows of it
+#         (csv, txt, ics) already disagreed with WordPress's own values. It is
+#         pinned WITH THE DOLLAR, the way `$surface` is, and that is load-
+#         bearing: `mimeTypes()` SURVIVES as the `mime_types` filter callback
+#         that adds the four types WordPress lacks, so a bare `mimeTypes` row
+#         would fire on the convergence point itself.
+#
 # The two families are named separately because the retired-TYPE one is the
 # only one whose names collide with WordPress's own vocabulary: a REST route
 # declares ['type' => 'string', 'required' => true], which is JSON Schema and
@@ -233,7 +248,7 @@ fi
 # on a line of its own is indistinguishable from the retired declaration.
 # Mirrors PackageBootIntegrityTest::REST_ARG_SCHEMA_LINE; the shapes are the
 # contract, not the file they were found in.
-REMOVED_SYMBOLS="NTDST_Mailer|ntdst_mail|ntdst_send_mail|ntdst_send_queued_mail|ntdst_notify|ntdst_notification|ntdst_wrap_email_in_layout|ntdst_wrap_all_emails|ntdst_email_layout_paths|NTDST_Scheduler|ntdst_scheduler|ntdst_schedule_recurring|ntdst_clear_recurring|ntdst_model_create_before|ntdst_model_create_after|ntdst_model_update_before|ntdst_model_update_after|ntdst_model_delete_before|ntdst_model_delete_after|log_entry|ntdst_log_database_enabled|addHandler|removeHandler|setMinLevel|setBatchingEnabled|ntdst_log_debug|ntdst_log_info|ntdst_log_error|getFormattedPosts|ntdst_get_formatted_posts|ntdst_make|callableReflections|wireMixins|templatePath|getPostMeta|getPostTerms|attachTerms|syncTerms|detachTerms|whereDate|orWhere|discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|NTDST_Actions|ntdst_actions|ntdst_enqueue_api_client|ntdstAPI|get_nonce|ntdst/api_data|ntdst/api/public_actions"
+REMOVED_SYMBOLS="NTDST_Mailer|ntdst_mail|ntdst_send_mail|ntdst_send_queued_mail|ntdst_notify|ntdst_notification|ntdst_wrap_email_in_layout|ntdst_wrap_all_emails|ntdst_email_layout_paths|NTDST_Scheduler|ntdst_scheduler|ntdst_schedule_recurring|ntdst_clear_recurring|ntdst_model_create_before|ntdst_model_create_after|ntdst_model_update_before|ntdst_model_update_after|ntdst_model_delete_before|ntdst_model_delete_after|log_entry|ntdst_log_database_enabled|addHandler|removeHandler|setMinLevel|setBatchingEnabled|ntdst_log_debug|ntdst_log_info|ntdst_log_error|getFormattedPosts|ntdst_get_formatted_posts|ntdst_make|callableReflections|wireMixins|templatePath|getPostMeta|getPostTerms|attachTerms|syncTerms|detachTerms|whereDate|orWhere|discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|NTDST_Actions|ntdst_actions|ntdst_enqueue_api_client|ntdstAPI|get_nonce|ntdst/api_data|ntdst/api/public_actions|ntdst_redirect|\\\$mimeTypes"
 RETIRED_TYPES="'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'"
 REST_ARG_SCHEMA_LINE="'type' *=> *'[a-z_]+'.*'(sanitize_callback|validate_callback|items|enum)' *=>|'(sanitize_callback|validate_callback|items|enum)' *=>.*'type' *=> *'[a-z_]+'"
 
@@ -314,7 +329,25 @@ declare -A METHOD_PINS=(
     # A method can only come back where it is DECLARED, and that is here.
     # PackageBootIntegrityTest pins all four as bare provider rows, which is
     # the sweep that also answers for README.
-    ["api/Response.php"]="apiSuccess apiError apiSuccessResponse apiErrorResponse addPath"
+    #
+    # FR-11 / SC-6 (core-shape T11): the eight OTHER retirements from this file.
+    # json()/jsonPayload() built a `{success, error|data}` envelope
+    # wp_send_json_success()/wp_send_json_error() already spell; render(),
+    # renderError() and getErrorHtml() echoed a template (or a red core-styled
+    # <div>) and exit()ed, which is the contract INV-6 removed — a callback
+    # returns a PATH; commitRenderStatus() cleared the `is_404` WordPress had
+    # just set, and was the LAST such write in the package; getMimeType() and
+    # registerMimeType() read and wrote the deleted table.
+    #
+    # Here and not as bare provider rows, for the reason the container's five
+    # are: `json`, `render` and `addPath` are ordinary words this codebase and
+    # README write constantly, and `addPath` names a SURVIVOR in another file
+    # (NTDST_Template_Loader::addPath()). A method can only come back where it
+    # is DECLARED. The five distinctive ones (jsonPayload, renderError,
+    # getErrorHtml, commitRenderStatus, getMimeType, registerMimeType) sit in
+    # BOTH homes on purpose: this line fails on a fresh checkout with no
+    # vendor/, the provider's rows fail on a README that never told the adopter.
+    ["api/Response.php"]="apiSuccess apiError apiSuccessResponse apiErrorResponse addPath json render renderError getErrorHtml commitRenderStatus getMimeType registerMimeType"
 
     # FR-10 / INV-5: the loader picks from WordPress's candidate list and
     # writes no list of its own. templateInclude() hand-listed
@@ -333,7 +366,12 @@ declare -A METHOD_PINS=(
     # package-wide sweep on the bare word would fire on the survivor. A
     # per-file declaration pin says exactly what is true: Response declares no
     # addPath, the loader does.
-    ["core/TemplateLoader.php"]="templateInclude"
+    # `getCustomPaths` joins it as the T11 carry (Cluster 4a simplicity
+    # review): a read-only copy of $custom_paths with zero readers on the
+    # fleet — the same shape FR-2 removed from Bootstrap, and the same reason
+    # it is pinned per-file rather than bare (README's migration row spells it,
+    # and the sweep here reads *.php only).
+    ["core/TemplateLoader.php"]="templateInclude getCustomPaths"
 
     # FR-9 / INV-6: a page URL is a WordPress rewrite rule, so the router has
     # nothing left to fight. handleTemplateInclude() re-matched REQUEST_URI

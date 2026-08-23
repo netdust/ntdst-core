@@ -3,8 +3,19 @@
 declare(strict_types=1);
 
 /**
- * NTDST Response - Fast template rendering
- * JSON, HTML, or file download output with WordPress template hierarchy integration
+ * NTDST Response — what WordPress has no word for.
+ *
+ * Three things, and nothing else: the file-download HEADER POLICY (so a caller
+ * that streams its own bytes does not re-derive four headers by hand), a
+ * redirect that carries an error message across it, and html() — a named
+ * template rendered into a string.
+ *
+ * What WordPress says itself, and this class therefore does not (5.0.0, FR-11):
+ * the JSON envelope is wp_send_json_success() / wp_send_json_error() or a REST
+ * route through ntdst_rest(); the MIME table is wp_get_mime_types() and
+ * wp_check_filetype() (INV-5); a page renders because a route callback returned
+ * a PATH and WordPress included it (INV-6), never because this class echoed and
+ * exited.
  */
 
 defined('ABSPATH') || exit;
@@ -15,38 +26,6 @@ class NTDST_Response
     protected ?string $error = null;
     protected int $status = 200;
     protected ?string $template = null;
-
-    /**
-     * MIME type mappings
-     */
-    protected static array $mimeTypes = [
-        // Documents
-        'pdf' => 'application/pdf',
-        'csv' => 'text/csv; charset=utf-8',
-        'json' => 'application/json',
-        'xml' => 'application/xml',
-        'txt' => 'text/plain; charset=utf-8',
-
-        // Calendar/Contact
-        'ics' => 'text/calendar; charset=utf-8',
-        'vcf' => 'text/vcard; charset=utf-8',
-
-        // Images
-        'png' => 'image/png',
-        'jpg' => 'image/jpeg',
-        'jpeg' => 'image/jpeg',
-        'gif' => 'image/gif',
-        'svg' => 'image/svg+xml',
-        'webp' => 'image/webp',
-
-        // Archives
-        'zip' => 'application/zip',
-        'gz' => 'application/gzip',
-
-        // Office
-        'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    ];
 
     /**
      * Reset state for reuse
@@ -91,15 +70,29 @@ class NTDST_Response
     /**
      * Refuse the request as Not Found (HTTP 404), with no body of its own.
      *
-     * A route callback returns this to say "no": NTDST_Pages honours the 404
-     * status by leaving WordPress's not-found state intact, so WordPress's own
-     * 404 template renders. Reads cleaner at the call site than error('', 404)
-     * and sets no error message — this is a refusal that defers to WordPress's
-     * 404 page, not an error body to render.
+     * A route callback returns this to say "no", and WordPress renders its own
+     * 404 template. Reads cleaner at the call site than error('', 404) and sets
+     * no error message — this is a refusal that defers to WordPress's 404 page,
+     * not an error body to render.
+     *
+     * It CALLS $wp_query->set_404() rather than recording a flag for somebody
+     * else to honour: since 5.0.0 nothing downstream inspects this object, and
+     * WP::handle_404() has already run by the time a route answers.
      */
     public function notFound(): self
     {
         $this->status = 404;
+
+        // WordPress's own line, because the FLAG alone is not a refusal:
+        // WP::handle_404() has already decided the request was fine by the time
+        // a route answers, so a 404 nothing tells WordPress about leaves a 200
+        // on the wire. set_404() is the one call that says it (INV-6).
+        global $wp_query;
+
+        if (is_object($wp_query) && method_exists($wp_query, 'set_404')) {
+            $wp_query->set_404();
+        }
+
         return $this;
     }
 
@@ -121,9 +114,10 @@ class NTDST_Response
     }
 
     /**
-     * The HTTP status this response carries. Read by NTDST_Pages to honour a
-     * route callback's decision: a >=400 status refuses (leave WordPress's
-     * not-found state intact), a 2xx succeeds (clear it and render).
+     * The HTTP status this response carries.
+     *
+     * A reader for the caller that set it — error() and notFound() act on
+     * WordPress themselves now, so nothing in core reads this back.
      */
     public function getStatus(): int
     {
@@ -133,37 +127,6 @@ class NTDST_Response
     // =========================================================================
     // OUTPUT METHODS
     // =========================================================================
-
-    /**
-     * Return JSON response.
-     *
-     * If the payload fails to serialize (non-UTF-8 strings, circular refs),
-     * we fall back to a structured error body rather than emitting a blank
-     * response that clients would mistake for a network failure.
-     */
-    public function json(): never
-    {
-        http_response_code($this->status);
-        header('Content-Type: application/json');
-
-        $body = json_encode($this->jsonPayload());
-        if ($body === false) {
-            $body = json_encode([
-                'success' => false,
-                'error' => 'serialization_failed: ' . json_last_error_msg(),
-            ]);
-        }
-
-        echo $body;
-        exit;
-    }
-
-    protected function jsonPayload(): array
-    {
-        return $this->error
-            ? ['success' => false, 'error' => $this->error]
-            : ['success' => true, 'data' => $this->data];
-    }
 
     /**
      * Redirect to URL
@@ -185,76 +148,44 @@ class NTDST_Response
     }
 
     /**
-     * Render HTML template.
+     * Render a named template into a string.
      *
-     * Commits its OWN HTTP status before emitting, exactly as json() does
-     * (http_response_code at the top of json()). This matters because render()
-     * exits and never returns: a route callback that renders can never hand a
-     * Response back to NTDST_Pages' deferred commitOk(), so render() must own
-     * its status here. A normal render clears WordPress's pre-set 404 for an
-     * unmatched URL and sends 200; an error render (error set, or template
-     * not found) routes through renderError(), which commits its own >=400
-     * status instead — so `error(...)->render()` / `notFound()->render()`
-     * still yield the non-200 the caller asked for.
-     */
-    public function render(string $template, array $data = []): never
-    {
-        if ($this->error) {
-            $this->renderError();
-        }
-
-        $file = NTDST_Template_Loader::locate($template);
-
-        if (!$file) {
-            $this->error("Template not found: {$template}", 404)->renderError();
-        }
-
-        $this->commitRenderStatus();
-
-        $data = array_merge($this->data, $data);
-        extract($data, EXTR_SKIP);
-
-        include $file;
-        exit;
-    }
-
-    /**
-     * Commit the render status: clear the 404 WordPress pre-set for an
-     * unmatched URL and send $this->status (200 for a normal render). Guarded,
-     * so it is a safe no-op when nothing set 404. Mirrors NTDST_Pages::commitOk()'s
-     * intent for the render-and-exit path; protected so tests can seam it
-     * without reaching the exit in render().
-     */
-    protected function commitRenderStatus(): void
-    {
-        global $wp_query;
-        if ($wp_query && $wp_query->is_404()) {
-            $wp_query->is_404 = false;
-        }
-        status_header($this->status);
-    }
-
-    /**
-     * Return HTML as string
+     * WordPress includes the file — `load_template()` — inside our buffer, so
+     * the template runs in WordPress's own template scope with the globals it
+     * expects. Core neither includes a template nor unpacks a caller array
+     * into one (INV-6): the merged data is load_template()'s third argument,
+     * which WordPress puts in scope as `$args`.
+     *
+     * Fails CLOSED. A name that resolves to nothing returns an empty string and
+     * says so in the log; it used to return a red error <div> of core's own
+     * markup, echoed into the middle of somebody's page.
+     *
+     * @param array<string, mixed> $data Merged over with(): the template reads
+     *                                   it back as `$args['key']`.
      */
     public function html(string $template, array $data = []): string
     {
-        if ($this->error) {
-            return $this->getErrorHtml();
-        }
-
         $file = NTDST_Template_Loader::locate($template);
 
         if (!$file) {
-            return $this->error("Template not found: {$template}", 404)->getErrorHtml();
+            ntdst_log('response')->warning("html(): no template resolved for \"{$template}\"", [
+                'template' => $template,
+            ]);
+
+            return '';
         }
 
-        $data = array_merge($this->data, $data);
-        extract($data, EXTR_SKIP);
-
         ob_start();
-        include $file;
-        return ob_get_clean();
+
+        try {
+            load_template($file, false, array_merge($this->data, $data));
+        } finally {
+            // A template that throws must not leave the buffer open: everything
+            // the page echoes after it would vanish into a buffer nobody closes.
+            $html = (string) ob_get_clean();
+        }
+
+        return $html;
     }
 
     /**
@@ -327,16 +258,20 @@ class NTDST_Response
      * (ASCII fallback) and `filename*=UTF-8''…` per RFC 5987 are sent, so
      * non-ASCII names (Dutch accents etc.) render correctly across browsers.
      *
-     * `X-Content-Type-Options: nosniff` is always sent: a body whose bytes
-     * look like HTML/SVG (e.g. a user-uploaded "proof", or an asset inside a
-     * press kit) must never be sniffed into executing markup in the site
-     * origin.
+     * `X-Content-Type-Options: nosniff` is always sent, and this method sends
+     * it: a body whose bytes look like HTML/SVG (e.g. a user-uploaded "proof",
+     * or an asset inside a press kit) must never be sniffed into executing
+     * markup in the site origin. It goes out through WordPress's own
+     * send_nosniff_header() instead of riding in the returned list, so a
+     * borrowing caller cannot drop it by emitting only some of these lines.
+     * The list below is therefore the three headers that describe THIS body.
      *
      * @param int    $length      Byte length of the body the caller will emit.
      * @param string $filename    Download filename; sanitized here.
      * @param string $disposition `attachment` or `inline`.
      *
-     * @return list<string>
+     * @return list<string> Content-Type, Content-Disposition, Content-Length —
+     *                       nosniff is already sent.
      */
     public static function downloadHeaders(
         int $length,
@@ -344,11 +279,32 @@ class NTDST_Response
         ?string $contentType = null,
         string $disposition = 'attachment',
     ): array {
-        $contentType ??= self::getMimeType($filename);
-
         // basename strips paths; the regex strips header-injection chars
         // and quotes that would break the Content-Disposition value.
         $safe = preg_replace('/[\r\n"]/', '', basename($filename)) ?? '';
+
+        if ($contentType === null) {
+            // WordPress's table, read WordPress's way — extensions are
+            // alternation keys ('jpg|jpeg|jpe'), which only wp_check_filetype()
+            // knows how to match (INV-5). The four types that table lacks are
+            // added by mimeTypes() on the `mime_types` filter, which
+            // wp_get_mime_types() applies for us.
+            $contentType = wp_check_filetype($safe, wp_get_mime_types())['type']
+                ?: 'application/octet-stream';
+
+            // The one thing WordPress's table does NOT carry, and a download
+            // needs: a text/* body saved or displayed without a charset is read
+            // as latin-1 by some browsers, which mangles every accent in a
+            // vCard or an .ics. This is header POLICY, not a second MIME table
+            // — it adds no type and overrides none.
+            if (str_starts_with($contentType, 'text/')) {
+                $contentType .= '; charset=utf-8';
+            }
+        }
+
+        // WordPress's own emitter, so the header a hand-rolled block forgets is
+        // sent even by a caller that only borrows the lines below.
+        send_nosniff_header();
         // ASCII fallback for `filename=`
         $ascii = preg_replace('/[^\x20-\x7e]/', '_', $safe) ?? $safe;
         $utf8 = "filename*=UTF-8''" . rawurlencode($safe);
@@ -357,7 +313,6 @@ class NTDST_Response
             'Content-Type: ' . $contentType,
             'Content-Disposition: ' . $disposition . '; filename="' . $ascii . '"; ' . $utf8,
             'Content-Length: ' . $length,
-            'X-Content-Type-Options: nosniff',
         ];
     }
 
@@ -379,54 +334,66 @@ class NTDST_Response
     }
 
     /**
-     * Get MIME type from filename
+     * The four MIME types WordPress's table lacks.
+     *
+     * Mounted on `mime_types`, so `wp_get_mime_types()` answers for them and
+     * core keeps no table of its own (INV-5). It ADDS and never overrides: a
+     * key WordPress or the site already spells wins, because a filter that
+     * overwrites is the second table coming back through the front door.
+     *
+     * @param array<string, string> $types
+     *
+     * @return array<string, string>
      */
-    public static function getMimeType(string $filename): string
+    public static function mimeTypes(array $types): array
     {
-        $ext = strtolower(pathinfo($filename, PATHINFO_EXTENSION));
-        return self::$mimeTypes[$ext] ?? 'application/octet-stream';
+        return $types + [
+            'json' => 'application/json',
+            'xml' => 'application/xml',
+            'vcf' => 'text/vcard',
+            'svg' => 'image/svg+xml',
+        ];
     }
 
     /**
-     * Register additional MIME type
+     * ...and none of them on the upload allow-list.
+     *
+     * `mime_types` is also the BASE of get_allowed_mime_types(), so the filter
+     * above would quietly make every uploader an SVG uploader — and an SVG is
+     * markup that executes in the site origin. WordPress strips html/js/css
+     * there for exactly this reason and does not know about ours, so core takes
+     * its own four back off the list. A site that wants SVG uploads still says
+     * so itself, with its own `upload_mimes` filter.
+     *
+     * Reads the four off mimeTypes() rather than listing them again: one
+     * declaration, two readers.
+     *
+     * @param array<string, string> $mimes
+     *
+     * @return array<string, string>
      */
-    public static function registerMimeType(string $extension, string $mimeType): void
+    public static function uploadMimes(array $mimes): array
     {
-        self::$mimeTypes[strtolower($extension)] = $mimeType;
+        return array_diff_key($mimes, self::mimeTypes([]));
     }
 
     /**
-     * Render error page
+     * Mount the two filters, once, at load time.
+     *
+     * A named method rather than two bare add_filter() calls at the foot of the
+     * file, for the reason NTDST_Template_Loader::init() is one: it is the
+     * single place that says which WordPress tables core has an opinion about,
+     * and it can be re-run.
      */
-    protected function renderError(): never
+    public static function init(): void
     {
-        http_response_code($this->status);
-
-        $error_file = NTDST_Template_Loader::locate('error');
-
-        if ($error_file) {
-            $error = $this->error;
-            $status = $this->status;
-            include $error_file;
-        } else {
-            echo $this->getErrorHtml();
-        }
-
-        exit;
+        add_filter('mime_types', [self::class, 'mimeTypes']);
+        add_filter('upload_mimes', [self::class, 'uploadMimes']);
     }
 
-    /**
-     * Get error HTML
-     */
-    protected function getErrorHtml(): string
-    {
-        return sprintf(
-            '<div style="padding:20px;background:#fee;border:1px solid #c33;border-radius:4px;"><strong>Error %d:</strong> %s</div>',
-            $this->status,
-            esc_html($this->error),
-        );
-    }
 }
+
+NTDST_Response::init();
 
 // =============================================================================
 // GLOBAL HELPERS
@@ -463,19 +430,6 @@ if (!function_exists('ntdst_page_data')) {
         $data = NTDST_Template_Loader::pageData();
 
         return $key === null ? $data : ($data[$key] ?? $default);
-    }
-}
-
-/**
- * Quick redirect
- *
- * @example ntdst_redirect(home_url('/dashboard'));
- */
-if (!function_exists('ntdst_redirect')) {
-    function ntdst_redirect(string $url, int $status = 302): never
-    {
-        wp_safe_redirect($url, $status);
-        exit;
     }
 }
 

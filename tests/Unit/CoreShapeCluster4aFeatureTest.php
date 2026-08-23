@@ -169,7 +169,7 @@ final class CoreShapeCluster4aFeatureTest extends TestCase
     {
         $incoming = $this->theme . '/index.php';
 
-        $this->assertSame([], NTDST_Template_Loader::getCustomPaths(), 'registry starts empty');
+        $this->assertSame([], $this->customPaths(), 'registry starts empty');
         $this->assertSame($incoming, NTDST_Template_Loader::pickFromCandidates($incoming, 'index', []));
         $this->assertSame($incoming, NTDST_Template_Loader::pickFromCandidates($incoming, 'index', ['index.php']));
     }
@@ -389,10 +389,10 @@ final class CoreShapeCluster4aFeatureTest extends TestCase
             $source,
             'there is exactly one locate(), and it lives in core/TemplateLoader.php'
         );
-        $this->assertGreaterThanOrEqual(
-            2,
+        $this->assertSame(
+            1,
             substr_count($source, 'NTDST_Template_Loader::locate('),
-            'html() and render() each resolve through the one loader'
+            'html() is the ONE resolver left in Response after T11 removed render()'
         );
     }
 
@@ -461,6 +461,21 @@ final class CoreShapeCluster4aFeatureTest extends TestCase
     }
 
     /** The class is static state; every test starts from an empty registry. */
+    /**
+     * The registry, read the only way left: getCustomPaths() was a second,
+     * read-only copy of it with zero readers, and T11 deleted it. A TEST may
+     * still look — through reflection, which is not a shipped surface.
+     *
+     * @return list<string>
+     */
+    private function customPaths(): array
+    {
+        $property = (new ReflectionClass(NTDST_Template_Loader::class))->getProperty('custom_paths');
+        $property->setAccessible(true);
+
+        return $property->getValue();
+    }
+
     private function resetLoader(): void
     {
         $class = new ReflectionClass(NTDST_Template_Loader::class);

@@ -681,6 +681,27 @@ It returns a template path now, and the old object return would otherwise fall
 through in silence to a template with none of its data. Core says so with a
 `_doing_it_wrong()` naming the type it got, which is `WP_DEBUG`-gated — check
 every page route before you bump, and do not rely on the warning on a live site.
+| `NTDST_Response::json()` / `jsonPayload()` | `wp_send_json_success($data)` / `wp_send_json_error(['error' => $msg], $status)`, or a REST route through `ntdst_rest()`. WordPress owns the JSON envelope, the header and the exit |
+| `NTDST_Response::render($template, $data)` | from a page route, `return NTDST_Template_Loader::page($template, $data);` — WordPress includes the file, so `wp_head()`/`wp_footer()` still fire. Anywhere else, `echo ntdst_response()->html($template, $data);`. Nothing in core renders-and-exits any more |
+| `NTDST_Response::renderError()` / `getErrorHtml()` | `wp_die($message, '', ['response' => $status])`, which is themed, status-aware and filterable (`wp_die_handler`). The red `<div>` core used to echo was markup no theme could reach |
+| `NTDST_Response::commitRenderStatus()` | nothing. It cleared the `is_404` WordPress had just set; since 5.0.0 a page URL is a rewrite rule, so there is no not-found state to undo. For a refusal, `ntdst_response()->notFound()` — it calls WordPress's own `$wp_query->set_404()` |
+| `NTDST_Response::getMimeType($filename)` | `wp_check_filetype($filename, wp_get_mime_types())['type']` — pass the table EXPLICITLY. The default is `get_allowed_mime_types()`, the capability-filtered UPLOAD list, which answers differently per user |
+| `NTDST_Response::registerMimeType($ext, $type)` | `add_filter('mime_types', fn ($t) => $t + ['ext' => 'your/type']);`. Core adds the four WordPress lacks that way itself (`NTDST_Response::mimeTypes()` on `mime_types`: `json`, `xml`, `vcf`, `svg`) |
+| `NTDST_Response::$mimeTypes` | `wp_get_mime_types()`. Core's copy had 19 rows and three of them disagreed with WordPress — `.csv`, `.txt` and `.ics` carried a `; charset=utf-8` WordPress does not. `downloadHeaders()` still sends that charset on any `text/*` download, so the wire is unchanged; `.gz` now types as WordPress's `application/x-gzip` instead of `application/gzip` |
+| `ntdst_redirect($url)` | `wp_safe_redirect($url); exit;`, or `ntdst_response()->redirect($url)` when you want the `?error=` message carried across |
+| `NTDST_Template_Loader::getCustomPaths()` | nothing — it was a read-only copy of the registry with no readers. `NTDST_Template_Loader::addPath($dir)` registers; `locate($name)` resolves |
+| a template rendered by `html()` reading `$title` | read `$args['title']`. `html()` hands the data to WordPress's `load_template($file, false, $data)`, which puts it in scope as `$args` — core no longer `extract()`s a caller array into the template |
+
+**`html()` fails closed now.** A name that resolves to no file returns an empty
+string and logs `html(): no template resolved`, where it used to return a red
+error `<div>` of core's own markup. Check the return value if the template name
+can be wrong.
+
+**Core does not widen what your site accepts on upload.** `mime_types` is also
+the base of `get_allowed_mime_types()`, so the four types core adds there are
+taken back off the upload list through `upload_mimes` — an SVG upload is markup
+that executes in your origin. A site that DOES want SVG uploads says so itself
+with its own `upload_mimes` filter.
 
 **The loader row above covers five hooks now, and three of them are new.**
 `index_template`, `singular_template` and `page_template` are mounted beside
