@@ -173,12 +173,22 @@ list of template names; a `{success, data}` array built by hand.
 **Mechanical check:** `grep -rnE '(private|protected) +(static +\??array +\$|const +)[A-Za-z_]+ *= *(\[|null)' --include=*.php api core admin support services` (SINGLE quotes: in double quotes the shell eats `\$` and the variable half of the pattern silently matches nothing) → each hit is either a WordPress-less concern (rate buckets, template dirs, declared limits), a named deliberate exception below, or a bypass. (Broadened from `private static array`: a list hidden as a `const`, or as a `?array` built lazily, is the same second table. `NTDST_FieldTypes::$table` and `NTDST_FieldTypes::RETIRED` are the named exception — the field VOCABULARY is a thing WordPress has no table for, so it is INV-8's convergence point, not an INV-5 bypass.)
 **Status:** `Rest::$surface` and `Rest::$cors['origins']` are gone at `d91e117`
 (Cluster 2, T05–T06): the route register is `WP_REST_Server::get_routes()` and
-the origin list is `allowed_http_origins`. Outstanding, for phase 4:
-`Response::$mimeTypes` and `Template_Loader::templateInclude()`'s hand-listed
-hierarchy. The `api*` envelopes are no longer outstanding: T08 deleted
-`apiSuccess()`, `apiError()`, `apiSuccessResponse()` and `apiErrorResponse()`
-with the dispatcher that wrapped every answer in `{success, data}` — a REST
-route returns the payload and WordPress builds the body.
+the origin list is `allowed_http_origins`. The hand-listed template hierarchy is
+gone at `94f1f89` (Cluster 4a, T09): `templateInclude()` is deleted and
+`NTDST_Template_Loader::pickFromCandidates()` reads WordPress's own candidate
+list off the `{$type}_template` filter's third argument, so core spells no
+template name. Re-running the check at that sha, the `static array` hits are
+`Rest::$limits`, `$reported`, `$instances`, `$cors` (declared/max_age only),
+`$corsOrigins`, `$corsResolvers`, `$defaults`, `Response::$mimeTypes`,
+`Template_Loader::$custom_paths`, `$template_cache`, `$page_data`,
+`Logger::$batchedLogs`, `Data::$models`, `Data::$globalScopes`,
+`FieldTypes::$table`/`::RETIRED` and `ClientIp::DEFAULT_TRUSTED_PROXIES` — the
+loader's three moved file with the class and are unchanged in number. Only
+`Response::$mimeTypes` is still outstanding, for T10. The `api*` envelopes are
+no longer outstanding: T08 deleted `apiSuccess()`, `apiError()`,
+`apiSuccessResponse()` and `apiErrorResponse()` with the dispatcher that wrapped
+every answer in `{success, data}` — a REST route returns the payload and
+WordPress builds the body.
 
 ## INV-6 — One template resolver; page routes are rewrite rules; a template callback returns a path
 
