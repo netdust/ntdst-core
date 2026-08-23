@@ -198,6 +198,13 @@ final class NTDST_Template_Loader
     /**
      * Is the file within either theme directory? The bound on WordPress's own
      * resolution, checked with the same isInside() the registry uses.
+     *
+     * This DELIBERATELY refuses locate_template()'s third branch,
+     * ABSPATH . WPINC . '/theme-compat/': a legacy name (comments, header,
+     * footer, sidebar) that WordPress would serve from there resolves to null
+     * here instead. Failing closed is the ruling — the bound is the only thing
+     * that makes the fallthrough safe, core's five hook candidates never live
+     * in theme-compat, and the caller keeps WordPress's own path either way.
      */
     private static function isInsideTheme(string $file): bool
     {

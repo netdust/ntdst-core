@@ -594,6 +594,45 @@ final class TemplateLoaderTest extends TestCase
     }
 
     // -----------------------------------------------------------------------
+    // The theme-compat branch is refused, on purpose
+    // -----------------------------------------------------------------------
+
+    /**
+     * WordPress's THIRD locate_template() branch — ABSPATH . WPINC .
+     * '/theme-compat/' — is refused, and that refusal is a DECISION (R2-3).
+     *
+     * locate_template() falls back to wp-includes/theme-compat/ for a handful
+     * of legacy names (comments.php, header.php, footer.php, sidebar.php).
+     * isInsideTheme() bounds the fallthrough to the two theme directories, so
+     * such a hit now returns null where the pre-5.0.0 code returned the compat
+     * file. Ruling: KEEP it. The bound is what makes the fallthrough safe at
+     * all, core's five hook candidates never live in theme-compat, and every
+     * caller degrades softly — locateInCustomPaths() hands WordPress's own
+     * path straight back, and WordPress then does its own thing with it.
+     */
+    public function testAThemeCompatHitIsRefusedAndTheCallerKeepsWordPressesPath(): void
+    {
+        $this->writeTemplate($this->themeCompat, 'comments.php');
+
+        $this->assertSame(
+            $this->themeCompat . '/comments.php',
+            $this->locateTemplateStub(['comments.php']),
+            'control: WordPress itself WOULD hand back the theme-compat file here.',
+        );
+
+        $this->assertNull(
+            NTDST_Template_Loader::locate('comments'),
+            'A theme-compat hit lies outside both theme directories, so the loader fails closed.',
+        );
+
+        $this->assertSame(
+            '/theme/comments.php',
+            NTDST_Template_Loader::locateInCustomPaths('/theme/comments.php', 'comments.php'),
+            'The refusal is soft for the caller: WordPress\'s own path comes back untouched.',
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // Helpers
     // -----------------------------------------------------------------------
 
