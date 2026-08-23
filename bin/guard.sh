@@ -132,7 +132,28 @@ fi
 #         as a call-time fatal with the suite green. All eight are pinned bare
 #         (none is a substring of another; `detachTerms` does not contain
 #         `attachTerms`) and mirror PackageBootIntegrityTest's rows exactly.
-REMOVED=$(grep -rnE "getFormattedPosts|ntdst_get_formatted_posts|getPostTerms|attachTerms|syncTerms|detachTerms|whereDate|orWhere|discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
+# v5.0.0 core-trim: the Logger's database half and its handler API (FR-5).
+#         The database half wrote REQUEST_URI, the client IP and the whole
+#         context array into post meta on every error, armed by
+#         `ntdst_log_database_enabled` and ON whenever WP_DEBUG was — a PII sink
+#         switched on during the incident, answering each error with
+#         wp_insert_post + N meta writes + a save_post cascade.
+#         The two constructor names carry the load-order half, which is the
+#         reason this sweep wants them: registering the post type reached the
+#         Data layer from NTDST_Logger::__construct(), so services/Logger.php
+#         could not load before api/Data.php, which is why core's call sites
+#         guarded their logging with function_exists('ntdst_log') at all (FR-3,
+#         I-2). A reference left behind is that load order coming back.
+#         The handler API (add/remove, the level setter, the batching switch)
+#         let a consumer move the sink, the gate or the write moment at
+#         runtime, so no call site could say where a line would go. Zero
+#         readers on daan, josworld or stride.
+#         All nine are pinned bare — none is a substring of another, none is in
+#         README — and mirror PackageBootIntegrityTest's rows exactly. `recent`
+#         and `clearOld` get no term on purpose: they are ordinary words a bare
+#         sweep would find in prose, and LoggerSurfaceTest's exact
+#         public-method list pins them harder than a grep could.
+REMOVED=$(grep -rnE "log_entry|ntdst_log_database_enabled|addHandler|removeHandler|setMinLevel|setBatchingEnabled|ntdst_log_debug|ntdst_log_info|ntdst_log_error|getFormattedPosts|ntdst_get_formatted_posts|getPostTerms|attachTerms|syncTerms|detachTerms|whereDate|orWhere|discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
     --include='*.php' . \
     | grep -v /vendor/ \
     | grep -vE "^(\./)?tests/|^(\./)?specs/" \

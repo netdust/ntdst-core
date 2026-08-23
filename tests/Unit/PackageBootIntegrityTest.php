@@ -240,6 +240,46 @@ final class PackageBootIntegrityTest extends TestCase
             'detachTerms' => ['detachTerms', '5.0.0'],
             'whereDate' => ['whereDate', '5.0.0'],
             'orWhere' => ['orWhere', '5.0.0'],
+            // v5.0.0 core-trim (FR-5) — the Logger's database half and its
+            // runtime handler API.
+            //
+            // The database half was a PII sink armed by a filter: on every
+            // error it wrote REQUEST_URI, the client IP and the whole context
+            // array into post meta, and it was ON whenever WP_DEBUG was — which
+            // is what an operator turns on DURING the incident. It also
+            // answered each error with wp_insert_post plus N meta writes plus a
+            // save_post cascade, at the worst possible moment to do so.
+            //
+            // The two rows that matter most here are the CONSTRUCTOR's, not the
+            // handler's. Registering the post type reached the Data layer from
+            // NTDST_Logger::__construct(), so services/Logger.php could not
+            // load before api/Data.php — which is the whole reason core's call
+            // sites guarded their logging with function_exists('ntdst_log')
+            // (FR-3, I-2). A stray reference left behind here is that load
+            // order quietly coming back.
+            //
+            // The handler API let a consumer add a sink, move the level gate or
+            // switch batching off from anywhere at runtime, so no call site
+            // could say where a line would end up. Zero readers across daan,
+            // josworld and stride.
+            //
+            // All nine are pinned BARE: none is a substring of another, none
+            // appears in README, and each is either a distinctive method name
+            // or an `ntdst_`-prefixed global. `recent()` and `clearOld()` are
+            // FR-5 removals with no row, deliberately — they are ordinary
+            // English words that a bare sweep would find in prose. What pins
+            // those two is LoggerSurfaceTest's exact public-method list, which
+            // is the stronger check anyway: it fails on a name coming BACK as
+            // well as on one that never left.
+            'log_entry' => ['log_entry', '5.0.0'],
+            'ntdst_log_database_enabled' => ['ntdst_log_database_enabled', '5.0.0'],
+            'addHandler' => ['addHandler', '5.0.0'],
+            'removeHandler' => ['removeHandler', '5.0.0'],
+            'setMinLevel' => ['setMinLevel', '5.0.0'],
+            'setBatchingEnabled' => ['setBatchingEnabled', '5.0.0'],
+            'ntdst_log_debug' => ['ntdst_log_debug', '5.0.0'],
+            'ntdst_log_info' => ['ntdst_log_info', '5.0.0'],
+            'ntdst_log_error' => ['ntdst_log_error', '5.0.0'],
         ];
     }
 

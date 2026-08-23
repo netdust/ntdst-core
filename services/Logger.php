@@ -3,23 +3,19 @@
 declare(strict_types=1);
 
 /**
- * NTDST Logger - PSR-3 Compatible Logging System
+ * NTDST Logger — PSR-3-shaped logging over two sinks.
  *
- * Features:
- * - Multiple log levels (debug, info, warning, error, critical)
- * - Multiple channels (file, database, error_log)
- * - Context data support
- * - Automatic error tracking
- * - Production-ready
+ * Five levels (debug, info, warning, error, critical) and a channel per
+ * caller. A line goes to the channel's daily file, and an error or worse also
+ * goes to PHP's own error_log. That is the whole surface: there is no runtime
+ * way to add a third sink, move the level gate or change the write moment, so
+ * "where do the logs go" has one answer, and the channel plus the environment
+ * decide it.
  *
- * Architecture:
- * - Uses Data.php for database logging (consistent with system architecture)
- * - No raw SQL - everything goes through ORM
- * - Logs stored as custom post type with metadata
- *
- * Conventions:
- *  - Filter `netdust_trusted_proxies` is historical — do not propagate the
- *    `netdust_*` prefix to new filters; use `ntdst_*` instead.
+ * This file has NO dependency on any other part of core. ntdst-core.php
+ * requires it FIRST, before api/ and admin/, so every later file can call
+ * ntdst_log() without asking whether it exists yet (FR-3). Keep it that way:
+ * a require added here is a require added to the front of the whole package.
  *
  * Production note:
  *  - Log files land in WP_CONTENT_DIR/logs. On Bedrock that's web/app/logs,
@@ -38,17 +34,19 @@ require_once __DIR__ . '/../core/LogLevel.php';
 
 class NTDST_Logger
 {
-    protected array $handlers = [];
-    protected int $min_level = 0; // 0=debug, 1=info, 2=warning, 3=error, 4=critical
-    protected static bool $model_registered = false;
+    /** 0=debug, 1=info, 2=warning, 3=error, 4=critical */
+    protected int $min_level = 0;
 
     /**
-     * PERFORMANCE: Batched log entries to write on shutdown
-     * Reduces I/O by collecting logs and writing once
+     * PERFORMANCE: entries collected per file and written once on shutdown.
+     * An error skips the batch — during an incident the line has to be on
+     * disk before the request that produced it can die.
+     *
+     * @var array<string, list<string>>
      */
     protected static array $batchedLogs = [];
+
     protected static bool $shutdownRegistered = false;
-    protected static bool $batchingEnabled = true;
 
     public function __construct(protected readonly string $channel = 'app')
     {
@@ -60,319 +58,6 @@ class NTDST_Logger
             register_shutdown_function([self::class, 'flushBatchedLogs']);
             self::$shutdownRegistered = true;
         }
-
-        // Register log model (once)
-        $this->ensureModelRegistered();
-
-        // Register default handlers
-        $this->registerDefaultHandlers();
-    }
-
-    /**
-     * Register log_entry model with Data.php
-     */
-    protected function ensureModelRegistered(): void
-    {
-        if (self::$model_registered) {
-            return;
-        }
-
-        // Register log_entry custom post type via Data.php
-        ntdst_data()->register('log_entry', [
-            'public' => false,
-            'show_ui' => false,
-            'show_in_menu' => false,
-            'show_in_rest' => false,
-            'exclude_from_search' => true,
-            'publicly_queryable' => false,
-            'has_archive' => false,
-            'rewrite' => false,
-            'capability_type' => 'post',
-            'supports' => ['title', 'author'],
-            'fields' => [
-                'channel' => 'text',
-                'level' => 'text',
-                'context' => 'json',
-                'ip_address' => 'text',
-                'url' => 'url',
-            ],
-        ]);
-
-        self::$model_registered = true;
-    }
-
-    /**
-     * Register default log handlers
-     */
-    protected function registerDefaultHandlers(): void
-    {
-        // File handler (logs directory)
-        // PERFORMANCE: Uses batching to collect entries and write once on shutdown
-        $this->handlers['file'] = function ($level, $message, $context) {
-            // Format log entry
-            $timestamp = current_time('Y-m-d H:i:s');
-            $level_name = LogLevel::tryFrom($level)?->label() ?? 'UNKNOWN';
-            $context_str = !empty($context) ? ' ' . json_encode($context) : '';
-            $log_entry = "[{$timestamp}] {$this->channel}.{$level_name}: {$message}{$context_str}\n";
-
-            // PERFORMANCE: Batch file writes instead of writing immediately
-            if (self::$batchingEnabled) {
-                $log_file = $this->channel . '-' . date('Y-m-d') . '.log';
-                if (!isset(self::$batchedLogs[$log_file])) {
-                    self::$batchedLogs[$log_file] = [];
-                }
-                self::$batchedLogs[$log_file][] = $log_entry;
-            } else {
-                // Immediate write (for critical errors or when batching disabled)
-                $this->writeToLogFile($log_entry);
-            }
-        };
-
-        // Error log handler (PHP error_log)
-        $this->handlers['error_log'] = function ($level, $message, $context) {
-            if ($level >= LogLevel::Error->value) {
-                $level_name = LogLevel::tryFrom($level)?->label() ?? 'UNKNOWN';
-                $context_str = !empty($context) ? ' ' . json_encode($context) : '';
-                error_log("[{$this->channel}] {$level_name}: {$message}{$context_str}");
-            }
-        };
-
-        // Database handler (for critical errors). Off by default in prod
-        // because every error triggers wp_insert_post + N meta writes + a
-        // save_post action cascade — exactly the wrong load profile during
-        // an incident. Opt in by returning true from `ntdst_log_database_enabled`
-        // or by enabling WP_DEBUG.
-        $dbEnabled = apply_filters(
-            'ntdst_log_database_enabled',
-            defined('WP_DEBUG') && WP_DEBUG,
-        );
-
-        if ($dbEnabled) {
-            $this->handlers['database'] = function ($level, $message, $context) {
-                if ($level >= LogLevel::Error->value) {
-                    try {
-                        $model = ntdst_data()->get('log_entry');
-
-                        // Create log entry via Data.php ORM
-                        $model->create([
-                            'title' => $message,                        // post_title
-                            'author' => get_current_user_id() ?: 0,     // post_author
-                            'channel' => $this->channel,                // meta
-                            'level' => LogLevel::tryFrom($level)?->label() ?? 'UNKNOWN', // meta
-                            'context' => $context,                      // meta (auto JSON encoded)
-                            'ip_address' => $this->getClientIp(),       // meta
-                            'url' => $_SERVER['REQUEST_URI'] ?? '',     // meta
-                        ]);
-                    } catch (\Throwable $e) {
-                        // Fail silently to prevent logging errors from breaking
-                        // the app — bypass ntdst_log to avoid recursion.
-                        error_log('Logger database handler failed: ' . $e->getMessage());
-                    }
-                }
-            };
-        }
-    }
-
-    /**
-     * Get client IP address for the log record.
-     *
-     * Delegates to the one canonical resolver (support/ClientIp.php). This
-     * method used to carry a third copy of the trusted-proxy logic that took
-     * the LEFTMOST X-Forwarded-For entry — the spoofable end, since nginx
-     * appends the observed peer — so a proxied request could write any
-     * attacker-chosen address into the audit log. That is fixed by delegating.
-     *
-     * The historical 'unknown' placeholder stays a Logger decision: the shared
-     * primitive returns '' for an unidentifiable peer, and this call site
-     * coalesces so log rows read the same as before.
-     */
-    protected function getClientIp(): string
-    {
-        return NTDST_ClientIp::detect($_SERVER) ?: 'unknown';
-    }
-
-    /**
-     * Write log entry to file immediately.
-     *
-     * Uses file_put_contents with FILE_APPEND | LOCK_EX for consistency
-     * with the batched-flush path. error_log(_, 3, _) is supported but
-     * inconsistent style for the same operation.
-     */
-    protected function writeToLogFile(string $log_entry): void
-    {
-        $log_dir = WP_CONTENT_DIR . '/logs';
-
-        // Create logs directory if it doesn't exist
-        if (!file_exists($log_dir)) {
-            wp_mkdir_p($log_dir);
-        }
-
-        // Protect logs directory (defense-in-depth on Apache; Nginx hosts
-        // need server config to deny /logs).
-        self::ensureLogDirProtected($log_dir);
-
-        // Write to daily log file
-        $log_file = $log_dir . '/' . $this->channel . '-' . date('Y-m-d') . '.log';
-        file_put_contents($log_file, $log_entry, FILE_APPEND | LOCK_EX);
-    }
-
-    /**
-     * Drop Apache .htaccess and an empty index.html into the log dir
-     * so directory listings and direct fetches are blocked where
-     * supported. On Nginx these files are inert; server config must
-     * deny the /logs path explicitly.
-     */
-    protected static function ensureLogDirProtected(string $dir): void
-    {
-        $htaccess = $dir . '/.htaccess';
-        if (!file_exists($htaccess)) {
-            file_put_contents($htaccess, "Deny from all\n");
-        }
-        $index = $dir . '/index.html';
-        if (!file_exists($index)) {
-            file_put_contents($index, '');
-        }
-    }
-
-    /**
-     * PERFORMANCE: Flush all batched logs to files
-     * Called on shutdown to write all collected logs at once
-     */
-    public static function flushBatchedLogs(): void
-    {
-        if (empty(self::$batchedLogs)) {
-            return;
-        }
-
-        $log_dir = WP_CONTENT_DIR . '/logs';
-
-        // Create logs directory if it doesn't exist
-        if (!file_exists($log_dir)) {
-            wp_mkdir_p($log_dir);
-        }
-
-        // Protect logs directory
-        self::ensureLogDirProtected($log_dir);
-
-        // Write all batched entries to their respective files
-        foreach (self::$batchedLogs as $filename => $entries) {
-            $log_file = $log_dir . '/' . $filename;
-            $content = implode('', $entries);
-
-            // Use file_put_contents with LOCK_EX and FILE_APPEND for safe concurrent writes
-            file_put_contents($log_file, $content, FILE_APPEND | LOCK_EX);
-        }
-
-        // Clear the batch
-        self::$batchedLogs = [];
-    }
-
-    /**
-     * Enable or disable batching
-     * Useful for CLI scripts or tests that need immediate output
-     */
-    public static function setBatchingEnabled(bool $enabled): void
-    {
-        self::$batchingEnabled = $enabled;
-
-        // If disabling, flush any pending logs
-        if (!$enabled) {
-            self::flushBatchedLogs();
-        }
-    }
-
-    /**
-     * Force immediate flush of batched logs
-     * Use before long-running operations or when immediate logging is needed
-     */
-    public function flush(): void
-    {
-        self::flushBatchedLogs();
-    }
-
-    /**
-     * Log a message
-     */
-    protected function log(int $level, string $message, array $context = []): void
-    {
-        // Skip if below minimum level
-        if ($level < $this->min_level) {
-            return;
-        }
-
-        // PERFORMANCE: Critical/Error level logs bypass batching for immediate visibility
-        $was_batching = self::$batchingEnabled;
-        if ($level >= LogLevel::Error->value) {
-            self::$batchingEnabled = false;
-        }
-
-        // Replace placeholders in message
-        $message = $this->interpolate($message, $context);
-
-        // Fire action hook for extensibility
-        do_action('ntdst_log', $level, $message, $context, $this->channel);
-        do_action('ntdst_log_' . $this->channel, $level, $message, $context);
-
-        // Execute handlers
-        foreach ($this->handlers as $handler) {
-            try {
-                $handler($level, $message, $context);
-            } catch (\Throwable $e) {
-                // Fail silently to prevent logging errors from breaking the
-                // app — bypass ntdst_log to avoid recursion.
-                error_log("Logger handler failed: " . $e->getMessage());
-            }
-        }
-
-        // Restore batching state
-        self::$batchingEnabled = $was_batching;
-    }
-
-    /**
-     * Interpolate context values into message placeholders
-     */
-    protected function interpolate(string $message, array $context): string
-    {
-        $replace = [];
-
-        foreach ($context as $key => $val) {
-            if (is_null($val) || is_scalar($val) || (is_object($val) && method_exists($val, '__toString'))) {
-                $replace['{' . $key . '}'] = $val;
-            } elseif (is_object($val)) {
-                $replace['{' . $key . '}'] = get_class($val);
-            } elseif (is_array($val)) {
-                $replace['{' . $key . '}'] = json_encode($val);
-            }
-        }
-
-        return strtr($message, $replace);
-    }
-
-    /**
-     * Add custom handler
-     */
-    public function addHandler(string $name, callable $handler): self
-    {
-        $this->handlers[$name] = $handler;
-        return $this;
-    }
-
-    /**
-     * Remove handler
-     */
-    public function removeHandler(string $name): self
-    {
-        unset($this->handlers[$name]);
-        return $this;
-    }
-
-    /**
-     * Set minimum log level
-     */
-    public function setMinLevel(LogLevel|int $level): self
-    {
-        $this->min_level = $level instanceof LogLevel ? $level->value : $level;
-        return $this;
     }
 
     // PSR-3 Interface Methods
@@ -403,57 +88,147 @@ class NTDST_Logger
     }
 
     /**
-     * Get recent logs from database
-     * Uses Data.php query builder for consistency
+     * Force immediate flush of batched logs
+     * Use before long-running operations or when immediate logging is needed
      */
-    public function recent(int $limit = 50, ?int $min_level = null): array
+    public function flush(): void
     {
+        self::flushBatchedLogs();
+    }
+
+    /**
+     * PERFORMANCE: Flush all batched logs to files
+     * Called on shutdown to write all collected logs at once
+     */
+    public static function flushBatchedLogs(): void
+    {
+        if (empty(self::$batchedLogs)) {
+            return;
+        }
+
+        $dir = self::logDir();
+
+        foreach (self::$batchedLogs as $filename => $entries) {
+            file_put_contents($dir . '/' . $filename, implode('', $entries), FILE_APPEND | LOCK_EX);
+        }
+
+        self::$batchedLogs = [];
+    }
+
+    /**
+     * Write one line to the two sinks.
+     *
+     * Both writes are inside one try/catch, and that is not decoration: a site
+     * running WP_DEBUG with an error handler that promotes warnings to
+     * ErrorException turns an unwritable logs directory into a throw, and a
+     * request must never die because it tried to say something. The fallback
+     * bypasses ntdst_log() to avoid recursion.
+     */
+    protected function log(int $level, string $message, array $context = []): void
+    {
+        if ($level < $this->min_level) {
+            return;
+        }
+
+        $message = $this->interpolate($message, $context);
+        $label = LogLevel::tryFrom($level)?->label() ?? 'UNKNOWN';
+        $suffix = !empty($context) ? ' ' . json_encode($context) : '';
+
         try {
-            $model = ntdst_data()->get('log_entry');
+            $line = '[' . current_time('Y-m-d H:i:s') . "] {$this->channel}.{$label}: {$message}{$suffix}\n";
 
-            // Build query
-            $query = $model->where('channel', $this->channel)
-                           ->orderBy('date', 'DESC')
-                           ->limit($limit);
+            if ($level >= LogLevel::Error->value) {
+                $this->writeToLogFile($line);
+                error_log("[{$this->channel}] {$label}: {$message}{$suffix}");
 
-            // Filter by level if specified
-            if ($min_level !== null) {
-                $level_name = LogLevel::tryFrom($min_level)?->label();
-                if ($level_name) {
-                    $query->where('level', $level_name);
-                }
+                return;
             }
 
-            $logs = $query->get();
-
-            // Format for consistency with old format
-            return array_map(function ($log) {
-                return [
-                    'id' => $log->ID,
-                    'channel' => $log->fields['channel'] ?? '',
-                    'level' => $log->fields['level'] ?? '',
-                    'message' => $log->post_title,
-                    'context' => $log->fields['context'] ?? null,
-                    'created_at' => $log->post_date,
-                    'user_id' => $log->post_author,
-                    'ip_address' => $log->fields['ip_address'] ?? '',
-                    'url' => $log->fields['url'] ?? '',
-                ];
-            }, $logs);
+            self::$batchedLogs[$this->channel . '-' . date('Y-m-d') . '.log'][] = $line;
         } catch (\Throwable $e) {
-            error_log('Logger recent() failed: ' . $e->getMessage());
-            return [];
+            error_log('Logger write failed: ' . $e->getMessage());
         }
     }
 
-    // clearOld() lived here. It was the one shipped caller of the model's
-    // whereDate(), which core-trim FR-4 removed with the rest of the second
-    // query API — so it is deleted HERE rather than left calling a method that
-    // no longer exists. It was already on FR-5's list (it is part of the
-    // database log half, along with the log_entry post type and recent()), it
-    // had no reader anywhere on the fleet, and no test covered it: a caller
-    // left behind would have fataled at call time with the whole suite green.
-    // T05 removes the rest of that half.
+    /**
+     * Interpolate context values into message placeholders
+     */
+    protected function interpolate(string $message, array $context): string
+    {
+        $replace = [];
+
+        foreach ($context as $key => $val) {
+            if (is_null($val) || is_scalar($val) || (is_object($val) && method_exists($val, '__toString'))) {
+                $replace['{' . $key . '}'] = $val;
+            } elseif (is_object($val)) {
+                $replace['{' . $key . '}'] = get_class($val);
+            } elseif (is_array($val)) {
+                $replace['{' . $key . '}'] = json_encode($val);
+            }
+        }
+
+        return strtr($message, $replace);
+    }
+
+    /**
+     * Write one line to the channel's daily file immediately.
+     *
+     * Uses file_put_contents with FILE_APPEND | LOCK_EX for consistency
+     * with the batched-flush path. error_log(_, 3, _) is supported but
+     * inconsistent style for the same operation.
+     */
+    protected function writeToLogFile(string $line): void
+    {
+        $file = self::logDir() . '/' . $this->channel . '-' . date('Y-m-d') . '.log';
+
+        file_put_contents($file, $line, FILE_APPEND | LOCK_EX);
+    }
+
+    /**
+     * The logs directory, created and protected on the way out.
+     *
+     * .htaccess + an empty index.html block directory listings and direct
+     * fetches where they are honoured. On Nginx these files are inert; server
+     * config must deny the /logs path explicitly.
+     */
+    protected static function logDir(): string
+    {
+        $dir = WP_CONTENT_DIR . '/logs';
+
+        if (!file_exists($dir)) {
+            wp_mkdir_p($dir);
+        }
+
+        $htaccess = $dir . '/.htaccess';
+        if (!file_exists($htaccess)) {
+            file_put_contents($htaccess, "Deny from all\n");
+        }
+
+        $index = $dir . '/index.html';
+        if (!file_exists($index)) {
+            file_put_contents($index, '');
+        }
+
+        return $dir;
+    }
+
+    // A database half lived here: a post type registered from the constructor,
+    // a handler that wrote REQUEST_URI, the client IP and the whole context
+    // array into post meta on every error, a filter that armed it, and a
+    // reader that queried it back. core-trim FR-5 removed all of it. It was a
+    // PII sink switched on by WP_DEBUG — which is what an operator turns on
+    // DURING an incident — and it answered every error with wp_insert_post
+    // plus N meta writes plus a save_post cascade, which is the wrong load
+    // profile at exactly the wrong moment. Its reader had no callers on the
+    // fleet, and the one that queried by date was the last caller of a query
+    // method FR-4 had already deleted. Reaching the Data layer from this
+    // constructor is also what forced this file to load LAST, and every core
+    // call site to guard its logging with function_exists() (FR-3).
+    //
+    // The runtime handler API went with it, for its own reason: a consumer
+    // could bolt on a fourth sink, move the level gate or switch batching off
+    // from anywhere, so no call site could say where a line would end up.
+    // Nobody on the fleet did. The channel and the environment decide now.
 }
 
 /**
@@ -474,28 +249,4 @@ function ntdst_log(string $channel = 'app'): NTDST_Logger
     }
 
     return $loggers[$channel];
-}
-
-/**
- * Quick log helpers
- */
-if (!function_exists('ntdst_log_debug')) {
-    function ntdst_log_debug(string $message, array $context = []): void
-    {
-        ntdst_log()->debug($message, $context);
-    }
-}
-
-if (!function_exists('ntdst_log_info')) {
-    function ntdst_log_info(string $message, array $context = []): void
-    {
-        ntdst_log()->info($message, $context);
-    }
-}
-
-if (!function_exists('ntdst_log_error')) {
-    function ntdst_log_error(string $message, array $context = []): void
-    {
-        ntdst_log()->error($message, $context);
-    }
 }

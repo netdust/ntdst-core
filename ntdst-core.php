@@ -66,8 +66,9 @@ require_once NTDST_PATH . '/core/Container.php';
 // is what makes that safe. bin/guard.sh asserts both halves — no call-site
 // function_exists() guard on a core helper, and this require above api/.
 //
-// Logger's ctor reaches ntdst_data() (api/Data.php, below) — no top-level
-// ntdst_log() call may sit between these lines; T05 removes the dependency.
+// services/Logger.php has no dependency on api/Data.php — it logs to file
+// and error_log() only. The require order above is pinned by
+// BootstrapLoadsNothingByGuessingTest::testEveryRequiredFileThatCallsTheLogHelperIsRequiredAfterTheLogger.
 require_once NTDST_PATH . '/services/Logger.php';
 
 require_once NTDST_PATH . '/core/Pages.php';
