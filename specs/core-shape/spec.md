@@ -108,7 +108,7 @@ they do not inform the design (D5).
   Source: D6 — Stefan 2026-08-23 "Dev-only composer path repository"; brief §2.4 (the substitution hazard)
 - **FR-15:** `v5.0.0` is tagged on `main` only after phases 1–5 are merged and `composer gate` exits 0, and the package is pushed then. The idle pane's typed `tag core 5.0.0` is not sent before that.
   Source: D4 — Stefan 2026-08-23 "After all five phases are green"
-- **FR-16:** At the release commit every mechanical check in `ARCHITECTURE-INVARIANTS.md` INV-1…7 passes, and the doc's `Status:` lines read "holds" for all seven.
+- **FR-16:** At the release commit every mechanical check in `ARCHITECTURE-INVARIANTS.md` INV-1…10 passes, and the doc's `Status:` lines read "holds" for all ten. *(Amended 2026-08-23 at the Cluster 5 gate: INV-8/9/10 landed with field-types and core-trim; the doc and T13 deliver ten, so the release clause names ten — a widening, no behaviour change.)*
   Source: `planning` overlay (architecture invariants gate); brief §5
 
 ---
