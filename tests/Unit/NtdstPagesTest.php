@@ -80,6 +80,12 @@ final class NtdstPagesTest extends TestCase
             $this->statuses[] = $status;
         });
         Functions\when('nocache_headers')->justReturn(null);
+        // Not returnArg(): the escape is the assertion in
+        // testABadTemplatePathIsEscapedIntoTheWarning, so the stub has to be
+        // WordPress's own algorithm rather than a pass-through.
+        Functions\when('esc_html')->alias(
+            static fn ($text): string => htmlspecialchars((string) $text, ENT_QUOTES, 'UTF-8'),
+        );
         Functions\when('_doing_it_wrong')->alias(function (string $fn, string $message, $version = ''): void {
             $this->wrong[] = [$fn, $message];
         });
@@ -312,6 +318,87 @@ final class NtdstPagesTest extends TestCase
             'empty' => [['slug' => ''], '`([^/]+)` matches one character or more'],
             'absent' => [[], 'every declared placeholder is present in a URL the rule matched'],
         ];
+    }
+
+    public function testAResponseReturnFromAPathCallbackWarnsAndRefuses(): void
+    {
+        // I-1. README promises a _doing_it_wrong() for the retired contract,
+        // and a page callback returning an NTDST_Response (daan CardService,
+        // stride x5) fell to a SILENT 404 instead — the one signal that tells
+        // an adopter what broke, missing at exactly the call site that broke.
+        $wp_query = new class {
+            public bool $notFound = false;
+
+            public function set_404(): void
+            {
+                $this->notFound = true;
+            }
+        };
+        $GLOBALS['wp_query'] = $wp_query;
+
+        $pages = $this->terminatingPages();
+        $pages->path('/card/:slug', fn (): object => new stdClass());
+
+        $this->dispatch($pages, 0, 'GET', ['slug' => 'ace-of-cups']);
+
+        $this->assertNotSame([], $this->wrong, 'an object return is the retired contract; say so out loud.');
+        $this->assertStringContainsString(
+            'stdClass',
+            $this->wrong[0][1],
+            'the warning must name the type it got — that is the actionable half.',
+        );
+        $this->assertSame(
+            $this->templateFromWarning(),
+            $this->wrong[0][1],
+            'ONE message for "a callback returned something that is not a path" — two copies are two contracts.',
+        );
+        $this->assertTrue($wp_query->notFound, 'the request still refuses; the warning is added, not swapped in.');
+        $this->assertSame([404], $this->statuses);
+        $this->assertNull($this->templateIncludeFilter());
+    }
+
+    public function testABadTemplatePathIsEscapedIntoTheWarning(): void
+    {
+        // S-4. The path in the message is a value the CALLBACK produced, and
+        // _doing_it_wrong() output is HTML.
+        $GLOBALS['wp_query'] = new class {
+            public function set_404(): void {}
+        };
+
+        $pages = $this->terminatingPages();
+        $pages->path('/card/:slug', fn (): string => '/no/such/<script>x</script>.php');
+
+        $this->dispatch($pages, 0, 'GET', ['slug' => 'ace-of-cups']);
+
+        $this->assertNotSame([], $this->wrong);
+        $this->assertStringContainsString('&lt;script&gt;', $this->wrong[0][1]);
+        $this->assertStringNotContainsString('<script>', $this->wrong[0][1]);
+    }
+
+    /** What templateFrom() says for the same fault, read back from the template filter. */
+    private function templateFromWarning(): string
+    {
+        // The probe mounts a template_include filter of its own, and the
+        // caller is about to assert that the DISPATCH mounted none — so the
+        // recorder is put back exactly as it was found.
+        $wrong = $this->wrong;
+        $mounts = $GLOBALS['_ntdst_test_filters_at']['template_include'] ?? null;
+        $this->wrong = [];
+        unset($GLOBALS['_ntdst_test_filters_at']['template_include']);
+
+        $probe = new NTDST_Pages();
+        $probe->when(fn (): bool => true, fn () => new stdClass());
+        $GLOBALS['_ntdst_test_filters_at']['template_include'][10]('/theme/index.php');
+
+        $message = $this->wrong[0][1];
+        $this->wrong = $wrong;
+        unset($GLOBALS['_ntdst_test_filters_at']['template_include']);
+
+        if ($mounts !== null) {
+            $GLOBALS['_ntdst_test_filters_at']['template_include'] = $mounts;
+        }
+
+        return $message;
     }
 
     public function testTheRuleSetFlushesOnceAndNotAgain(): void

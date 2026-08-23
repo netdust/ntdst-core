@@ -248,11 +248,18 @@ class NTDST_Pages
 
             _doing_it_wrong(
                 __CLASS__ . '::path',
-                "the route for \"{$route['pattern']}\" returned \"{$result}\", which is not a file that exists. "
-                    . 'Build the path with NTDST_Template_Loader::page() / ::locate(), which return null when the '
-                    . 'template is missing.',
+                'the route for "' . esc_html($route['pattern']) . '" returned "' . esc_html($result)
+                    . '", which is not a file that exists. Build the path with '
+                    . 'NTDST_Template_Loader::page() / ::locate(), which return null when the template is missing.',
                 '5.0.0',
             );
+        } elseif ($result !== false) {
+            // An object (the retired NTDST_Response return), an int, an array.
+            // README has always promised a warning here; without it the one
+            // signal that names what broke is missing at the call site that
+            // broke. `false` is the contract's own word for "refuse", so it
+            // says nothing.
+            $this->warnNotAPath(__CLASS__ . '::path', $result);
         }
 
         $this->notFound();
@@ -496,16 +503,31 @@ class NTDST_Pages
         }
 
         if ($result !== null && $result !== false) {
-            _doing_it_wrong(
-                __CLASS__ . '::template',
-                'a template callback returned ' . get_debug_type($result) . '. Since 5.0.0 it must return a '
-                    . 'template PATH — build it with NTDST_Template_Loader::page($name, $data), which stashes the '
-                    . 'data ntdst_page_data() reads. Nothing renders or exits from inside a template filter.',
-                '5.0.0',
-            );
+            $this->warnNotAPath(__CLASS__ . '::template', $result);
         }
 
         return $template;
+    }
+
+    /**
+     * The ONE warning for "a callback returned something that is not a path".
+     *
+     * dispatch() and templateFrom() are two entries to the same mistake — a
+     * callback still returning the 5.0.0-retired NTDST_Response, or any other
+     * object — and two copies of the sentence are two contracts, free to
+     * disagree about what the adopter should do. Only the FUNCTION name
+     * differs, because that is the call site the adopter has to go and edit.
+     */
+    protected function warnNotAPath(string $function, mixed $result): void
+    {
+        _doing_it_wrong(
+            $function,
+            'a callback returned ' . get_debug_type($result) . '. Since 5.0.0 it must return a template PATH — '
+                . 'build it with NTDST_Template_Loader::page($name, $data), which stashes the data '
+                . 'ntdst_page_data() reads. An NTDST_Response is no longer rendered from a return value, and '
+                . 'nothing renders or exits from inside a template filter.',
+            '5.0.0',
+        );
     }
 
     /**
