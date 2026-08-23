@@ -21,7 +21,7 @@ deferred to this repo deliberately.
 | F1 rate-limit bucket keyed on attacker-chosen input | **fixed** — registration is established before the key is built |
 | F2 wrong version in the plugin header | **fixed** — and guarded by a test |
 | F3 `NTDST_RateLimiter` has no reset | **fixed** — `reset(string $key): void` |
-| F4 the limiter never charges an `OPTIONS` request | **fixed** — one charge per request in `rest_pre_dispatch`, into a `ntdst_rest_pf_` bucket of the preflight's own. `$matched` untouched, so a GET+POST+DELETE route still charges once and the preflight never spends the verb budget the real request needs. **Consumers declare nothing** — this settles todai's T09c with no consumer change |
+| F4 the limiter never charges an `OPTIONS` request | **NOT implemented** (corrected 2026-08-23, core-shape T13). This row claimed a per-request charge in `rest_pre_dispatch` into a preflight bucket of its own. No shipped file has ever spelled that bucket, and 5.0.0's README states the behaviour that does ship: `OPTIONS` is unmetered, and a caller who wants it billed calls `charge()` from their own `rest_pre_dispatch` filter. todai's T09c is therefore still open, not settled |
 | F5 Bootstrap is theme-coupled for mu-plugin consumers | **fixed** — the `:504` fallback left with the sector system; the `:206` namespace-path strip now asks the filesystem instead of the active theme. `get_stylesheet_directory()` no longer appears in shipped Bootstrap code |
 | F6 `RateLimiter`'s docblock documents a deleted consumer | **fixed** |
 | F7 service metadata `name` cannot pin a slug | **fixed** — and a service that declares a name whose slug differs from its class-derived one changes filter/option key on this upgrade |
