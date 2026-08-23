@@ -14,6 +14,27 @@ declare(strict_types=1);
 // again — so the next hand on it changes behaviour against a stated contract
 // instead of against a reading of the diff.
 //
+// RE-POINTED ONTO THE ROUTE by core-shape T07 (independent test-author), which
+// is the change this file was written to survive. WHAT MOVED, and nothing else:
+//   * The picker is now reached as `GET /ntdst/v1/relation/search`, so all three
+//     cases drive the `permission_callback` and the `callback` the framework
+//     handed WordPress, captured from a stubbed `register_rest_route()` —
+//     instead of calling `handleRelationSearch()` on a constructor-less object.
+//     Two files must not own one handler, and the route is where the handler
+//     now lives.
+//   * The DENIAL therefore moves to where the gate moved: the permission
+//     refuses (false, which WordPress answers as 403 — SC-4's second probe),
+//     and the handler is never called, so still NO WP_Query. That is the same
+//     property the `forbidden_post_type` assertion carried: refusal BEFORE the
+//     work.
+//   * The service is built with its REAL constructor now, because declaring the
+//     route is what the constructor does.
+// The projection and the widening are unchanged, assertion for assertion.
+//
+// The DECLARATION of the route — one route, GET, the closure permission, the
+// args, the 60/60s budget — belongs to tests/Unit/RelationSearchRouteTest.php.
+// This file asks only what the picker DECIDES.
+//
 // THREE CASES, and they are the three things the method decides:
 //
 //   1. THE DENIAL. A `post_type` the caller may not edit returns
@@ -39,10 +60,8 @@ declare(strict_types=1);
 // (DefinedTooEarly), which is fine here: the Manager keeps its models in a
 // static, so registering through a fresh Manager is what the singleton reads.
 //
-// The service is built with `newInstanceWithoutConstructor()`. Its constructor
-// registers an action on `ntdst_actions()` and hooks `add_meta_boxes`; neither
-// is part of what this file asserts, and requiring api/Actions.php to reach a
-// pure method would drag the router into a test about a query.
+// The service is built with its real constructor: the constructor declares the
+// route, and the route is the only way in.
 defined('ABSPATH') || exit;
 
 use Brain\Monkey;
@@ -53,6 +72,7 @@ use PHPUnit\Framework\TestCase;
 require_once __DIR__ . '/../../core/ServiceInterface.php';
 require_once __DIR__ . '/../../api/FieldTypes.php';
 require_once __DIR__ . '/../../api/Data.php';
+require_once __DIR__ . '/../../api/Rest.php';
 
 // The recording WP_Query. Guarded, and deliberately built on the SAME two
 // globals DataSurfaceTest's double uses: a class is process-wide, so whichever
@@ -100,12 +120,36 @@ if (!class_exists('WP_Post_Type')) {
     }
 }
 
+// The intersection of the WP_REST_Request doubles already in this suite
+// (NtdstRestTest, ActionsRateBucketTest, RelationSearchRouteTest) — guarded, so
+// whichever file loads first defines it for all of them.
+if (!class_exists('WP_REST_Request')) {
+    class WP_REST_Request
+    {
+        private array $queryParams = [];
+
+        public function __construct(private array $params = []) {}
+        public function get_json_params(): array { return $this->params; }
+        public function get_body_params(): array { return []; }
+        public function get_param(string $k): mixed { return $this->params[$k] ?? $this->queryParams[$k] ?? null; }
+        public function get_file_params(): array { return []; }
+        public function set_query_params(array $params): void { $this->queryParams = $params; }
+        public function get_query_params(): array { return $this->queryParams; }
+    }
+}
+
 final class RelationFieldSearchTest extends TestCase
 {
     use MockeryPHPUnitIntegration;
 
     /** Capabilities the current caller holds, by name. */
     private array $caps = [];
+
+    /** The fake WP route table: '/ns/route' => the handler arg-array. */
+    private array $routes = [];
+
+    /** The transient store the route's rate limiter writes through. */
+    private array $transients = [];
 
     protected function setUp(): void
     {
@@ -121,6 +165,32 @@ final class RelationFieldSearchTest extends TestCase
         $GLOBALS['_ntdst_test_wp_query_args'] = [];
         $GLOBALS['_ntdst_test_wp_query_posts'] = [];
         $this->caps = [];
+        $this->routes = [];
+        $this->transients = [];
+
+        // WP core's registrar, recorded: the route table is what the picker is
+        // reached through, so it is what this file reads back.
+        Functions\when('register_rest_route')->alias(
+            function ($namespace, $route, $args = [], $override = false) {
+                $this->routes['/' . trim((string) $namespace, '/') . '/' . ltrim((string) $route, '/')][] = $args;
+                return true;
+            },
+        );
+
+        // did_action 1 / doing_action false is "after rest_api_init", so the
+        // declaration registers immediately and the table is readable as soon
+        // as the service is constructed.
+        Functions\when('did_action')->justReturn(1);
+        Functions\when('doing_action')->justReturn(false);
+        Functions\when('_doing_it_wrong')->justReturn(null);
+        Functions\when('__')->returnArg();
+        Functions\when('esc_html')->returnArg();
+        Functions\when('get_current_user_id')->justReturn(0);
+        Functions\when('get_transient')->alias(fn($k) => $this->transients[$k] ?? false);
+        Functions\when('set_transient')->alias(function ($k, $v, $ttl = 0) {
+            $this->transients[$k] = $v;
+            return true;
+        });
 
         Functions\when('sanitize_text_field')->alias(static fn($v) => trim(strip_tags((string) $v)));
         Functions\when('register_post_type')->justReturn(new stdClass());
@@ -150,21 +220,27 @@ final class RelationFieldSearchTest extends TestCase
      *
      * `artwork` IS a declared relation target — it passes the allow-list — so
      * this isolates the CAPABILITY half of the gate: the caller holds nothing,
-     * `mayPickFrom()` says no, and the method must stop before WordPress is
-     * asked anything at all.
+     * `mayPickFrom()` says no, and the request must be refused before WordPress
+     * is asked anything at all.
+     *
+     * The refusal is now the ROUTE's permission answering false, which
+     * WordPress serves as 403 (SC-4's Author probe). A permission that answers
+     * true and leaves the refusal to the handler has already let the request
+     * into the handler.
      */
     public function testATypeTheCallerMayNotEditIsRefusedAndNoQueryIsRun(): void
     {
         $this->declareRelationTo('artwork');
 
-        $result = $this->service()->handleRelationSearch(null, ['search' => 'blue', 'post_type' => 'artwork']);
+        $decision = ($this->permission())(new WP_REST_Request(['search' => 'blue', 'post_type' => ['artwork']]));
 
-        $this->assertInstanceOf('WP_Error', $result);
-        $this->assertSame(
-            'forbidden_post_type',
-            $result->get_error_code(),
-            'A post type the caller may not edit others of must be refused by code.',
-        );
+        if (!$decision instanceof WP_Error) {
+            $this->assertFalse(
+                $decision,
+                'A post type the caller may not edit others of must be refused by the route\'s permission.',
+            );
+        }
+
         $this->assertSame(
             [],
             $GLOBALS['_ntdst_test_wp_query_args'],
@@ -186,7 +262,7 @@ final class RelationFieldSearchTest extends TestCase
             (object) ['ID' => '11', 'post_title' => 'Blue Nude', 'post_content' => 'a body', 'post_status' => 'publish'],
         ];
 
-        $result = $this->service()->handleRelationSearch(null, ['search' => 'blue', 'post_type' => 'artwork']);
+        $result = ($this->handler())(new WP_REST_Request(['search' => 'blue', 'post_type' => ['artwork']]));
 
         $this->assertSame(
             ['results' => [['id' => 11, 'title' => 'Blue Nude']]],
@@ -229,7 +305,7 @@ final class RelationFieldSearchTest extends TestCase
         $this->declareRelationTo('attachment');
         $this->caps = ['edit_others_attachments'];
 
-        $this->service()->handleRelationSearch(null, ['search' => 'blue', 'post_type' => 'attachment']);
+        ($this->handler())(new WP_REST_Request(['search' => 'blue', 'post_type' => ['attachment']]));
 
         $this->assertCount(1, $GLOBALS['_ntdst_test_wp_query_args'], 'One search is one query.');
 
@@ -244,7 +320,43 @@ final class RelationFieldSearchTest extends TestCase
 
     private function service(): NTDST_RelationField
     {
-        return (new ReflectionClass(NTDST_RelationField::class))->newInstanceWithoutConstructor();
+        return new NTDST_RelationField();
+    }
+
+    /** The one route the picker declares, as WordPress received it. */
+    private function route(): array
+    {
+        if ($this->routes === []) {
+            $this->service();
+        }
+
+        $this->assertArrayHasKey(
+            '/ntdst/v1/relation/search',
+            $this->routes,
+            'control: the picker is reached as GET /ntdst/v1/relation/search.',
+        );
+
+        return $this->routes['/ntdst/v1/relation/search'][0];
+    }
+
+    /** The permission WordPress would call — the wrapped one the request meets. */
+    private function permission(): callable
+    {
+        $permission = $this->route()['permission_callback'];
+
+        $this->assertIsCallable($permission, 'The route must state a permission callback.');
+
+        return $permission;
+    }
+
+    /** The handler WordPress would call once the permission admits the request. */
+    private function handler(): callable
+    {
+        $callback = $this->route()['callback'];
+
+        $this->assertIsCallable($callback, 'The route must carry the search handler.');
+
+        return $callback;
     }
 
     /**
