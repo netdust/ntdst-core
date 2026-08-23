@@ -17,16 +17,6 @@ class NTDST_Response
     protected ?string $template = null;
 
     /**
-     * Per-call template directories added via addPath(), searched (highest
-     * priority first) ahead of the registry when THIS response resolves a
-     * template. Transient and instance-private — not a path registry: the one
-     * registry lives on NTDST_Template_Loader, which owns all resolution.
-     *
-     * @var list<string>
-     */
-    protected array $extra_paths = [];
-
-    /**
      * MIME type mappings
      */
     protected static array $mimeTypes = [
@@ -110,22 +100,6 @@ class NTDST_Response
     public function notFound(): self
     {
         $this->status = 404;
-        return $this;
-    }
-
-    /**
-     * Add a per-call template directory (prepended — highest priority) for
-     * THIS response's render()/html() resolution only.
-     *
-     * These are handed to NTDST_Template_Loader::locate() as extra paths, which
-     * searches them ahead of the registry and never writes them to the shared
-     * cache — so a PDF generator's private 'quote' template cannot hijack
-     * another caller's 'quote' lookup. Not a registry: it holds no shared or
-     * static state and does not survive the response.
-     */
-    public function addPath(string $path): self
-    {
-        array_unshift($this->extra_paths, rtrim($path, '/'));
         return $this;
     }
 
@@ -229,7 +203,7 @@ class NTDST_Response
             $this->renderError();
         }
 
-        $file = NTDST_Template_Loader::locate($template, $this->extra_paths);
+        $file = NTDST_Template_Loader::locate($template);
 
         if (!$file) {
             $this->error("Template not found: {$template}", 404)->renderError();
@@ -269,7 +243,7 @@ class NTDST_Response
             return $this->getErrorHtml();
         }
 
-        $file = NTDST_Template_Loader::locate($template, $this->extra_paths);
+        $file = NTDST_Template_Loader::locate($template);
 
         if (!$file) {
             return $this->error("Template not found: {$template}", 404)->getErrorHtml();
@@ -428,7 +402,7 @@ class NTDST_Response
     {
         http_response_code($this->status);
 
-        $error_file = NTDST_Template_Loader::locate('error', $this->extra_paths);
+        $error_file = NTDST_Template_Loader::locate('error');
 
         if ($error_file) {
             $error = $this->error;

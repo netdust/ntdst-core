@@ -460,6 +460,25 @@ final class PackageBootIntegrityTest extends TestCase
             'apiErrorResponse' => ['apiErrorResponse', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
             'apiSuccess' => ['apiSuccess', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
             'apiError' => ['apiError', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            // v5.0.0 core-shape: the hand-listed template hierarchy and the
+            // second path registry leave with it (FR-10, INV-5/INV-6).
+            //
+            // `templateInclude` is pinned BARE: it is a distinctive name, no
+            // shipped PHP spells it any more, and the only place it survives is
+            // README's migration row — which is what the row exemption is for.
+            // bin/guard.sh pins the same name as a DECLARATION in
+            // core/TemplateLoader.php (METHOD_PINS), the shape the four `api*`
+            // envelopes use, because a *.php sweep on it would also have to
+            // answer for README.
+            //
+            // `addPath` CANNOT be a bare row and that is the whole reason this
+            // one is a call shape: NTDST_Template_Loader::addPath() SURVIVES —
+            // it is the one registry FR-10 converged on — so a bare sweep would
+            // fire on the method this task kept. What went is the INSTANCE half
+            // on NTDST_Response, and `->addPath(` is the only way PHP reaches
+            // it. `::addPath(` is deliberately NOT pinned; it is the survivor.
+            'templateInclude' => ['templateInclude', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            '->addPath(' => ['->addPath(', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
         ];
     }
 

@@ -155,47 +155,72 @@ final class NTDST_Template_Loader
 
     public static function init(): void
     {
-        add_filter('template_include', [self::class, 'templateInclude'], 99);
+        // WordPress computes the hierarchy; core picks from it. The old
+        // `template_include` callback hand-listed single-{type}-{slug},
+        // single-{type}, single, archive-{type} and archive — a PARTIAL copy
+        // (no singular, no page, no taxonomy, no decoded slug) of a list
+        // WordPress already builds and hands over as the filter's THIRD
+        // argument. Hence 3 accepted args: with fewer, the callback never sees
+        // that list and has to guess names again (INV-5).
+        //
+        // PRIORITY 5, and it is load-bearing: NTDST_Pages::template() mounts a
+        // consumer's own `{$type}_template` handler at WordPress's default 10
+        // (core/Pages.php:152), and a handler a theme wrote by hand must be
+        // able to override what the registry picked. Core fills the gap first;
+        // the consumer decides last. The old callback sat on `template_include`
+        // at 99 — after every `{$type}_template` filter — so it overrode those
+        // handlers instead.
+        // The five names are HOOK types, not template names, and they are
+        // written inline rather than as a class constant on purpose: a
+        // `private const` list in core is the INV-5 shape, and this is a hook
+        // subscription, not a registry. `index` is WordPress's last resort and
+        // `singular` covers both halves of it, so the five together answer for
+        // every request a template registry can serve.
+        foreach (['index', 'singular', 'single', 'page', 'archive'] as $type) {
+            add_filter("{$type}_template", [self::class, 'pickFromCandidates'], 5, 3);
+        }
+
         add_filter('theme_file_path', [self::class, 'locateInCustomPaths'], 10, 2);
     }
 
-    public static function templateInclude(string $template): string
+    /**
+     * Answer a `{$type}_template` filter from the registry.
+     *
+     * $templates is WordPress's own candidate list, ordered most-specific
+     * first. Each name goes through locate(), so the registry is searched with
+     * the traversal guard and the hit-only cache that every other resolution
+     * uses (INV-6) — and the ORDER is WordPress's, never core's. Nothing
+     * registered answers for any candidate: hand WordPress's own choice back
+     * untouched.
+     *
+     * @param string       $template  What WordPress resolved from the theme.
+     * @param string       $type      The query type WordPress is asking about.
+     * @param list<string> $templates WordPress's ordered candidate list.
+     */
+    public static function pickFromCandidates(string $template, string $type, array $templates): string
     {
-        $templates = [];
+        foreach ($templates as $candidate) {
+            $file = self::locate($candidate);
 
-        if (is_single()) {
-            global $post;
-            $templates[] = "single-{$post->post_type}-{$post->post_name}.php";
-            $templates[] = "single-{$post->post_type}.php";
-            $templates[] = "single.php";
-        } elseif (is_archive()) {
-            $post_type = get_query_var('post_type');
-            $templates[] = "archive-{$post_type}.php";
-            $templates[] = "archive.php";
-        }
-
-        foreach ($templates as $template_name) {
-            foreach (self::$custom_paths as $path) {
-                $file = $path . '/' . $template_name;
-                if (file_exists($file)) {
-                    return $file;
-                }
+            if ($file !== null) {
+                return $file;
             }
         }
 
         return $template;
     }
 
+    /**
+     * Answer WordPress's `theme_file_path` from the registry.
+     *
+     * One line, and that is the point: this looped $custom_paths itself before
+     * 5.0.0 — a second search with no traversal guard and no cache beside the
+     * one locate() owns (INV-6). It returns whatever locate() returns, and
+     * WordPress's own path when locate() finds nothing.
+     */
     public static function locateInCustomPaths(string $path, string $file): string
     {
-        foreach (self::$custom_paths as $custom_path) {
-            $custom_file = $custom_path . '/' . $file;
-            if (file_exists($custom_file)) {
-                return $custom_file;
-            }
-        }
-
-        return $path;
+        return self::locate($file) ?? $path;
     }
 }
 

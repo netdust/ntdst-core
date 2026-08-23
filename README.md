@@ -652,6 +652,8 @@ it with `wp.apiFetch`, which sends the `wp_rest` nonce for you (INV-2, INV-4).
 | `add_filter('ntdst/api/rate_window/{action}', $cb)` | `'rate_window' => N` in the route's options, beside the limit |
 | `NTDST_Response::apiSuccess()`, `apiError()` | return the array or a `WP_Error`; WordPress builds the body |
 | `NTDST_Response::apiSuccessResponse()`, `apiErrorResponse()` | `new WP_REST_Response($data, $status)`, or `WP_Error` |
+| `NTDST_Template_Loader::templateInclude()` | nothing to write — the loader is on `{$type}_template` now and picks from WordPress's own candidate list. Register the directory (`NTDST_Template_Loader::addPath()`) and name the file the way WordPress names it (`single-gig.php`, `page-about.php`); `{$type}_template_hierarchy` is the list core reads |
+| `NTDST_Response::addPath()` | `NTDST_Template_Loader::addPath()` — one registry. A per-call directory is `NTDST_Template_Loader::locate($name, [$dir])`; `html()` keeps its two-parameter signature |
 
 A route's response shape changes with it: the dispatcher wrapped every answer in
 `{success:true,data:{…}}`, and a REST route returns the payload itself. A client

@@ -314,7 +314,26 @@ declare -A METHOD_PINS=(
     # A method can only come back where it is DECLARED, and that is here.
     # PackageBootIntegrityTest pins all four as bare provider rows, which is
     # the sweep that also answers for README.
-    ["api/Response.php"]="apiSuccess apiError apiSuccessResponse apiErrorResponse"
+    ["api/Response.php"]="apiSuccess apiError apiSuccessResponse apiErrorResponse addPath"
+
+    # FR-10 / INV-5: the loader picks from WordPress's candidate list and
+    # writes no list of its own. templateInclude() hand-listed
+    # single-{type}-{slug}, single-{type}, single, archive-{type} and archive
+    # on `template_include` — a PARTIAL copy of a hierarchy WordPress builds
+    # itself and hands to `{$type}_template` as the filter's third argument.
+    # pickFromCandidates() takes that argument.
+    #
+    # Pinned as a DECLARATION in this one file, and `addPath` is pinned in
+    # api/Response.php above, for the same reason and a second one. The reason
+    # both share: the sweep reads *.php only, and README's migration table
+    # spells both names, so a bare row would need a README exemption in a list
+    # this file cannot express (PackageBootIntegrityTest carries it). The
+    # second, which is only addPath's: NTDST_Template_Loader::addPath() SURVIVES
+    # in the file below — it is the ONE registry FR-10 converged on — so a
+    # package-wide sweep on the bare word would fire on the survivor. A
+    # per-file declaration pin says exactly what is true: Response declares no
+    # addPath, the loader does.
+    ["core/TemplateLoader.php"]="templateInclude"
 )
 for PIN_FILE in $(printf '%s\n' "${!METHOD_PINS[@]}" | sort); do
     PIN_METHODS="${METHOD_PINS[$PIN_FILE]}"

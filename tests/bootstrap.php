@@ -33,6 +33,11 @@ if (!function_exists('add_filter')) {
         }
 
         $GLOBALS['_ntdst_test_filters_at'][$hook][(int) $priority] = $cb;
+        // Bite: accepted-args is part of the mount, not decoration. A callback
+        // mounted on {$type}_template with 1 arg never sees WordPress's own
+        // candidate list, so it silently falls back to guessing names — the
+        // exact thing FR-10 removed. Recorded so a test can read it back.
+        $GLOBALS['_ntdst_test_filter_args'][$hook][(int) $priority] = (int) $args;
 
         return true;
     }
