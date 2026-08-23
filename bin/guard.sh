@@ -209,60 +209,54 @@ if [ -n "$REMOVED" ]; then
     exit 1
 fi
 
-# v5.0.0 core-trim (FR-6 / SC-3): the container declares set/get/has, and no
-# second way to ask one of them.
+# v5.0.0 core-trim: PER-FILE METHOD PINS. This table is the home for every
+# "this file must not declare this method again" rule — add a row here rather
+# than a new grep block. Each entry keeps its own rationale above it.
 #
-# make() resolved WITHOUT the singleton cache, call() injected arguments into a
-# callable after construction, forget() and flush() mutated the registry at
-# runtime, and keys() handed back a read-only copy of it. Five public methods,
-# zero shipped readers, and each one a second answer to a question set/get/has
-# already answers — the shape FR-2 removed from Bootstrap.
+# WHY DECLARATION GREPS AND NOT REMOVED-SYMBOL ROWS (both entries): every name
+# pinned here is an ordinary English word this codebase writes constantly, so a
+# bare sweep would hit prose. `when` is sharper still — core/Pages.php declares
+# a LIVE when() of its own (`ntdst_pages()->when(...)`, its docblock at :39), so
+# even a call-shape sweep (`->when(`) would hit a shipped caller. Each name is
+# therefore pinned where it can actually come back: as a `function <name>`
+# DECLARATION in ONE named file. The PHP suites pin the same properties harder
+# (ContainerSurfaceTest by exact public-method list, ThemeTrimTest by
+# reflection) and also catch a mechanism arriving under a NEW name; these lines
+# are what fail on a fresh checkout with no vendor/ and no PHP test run.
 #
-# WHY A DECLARATION GREP AND NOT A REMOVED-SYMBOL ROW: all five are ordinary
-# English words (the sweep above explains at length), so they are pinned where
-# they can actually come back — as a `function <name>` DECLARATION in this one
-# file. Anywhere else the name is prose. ContainerSurfaceTest pins the same
-# property harder, as an EXACT public-method list, which also catches the sixth
-# method arriving under a NEW name; this line is what fails on a fresh checkout
-# with no vendor/ and no PHP test run.
-CONTAINERMETHODS=$(grep -c "function make\|function call\|function forget\|function flush\|function keys" core/Container.php || true)
-if [ "$CONTAINERMETHODS" != "0" ]; then
-    echo "core/Container.php declares a method removed in v5.0.0 (make/call/forget/flush/keys):"
-    grep -n "function make\|function call\|function forget\|function flush\|function keys" core/Container.php
-    exit 1
-fi
+# `templatePath` and `wireMixins` are NOT here: both are distinctive names that
+# appear nowhere else in the tree or in README, so they are pinned as ordinary
+# bare rows in the REMOVED sweep above, mirroring
+# PackageBootIntegrityTest::removedSymbolProvider() exactly.
+declare -A METHOD_PINS=(
+    # FR-6 / SC-3: the container declares set/get/has, and no second way to ask
+    # one of them. make() resolved WITHOUT the singleton cache, call() injected
+    # arguments into a callable after construction, forget() and flush() mutated
+    # the registry at runtime, and keys() handed back a read-only copy of it.
+    # Five public methods, zero shipped readers, and each one a second answer to
+    # a question set/get/has already answers — the shape FR-2 removed from
+    # Bootstrap.
+    ["core/Container.php"]="make call forget flush keys"
 
-# v5.0.0 core-trim (FR-8 / SC-3): NTDST_Theme wires the theme's hooks, and
-# carries no mixin mechanism.
-#
-# mixin() + __call() + the $mixins registry proxied `data`/`pages`/`response`/
-# `log`/`mail`, so `$theme->data()` reached another layer through a magic
-# method — a surface that cannot be READ, because nothing in the file says
-# which names resolve. `when()` was an `if` with a fluent return. Both go; a
-# theme names the owner at the call site now (`ntdst_data()`).
-#
-# WHY A DECLARATION GREP AND NOT A REMOVED-SYMBOL ROW — the same reason the
-# container's five methods get one, and it is sharper here. `when` is an
-# ordinary English word this codebase writes constantly, AND core/Pages.php
-# declares a LIVE `when()` of its own (`ntdst_pages()->when(...)`, its
-# docblock at :39). A bare sweep would delete a shipped feature's name along
-# with prose; a call-shape sweep (`->when(`) would hit that live caller. So
-# all three are pinned where they can actually come back — as a
-# `function <name>` DECLARATION in THIS ONE FILE.
-#
-# `templatePath` and `wireMixins` are NOT here: both are distinctive names
-# that appear nowhere else in the tree or in README, so they are pinned as
-# ordinary bare rows in the REMOVED sweep above, mirroring
-# PackageBootIntegrityTest::removedSymbolProvider() exactly. ThemeTrimTest
-# pins the same property harder, by reflection, and also catches the
-# mechanism arriving under a NEW name; this line is what fails on a fresh
-# checkout with no vendor/ and no PHP test run.
-THEMEMETHODS=$(grep -c "function __call\|function mixin\|function when" core/Theme.php || true)
-if [ "$THEMEMETHODS" != "0" ]; then
-    echo "core/Theme.php declares a method removed in v5.0.0 (__call/mixin/when):"
-    grep -n "function __call\|function mixin\|function when" core/Theme.php
-    exit 1
-fi
+    # FR-8 / SC-4: NTDST_Theme wires the theme's hooks, and carries no mixin
+    # mechanism. mixin() + __call() + the $mixins registry proxied
+    # `data`/`pages`/`response`/`log`/`mail`, so `$theme->data()` reached
+    # another layer through a magic method — a surface that cannot be READ,
+    # because nothing in the file said which names resolved. `when()` was an
+    # `if` with a fluent return. Both go; a theme names the owner at the call
+    # site now (`ntdst_data()`).
+    ["core/Theme.php"]="__call mixin when"
+)
+for PIN_FILE in $(printf '%s\n' "${!METHOD_PINS[@]}" | sort); do
+    PIN_METHODS="${METHOD_PINS[$PIN_FILE]}"
+    PIN_HITS=$(grep -nE "function (${PIN_METHODS// /|})" "$PIN_FILE" || true)
+    if [ -n "$PIN_HITS" ]; then
+        echo "$PIN_FILE declares a method removed in v5.0.0 ($(echo "$PIN_METHODS" | tr ' ' '/')):"
+        echo "$PIN_HITS"
+        exit 1
+    fi
+done
+
 
 # v5.0.0 core-trim (FR-11 / SC-4): core spells every hook `ntdst/...`, never
 # `ntdst_...`. The convention is declared once, in Bootstrap's header, and the

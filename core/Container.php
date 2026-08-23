@@ -203,7 +203,7 @@ class NTDST_Container
     /**
      * Resolve class with autowiring
      */
-    protected function resolveClass(string $class, array $params = []): object
+    protected function resolveClass(string $class): object
     {
         $reflection = $this->getReflection($class);
 
@@ -219,7 +219,7 @@ class NTDST_Container
         }
 
         // Resolve constructor dependencies
-        $dependencies = $this->resolveParameters($constructor->getParameters(), $params);
+        $dependencies = $this->resolveParameters($constructor->getParameters());
 
         return $reflection->newInstanceArgs($dependencies);
     }
@@ -227,19 +227,13 @@ class NTDST_Container
     /**
      * Resolve constructor/method parameters
      */
-    protected function resolveParameters(array $parameters, array $primitives = []): array
+    protected function resolveParameters(array $parameters): array
     {
         $dependencies = [];
 
         foreach ($parameters as $parameter) {
             $name = $parameter->getName();
             $type = $parameter->getType();
-
-            // Use provided primitive parameter
-            if (array_key_exists($name, $primitives)) {
-                $dependencies[] = $primitives[$name];
-                continue;
-            }
 
             // Resolve type-hinted dependency
             if ($type && !$type->isBuiltin()) {

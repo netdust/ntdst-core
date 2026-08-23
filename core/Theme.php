@@ -10,65 +10,30 @@ defined('ABSPATH') || exit;
 
 /**
  * The theme's wiring surface — a facade over exactly ONE subject: the theme's
- * own wiring (its config, assets, hooks, template paths, which template renders
- * which type, and the helpers templates call). The fluent, chainable style is
- * deliberate — composing that wiring in one readable chain is the value this
- * facade provides, and the only reason a facade exists here at all.
+ * own wiring (config, assets, hooks, template paths, template selection, and
+ * the helpers templates call). The chainable style is why a facade exists here.
  *
  * THE GOVERNING RULE — apply it before adding anything to this class:
  *
  *     A method belongs on NTDST_Theme iff its subject dies when you switch themes.
  *
- * Name the thing the method is *about*, then ask whether that thing survives a
- * `switch_theme()`. Theme hook wiring, template paths, template selection and
- * template helpers do not survive — they ARE the theme, so they belong here. A
- * post type, a taxonomy, an api_data action, a service: all of those survive.
- * Each has its own owner, and a door onto them from here is not a convenience,
- * it is a second door onto someone else's concern.
+ * Until 5.0.0 the class broke that rule: it proxied `data`/`pages`/`response`/
+ * `log`/`mail` through a mixin() registry dispatched by __call(), opening
+ * another layer's front door under names no reader could see. That mechanism is
+ * gone, with register(), taxonomy(), apiAction(), module() and templatePath().
+ * Callers name the owning layer themselves now — `ntdst_data()`,
+ * `ntdst_pages()`, `ntdst_actions()`, `NTDST_Template_Loader::addPath()`
+ * (FR-8, 5.0.0; the reasoning lives in the core-shape spec).
  *
- * The rule agrees with the dependency graph, which is the sign it is real rather
- * than merely tidy: services register CPTs and api_data actions and cannot reach
- * Theme (they hold no reference to it), while nothing but a theme registers theme
- * hooks. Both tests fail for the same members — and those members are gone:
- *  - register()  -> `ntdst_data()->register(...)` — a CPT outlives the theme.
- *  - taxonomy()  -> the `taxonomies` config key, or
- *                   `NTDST_Data_Manager::registerTaxonomy(...)`.
- *  - apiAction() -> `ntdst_actions()->register(...)`, which is also
- *                   where the api_data capability floor lives.
- *  - module()    -> retired outright, not relocated.
+ * Accepted cost: single(), page() and archive() forward onto NTDST_Pages, a
+ * second surface that must track its owner's signature — check them when
+ * NTDST_Pages changes shape. FR-12 deletes all three.
  *
- * Those owners are reached BY NAME, at the call site (FR-8, 5.0.0). A theme
- * that wants the Data layer writes `ntdst_data()->register(...)`; it does not
- * ask the theme for it. This class used to proxy `data`/`pages`/`response`/
- * `log`/`mail` through a mixin() registry dispatched by __call(), and that
- * surface could not be READ: nothing in the file said which names resolved, so
- * the only way to learn the theme's API was to run it. The rule above governs
- * what earns a NAMED METHOD here; the answer for another layer's front door is
- * now "nothing", because the global helper already is one.
+ * Hooks: `ntdst_*` actions for new code; Theme registers no `netdust_*` hook.
  *
- * Two more members went with the mechanism:
- *  - when()         -> an `if` statement with a fluent return. PHP has an `if`.
- *  - templatePath() -> `NTDST_Template_Loader::addPath($path)`, which is the
- *                      same call one hop shorter and names its owner.
- *
- * The accepted cost — three forwarders. single(), page() and archive() forward
- * onto NTDST_Pages. They pass the rule (their subject is the theme; NTDST_Pages
- * is only the mechanism) so they stay — but they are a SECOND public surface
- * that has to track its owner's signature, and that tax has already been paid
- * twice: S7 had to repair apiAction() after it drifted to literal-cap-only, and
- * S8 had to update taxonomy() in the same change. Whenever NTDST_Pages changes
- * shape, check these three — they can go stale without anything here failing to
- * load. (core-shape FR-12 deletes all three; until it lands they call
- * ntdst_pages() by name, because the proxy they used to go through is gone.)
- *
- * Hook + filter naming conventions:
- *  - Actions: `ntdst_*` for new code. Theme registers no `netdust_*` hook of
- *    its own; service config/enable filters are Bootstrap's API, not Theme's.
- *
- * I18n note: register_nav_menus receives translated labels via __($desc).
- * Because the descriptions come from a variable, xgettext/wp i18n make-pot
- * cannot extract them. Put the literal strings somewhere static for
- * translators if you need full coverage.
+ * I18n: register_nav_menus gets translated labels via __($desc). They come from
+ * a variable, so `wp i18n make-pot` cannot extract them; put the literals
+ * somewhere static if you need full coverage.
  */
 class NTDST_Theme
 {
@@ -370,5 +335,4 @@ class NTDST_Theme
         ntdst_pages()->archive($post_type, $callback);
         return $this;
     }
-
 }
