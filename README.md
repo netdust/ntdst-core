@@ -624,6 +624,11 @@ here because a fatal does not care which spec removed the name.
 | `render_repeater_media_cell()` | the `match ($control)` arm in `admin/MetaboxGenerator.php` |
 | `restSchemaFor()`, `restSubFields()` | `restFields()`. `schemaFor()` asks the publish question at every depth, and it is private |
 
+A rate-limited public route registers `guard()`'s closure as its
+`permission_callback`, not the literal string `'__return_true'`, so the
+`publicSurface()` recipe above does not list it — see "Asserting your
+anonymous surface" above for the honest way to settle a route.
+
 **The command dispatcher (FR-7).** There is ONE HTTP surface now, and it is
 `ntdst_rest()`. The command dispatcher ran a second one: `POST /ntdst/v1/action`
 with its own `Origin` check, its own per-action nonce minted at a route of its
