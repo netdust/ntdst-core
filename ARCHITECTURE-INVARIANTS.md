@@ -53,9 +53,14 @@ projecting through `restFields()`; any `public_fields` / `public_shape` /
 - A post type that is not itself in REST (`show_in_rest` absent or false) still registers its meta — WordPress emits none of it — and warns once per model.
 - `json`, `array`, any partially-declared repeater, and a repeater that has no `sub_fields` are **not publishable at all**, and each warns once per model. Half a repeater is not half published: WordPress validates the stored row against the closed schema, so the value reads back `null`, a write carrying the undeclared key is refused 400, and a legal write drops that key from storage.
 - A scalar registers `show_in_rest => true` rather than a schema, so `format` (email, uri) is advisory only. A `format` in the schema would validate stored legacy values and read them back as `null`; the model's sanitizer, not the schema, is what enforces the shape (DD-9).
-**Status:** established by Cluster 1 (T02–T03); code holds at `42d7090`; flips to
-holds-today at the release commit (FR-16). Checks re-run verbatim at `96560c5`:
-(1) empty, (2) the ten hits above, (3) empty.
+**Status:** holds (established 2026-08-23, specs/core-shape — Cluster 1, T02–T03).
+All three commands re-run verbatim at `9fdad3d`, the code this doc describes:
+(1) EMPTY — `api/Data.php` is the one caller of `register_post_meta()`;
+(2) TEN hits, exactly the ones enumerated above (`:122`, `:128`, `:206`, `:223`,
+`:266`, `:1932`, `:1955`, `:2071`, `:2075`, `:2127`), and no second READER among
+them; (3) EMPTY — no `public_fields`, `public_shape` or `publicRow` survives
+outside the test that forbids the vocabulary. Earlier pins: `42d7090` (the code),
+`96560c5` (the checks). T14 re-runs all three at the release commit.
 
 ## INV-2 — One HTTP surface: every route registers through `ntdst_rest()`
 
@@ -75,8 +80,10 @@ tidy: this repo's `grep` is ugrep, which prints `tests/Unit/x.php` with no
 check reports 33 test-file hits it meant to drop. The spec's SC-3 command
 carries the unanchored spelling and is wrong for that reason; this one is the
 form to run.
-**Status:** HELD, established by T08 (core-shape Cluster 3). Re-run verbatim at
-`007fb33` — empty. `api/Actions.php` is deleted, `ntdst-core.php` no longer requires
+**Status:** holds (established 2026-08-23, specs/core-shape — Cluster 3, T08).
+Re-run verbatim at `9fdad3d` — EMPTY: no `register_rest_route(`, no `wp_ajax_`,
+no `ntdst/api_data` and no `ntdst_actions` outside `api/Rest.php`, with the
+comment filter carrying nothing. Earlier pin `007fb33`, also empty. `api/Actions.php` is deleted, `ntdst-core.php` no longer requires
 or boots it, `admin/RelationField.php` moved to `ntdst_rest()` at T07, and
 `NTDST_Rest::registerOne()` is the only caller of `register_rest_route()` in the
 package. The seven live hits recorded at `96560c5` are all gone.
@@ -108,9 +115,11 @@ marks the ONE pending declaration it was chained onto, and nothing else.
 handler body instead of on the route; a second permission registry; a
 `public_actions`-style list of names that may go without a gate.
 **Mechanical check:** `grep -rn "__return_true\|=> 'public'\|->public()\|public_actions" --include=*.php . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → EMPTY. Every route hit would have to be a `GET`; there are none left to judge. The comment filter now drops nothing either — the check is empty with and without it, so the second grep is kept for the day a docblock explains the posture again, not because it is carrying anything today.
-**Status:** established by Cluster 2 (T04–T06); code holds at `d91e117` for
-routes through `ntdst_rest()`. Re-pinned at core-shape Cluster 3: the check is
-EMPTY. `api/Actions.php` carried all six hits recorded at `96560c5` (the
+**Status:** holds (established 2026-08-23, specs/core-shape — Cluster 2, T04–T06).
+Re-run verbatim at `9fdad3d` — EMPTY, with and without the comment filter: no
+`__return_true`, no `=> 'public'`, no `->public()` and no `public_actions`
+outside `api/Rest.php`. Earlier pin `d91e117` for routes through
+`ntdst_rest()`; re-pinned at core-shape Cluster 3, also empty. `api/Actions.php` carried all six hits recorded at `96560c5` (the
 `$public_actions` property, the filter read and the membership test on each of
 the two dispatch paths, and the registration helper) and T08 deleted the file,
 so the second permission registry this invariant forbids is gone rather than
@@ -139,10 +148,10 @@ in `api/`, `core/` or `admin/`; a route that mints or returns a nonce; a `fetch(
 to `/wp-json/` in core's own JS that is not `wp.apiFetch`; an `Origin`/`Referer`
 check standing in for the nonce.
 **Mechanical check:** `grep -rn "wp_create_nonce\|wp_verify_nonce\|check_ajax_referer\|wp_nonce_field\|get_nonce\|HTTP_ORIGIN\|HTTP_REFERER" --include=*.php --include=*.js api core admin assets` → THREE hits, all in `admin/MetaboxGenerator.php` and all named below: `:342` and `:712` (`wp_nonce_field()`) and `:1864` (`wp_verify_nonce()`). `wp_nonce_field` joins the pattern because a MINTING call is the half that was missing: the check hunted for verification and for `wp_create_nonce()`, and a route that emitted a token through `wp_nonce_field()` instead would not have been seen. `grep -rn "fetch(" assets/js` → EMPTY: core's only JS reaches the REST API through `wp.apiFetch`, which the grep does not match because it is capitalised, and there is no raw `fetch()` left to find.
-**Status:** HELD, established by T08 (core-shape Cluster 3), re-pinned with the
-widened pattern at the cluster-3 fix wave. Re-run verbatim: three hits, all in
-`admin/MetaboxGenerator.php` — `:342`, `:712`, `:1864` — and `grep -rn "fetch("
-assets/js` is EMPTY. Core mints no nonce and reads no `Origin` or `Referer`
+**Status:** holds (established 2026-08-23, specs/core-shape — Cluster 3, T08),
+with the widened pattern the cluster-3 fix wave added. Both commands re-run
+verbatim at `9fdad3d`: THREE hits, all in `admin/MetaboxGenerator.php` —
+`:342`, `:712`, `:1864` — and `grep -rn "fetch(" assets/js` is EMPTY. Core mints no nonce and reads no `Origin` or `Referer`
 anywhere on its HTTP surface. `api/Actions.php` carried all eight of the hits recorded at
 `96560c5` and is deleted; `assets/js/ntdst-api.js` carried the ninth and its
 four raw `fetch()` calls, and is deleted too. The `wp_rest` nonce that
@@ -171,7 +180,11 @@ audit that applied it.
 that re-implements a lookup WordPress's own function answers; a hand-written
 list of template names; a `{success, data}` array built by hand.
 **Mechanical check:** `grep -rnE '(private|protected) +(static +\??array +\$|const +)[A-Za-z_]+ *= *(\[|null)' --include=*.php api core admin support services` (SINGLE quotes: in double quotes the shell eats `\$` and the variable half of the pattern silently matches nothing) → each hit is either a WordPress-less concern (rate buckets, template dirs, declared limits), a named deliberate exception below, or a bypass. (Broadened from `private static array`: a list hidden as a `const`, or as a `?array` built lazily, is the same second table. `NTDST_FieldTypes::$table` and `NTDST_FieldTypes::RETIRED` are the named exception — the field VOCABULARY is a thing WordPress has no table for, so it is INV-8's convergence point, not an INV-5 bypass.)
-**Status:** `Rest::$surface` and `Rest::$cors['origins']` are gone at `d91e117`
+**Status:** holds (established 2026-08-23, specs/core-shape — Clusters 2 and 4).
+Re-run verbatim at `9fdad3d`: TWENTY hits, and every one of them is named in the
+list below. Nothing new has appeared and nothing named here has gone.
+
+`Rest::$surface` and `Rest::$cors['origins']` are gone at `d91e117`
 (Cluster 2, T05–T06): the route register is `WP_REST_Server::get_routes()` and
 the origin list is `allowed_http_origins`. The hand-listed template hierarchy is
 gone at `94f1f89` (Cluster 4a, T09): `templateInclude()` is deleted and
@@ -273,7 +286,16 @@ invariant is ABOUT and not the package: a template `include` or a second
 `addPath` in `admin`, `support`, `services` or `ntdst-core.php` was outside
 what the check could see. Broadened and re-run: the answers are unchanged,
 five and one/one, so nothing was hiding there today.)
-**Status:** SATISFIED at `8338c4a` (core-shape Cluster 4b GATE-fix wave; the
+**Status:** holds (established 2026-08-23, specs/core-shape — Cluster 4). Both
+commands re-run verbatim at `9fdad3d`: the first returns FIVE hits, all
+`core/TemplateLoader.php` (`:146` the call, `:149`, `:190`, `:204`, `:215` the
+comments on its guard), and the second returns ONE `function redirect`
+(`api/Response.php:150`) and ONE `function addPath`
+(`core/TemplateLoader.php:31`). `api/Response.php` and `core/Pages.php` return
+zero on the first. The line numbers in the paragraph below match the tree at
+that sha; T14 re-pins them once more.
+
+Satisfied at `8338c4a` (core-shape Cluster 4b GATE-fix wave; the
 last behaviour commit of that wave is `5a32ae1`). The `db0b335` this line used
 to name was already stale when it was written: `f8626a8` — `Response::notFound()`
 sends WordPress's three lines — landed after it and was the wave's last
@@ -323,7 +345,16 @@ the permission has passed — a refused caller never makes the site write.
 `RateLimiter`; `attempt()` called before the permission check; a limiter keyed
 on `$_SERVER['REMOTE_ADDR']` instead of `NTDST_ClientIp`.
 **Mechanical check:** `grep -rn "set_transient\|get_transient" --include=*.php api core admin services support` → only `support/RateLimiter.php` counts attempts. (`support` is in the list on purpose: without it the check never reads the one file it is about. `admin/MetaboxGenerator.php`'s `SAVE_ERROR_TRANSIENT_PREFIX` is a hit and not a counter — it parks one save-error MESSAGE for one redirect and is consumed on read.) In `guard()`, `$permission($request)` precedes `RateLimiter::attempt`.
-**Status:** holds today (`f42c732`); baseline's login throttle converges on it (`ntdst-baseline` `51f7e2e`).
+**Status:** holds (established 2026-08-23, specs/core-shape). Re-run verbatim at
+`9fdad3d` — NINE hits, and `support/RateLimiter.php` holds the only counter:
+`:161` and `:244` read it, `:251` writes it, and `:216`, `:223`, `:226` are its
+own comments explaining the window. The other three are
+`admin/MetaboxGenerator.php` `:2064`, `:2106`, `:2116` —
+`SAVE_ERROR_TRANSIENT_PREFIX`, one save-error MESSAGE parked for one redirect
+and consumed on read, not a count of anything. In `guard()`,
+`$permission($request)` at `api/Rest.php:928` still precedes
+`NTDST_RateLimiter::attempt` at `:949`. Earlier pin `f42c732`; baseline's login
+throttle converges on it (`ntdst-baseline` `51f7e2e`).
 
 ## INV-8 — One field-type vocabulary; a type name resolves in one table
 
@@ -418,21 +449,27 @@ under "INV-8 — every hit the field-type check returns". They live there once.
 A second copy here is the same defect this invariant is about: two lists of the
 same thing, free to disagree.
 
-**Status:** established by field-types Clusters A–C, re-pinned at the core-trim
-Cluster D gate.
-(A) 51 hits / (B) 1, all named; both commands re-run verbatim at the core-shape
-cluster-3 fix wave. (A)'s TOTAL is unchanged from `96560c5` and its shape is
+**Status:** holds (established 2026-08-23, specs/core-shape; the vocabulary
+itself by field-types Clusters A–C, re-pinned at the core-trim Cluster D gate).
+Both commands re-run verbatim at `9fdad3d`: (A) returns **51** and (B) returns
+**1**. Per file, (A) is `admin/MetaboxGenerator.php` 28, `api/Data.php` 11,
+`admin/RelationField.php` 5, `api/Rest.php` 3, `core/Pages.php` 2,
+`core/LogLevel.php` 1, `api/Response.php` 1 — every one of them named under
+`## Deliberate exceptions`. (B)'s single hit is `admin/RelationField.php:46`.
+
+Earlier: (A) 51 / (B) 1, both re-run at the core-shape cluster-3 fix wave. (A)'s TOTAL is unchanged from `96560c5` and its shape is
 not: `api/Actions.php` went 2 → 0 (T08 deleted the file, and both its hits were
 WordPress's own `callback` ARGUMENT key), and `admin/RelationField.php` went
 3 → 5 — T07 moved the picker onto `GET /ntdst/v1/relation/search`, and the
 route's two `args` schema lines each spell `'type' => '<name>'`. Per file, (A)
 is now MetaboxGenerator 28, Data 11, RelationField 5, Rest 3, Pages 2,
-LogLevel 1, Response 1. (B) went 1 → 2 for the same reason (A)'s map-key
+LogLevel 1, Response 1. (B) briefly read 2 for the same reason (A)'s map-key
 alternative is noisy: `admin/RelationField.php:46`'s
 `const MAX_REQUESTED_TYPES = 20` is an INTEGER BOUND whose NAME carries the
-word, not a table. It is named below rather than renamed around — a check that
-only stays quiet because the constant was spelled to dodge it is a check that
-has stopped asking.
+word, not a table. T11 then deleted `Response::$mimeTypes`, the other one, so
+(B) is back to that single hit. It is named below rather than renamed around —
+a check that only stays quiet because the constant was spelled to dodge it is a
+check that has stopped asking.
 (Earlier: the count moved from 59 to 51 at `96560c5` because core-trim DELETED
 code, not because the check was relaxed — `services/Logger.php` lost 8 and
 `api/Data.php`'s `['relation' => 'OR']` 1, while `admin/RelationField.php`
@@ -499,10 +536,15 @@ Three details are load-bearing, and each was got wrong first:
 README's `#### Extension points` table (the human home) and its reason in
 `bin/zero-readers.sh`'s `EXCEPTIONS` array (the machine home). This document
 kept a third copy and it went stale; the two homes above are the list.
-**Status:** established by core-trim Clusters B and C; the script's reader
-definition, stem rule and README scoping were corrected at the Cluster D gate.
-Holds at `5506025` — stdout empty and exit 0, with all thirteen consumer roots
-present; the advisory method candidate count is on stderr, not pinned here,
+**Status:** holds (established 2026-08-23, specs/core-shape; the sweep itself by
+core-trim Clusters B and C, whose reader definition, stem rule and README
+scoping were corrected at the Cluster D gate). Re-run verbatim at `9fdad3d`:
+`bash bin/zero-readers.sh | wc -l` prints **0**, the script exits 0, and every
+consumer root is present. All sixteen `EXCEPTIONS` rows are named in README's
+`#### Extension points` table and every one of them still has a shipped site —
+`ntdst_inline()` included, which core-shape decided to KEEP rather than delete.
+Earlier pin `5506025` — stdout empty and exit 0, with all thirteen consumer
+roots present; the advisory method candidate count is on stderr, not pinned here,
 because it moves whenever a consumer repository does. Nine of the sixteen
 `EXCEPTIONS` rows are load-bearing: drop one and a finding appears. The seven
 redundant rows are named under `## Deliberate exceptions`. The file and line totals the run prints are NOT
@@ -560,7 +602,7 @@ reader checking a fixed order is checking the argument list. (2) is empty. (3) i
 `core/Bootstrap.php`, one file. (4) has one call that takes a class —
 `core/Bootstrap.php:501` — and the only gate reached before it is
 `class_exists()` at `:408`; the other hits are `core/Container.php`'s own
-declaration and docblock examples, and `core/Theme.php:48` registering an
+declaration and docblock examples, and `core/Theme.php:58` registering an
 instance of itself, which guesses nothing.
 
 The PROOF of this invariant is the pair of autoload-recorder tests —
@@ -581,11 +623,15 @@ reviewer can read.
 - **A `conditional` entry's condition must be a Closure or an array.** Anything
   else is refused. A string condition would be a callable name resolved at boot
   — the same guess, in a different key.
-**Status:** established by core-trim T01 (FR-1); check (2) was widened at the
-Cluster D gate, from one shape to five. Holds at `96560c5` — the four commands above
-were run verbatim and returned `0` for both loading files, empty, one file
-(`core/Bootstrap.php`), and the single gated `ntdst_set($class)` at
-`core/Bootstrap.php:501` behind `class_exists()` at `:408`. (2) was also run
+**Status:** holds (established 2026-08-23, specs/core-shape; the loading rule by
+core-trim T01 (FR-1), whose check (2) was widened at the Cluster D gate from one
+shape to five). All four commands re-run verbatim at `9fdad3d`: (1) prints `0`
+for `ntdst-core.php` and `0` for `core/Bootstrap.php`; (2) is EMPTY; (3) is one
+file, `core/Bootstrap.php`; (4) has the single gated `ntdst_set($class)` at
+`core/Bootstrap.php:501` behind `class_exists()` at `:408`, beside
+`core/Container.php`'s own declaration and docblock examples and
+`core/Theme.php:58` registering an instance of itself. Earlier pin `96560c5`,
+with the same four answers. (2) was also run
 against a scratch file holding the exact line 5.0.0 deleted,
 `$relativePath = str_replace('\\', '/', $class) . '.php';` — one hit.
 
@@ -757,7 +803,10 @@ a test that holds it, the test is named — that is its mechanical home.
   `meta_query` `['relation' => 'OR']` left with `orWhere()`. One payload key
   named for what it carries: `url` in `api/Data.php`'s attachment payload (1);
   the two in `services/Logger.php` went with the model. And `api/Response.php`'s
-  `'json' => 'application/json'` MIME entry (1), which is (B)'s hit as well.
+  `'json' => 'application/json'` MIME entry (`:365`, 1) — a MAP KEY inside
+  `mimeTypes()`, which adds the four types WordPress's own table lacks through
+  the `mime_types` filter. It is a MIME type, not a field type, and it is an (A)
+  hit only: (B)'s one hit since T11 is `admin/RelationField.php:46`.
 - **(B)'s hits, now one.** `api/Response.php`'s `$mimeTypes` — MIME types, not field
   types: the `[Tt][Yy][Pp][Ee][Ss]?` fragment catches the word. It was an INV-5
   item — WordPress keeps that table as `wp_get_mime_types()` — and T11 deleted it
