@@ -25,7 +25,8 @@ vendored copy that drifts. `bin/zero-readers.sh` sweeps six of them for readers
 | a download response | `ntdst_download()` — never a hand-rolled CSV block |
 | a download too big to hold in memory | stream it yourself, with `NTDST_Response::downloadHeaders()` |
 | to count anything per caller | `NTDST_RateLimiter::attempt()` / `::exceeded()` / `::reset()` |
-| a route readable cross-origin | the `cors` route option — never a hand-rolled `Access-Control-*` header |
+| a route readable cross-origin | `ntdst_rest($ns)->cors([...])`, once per namespace — never a hand-rolled `Access-Control-*` header |
+| a model field on `/wp/v2` | `'show_in_rest' => true` in the field's own description — never a second exposure layer |
 
 ## Branch convention
 
@@ -76,13 +77,7 @@ Read every line before upgrading. Nothing here is shimmed.
 5. **Bootstrap derives no path from a class name.** A listed class must be
    loaded or autoloadable before `register()` (see the core-trim migration
    section).
-6. **A CORS preflight is charged against a rate-limited route.** `OPTIONS` used
-   to cost nothing. It now spends one unit from a bucket of its own
-   (`ntdst_rest_pf_*`), so a preflight flood can now return 429. It does **not**
-   spend the verb budget your real request needs. **Consumers declare nothing**
-   — a route that already sets `rate_limit` gets this; a route that sets none
-   is still unthrottled.
-7. **`composer lint` is phpcs now, not `php -l`.** If you called it in CI,
+6. **`composer lint` is phpcs now, not `php -l`.** If you called it in CI,
    `composer syntax` is the old behaviour. See `docs/gate.md`.
 
 **Not a break, but check it:** the plugin header said `2.4.1` for the whole of
@@ -92,9 +87,10 @@ v3. If anything of yours read the version, it was reading the wrong one.
 
 `NTDST_Rest` is rewritten, and `api/FieldTypes.php` is the one field-type
 registry. The route option surface changed, so `^4.4` does not resolve to this.
-Four things to check:
+Five things to check:
 
 - **Route options** — `'permission' => 'public'`, `cors`, `before_dispatch` and the `surface()` family all moved.
+- **Field exposure** — a model's REST shape is declared per field with `'show_in_rest' => true`; the `public_fields` argument and the `publicRows()` family are gone.
 - **Field types** — thirteen type names are retired, and a retired name is a fatal at `register()`.
 - **Silent breaks** — the `ntdst/metabox_saved/{model}` payload, the model constructor's arity, and `int`'s sign.
 - **Require order** — `api/FieldTypes.php` loads before `api/Data.php`.
@@ -181,6 +177,26 @@ declaration that only `->public()` can make; no option value reaches it.
 exactly as written — `'Public'` and `' public '` are capabilities nobody holds,
 not near misses that get normalised back into an opening.
 
+**Only `GET`, `HEAD` and `OPTIONS` may carry a posture. Every other verb names a
+capability or hands over its own callable.** The rule reads the RESOLVED
+posture, not the spelling: an absent `permission`, `'logged_in'`, a namespace
+default and `->public()` all land on `is_user_logged_in` or `__return_true`, and
+neither of those is a gate. A `->post()`, `->put()`, `->patch()` or `->delete()`
+that resolves to one is REFUSED — the route does not register, one
+`_doing_it_wrong` names the verbs that may carry a posture, and one `error`
+reaches the `api` log. It refuses rather than registering a denying callback,
+because a route WordPress never received cannot be re-opened by a filter
+somebody removes later. On a site with open registration "logged in" is
+"anyone", so an unnamed write endpoint is world-writable. A write that really is
+open states that itself:
+
+```php
+ntdst_rest('shop/v1')->post('/interest', [$c, 'store'], [
+    'permission' => static fn (): bool => true,   // YOUR gate, in YOUR code
+    'rate_limit' => 30,
+]);
+```
+
 **Asserting your anonymous surface.** The surface registry and its three
 helpers are gone; the core-trim migration section names each one and what to write
 instead. WordPress already keeps the register every route lands in, and a second
@@ -215,6 +231,11 @@ and a closure is opaque: `fn () => true` and a real gate have the same type.
 Never settle a route by the TYPE of its callback. Settle it by reading what the
 route declared.
 
+The write verbs need no settling at all. A `POST`, `PUT`, `PATCH` or `DELETE`
+that named no capability and handed over no callable is absent from
+`get_routes()`, because it was refused at registration rather than registered
+behind a posture — so the list you read is already the whole write surface.
+
 **Retired options no longer take your endpoint away.** An option that never
 existed still refuses the route. `cors` and `before_dispatch` are *ignored*,
 with one `_doing_it_wrong` naming the replacement, and the route registers. An
@@ -231,6 +252,74 @@ author who wrote them when they worked keeps their endpoint.
 | `corsDecisionFor($route, $origin)` | `corsDecisionFor($origin)` |
 | `chargePreflight` | gone — `OPTIONS` is unmetered; bill it yourself with `charge()` if you need to |
 | `surface()` / `publicSurface()` / `opaqueSurface()` / `forgetSurface()` | `rest_get_server()->get_routes($ns)` — WordPress's own register |
+
+**Declaring fields for REST — the field's own description is the only door.**
+
+A field reaches `/wp/v2` when, and only when, it says so itself:
+
+```php
+ntdst_data()->register('gig', [
+    'label'  => 'Gigs',
+    'schema' => [
+        'venue'  => ['type' => 'text', 'show_in_rest' => true],
+        'fee'    => ['type' => 'int'],
+        'lineup' => [
+            'type'         => 'repeater',
+            'show_in_rest' => true,
+            'sub_fields'   => [
+                'name' => ['type' => 'text', 'show_in_rest' => true],
+                'slot' => ['type' => 'text', 'show_in_rest' => true],
+            ],
+        ],
+    ],
+]);
+```
+
+`show_in_rest` is WordPress's own key with WordPress's own meaning: OPT IN. A
+field nobody named does not leave, so `fee` above stays internal. Core hands
+every named field to `register_post_meta()` and reads the declaration nowhere
+else — one convergence point, and no second exposure layer to keep in step
+(INV-1).
+
+**A declaration is a DISCLOSURE, and there is no narrower state.** The published
+field is readable by whoever may read the post, anonymously on a public post.
+Core will not project a field per caller: "may THIS caller see THIS row's value"
+is application knowledge, and the model is the wrong altitude to answer it from.
+A field that must be internal for some readers is not a declared field — it is
+the exposing service's job, in the exposing service's code.
+
+Four rules the declaration carries with it:
+
+- **`custom-fields` follows the declaration.** WordPress emits `meta` for a post
+  type only when the type supports `custom-fields`, so core ADDS that support to
+  any model that declares at least one REST field. A model that declares none is
+  left exactly as it was.
+- **The post type has to be in REST as well.** Meta on a type whose
+  `show_in_rest` is absent or false reaches no route — the registration is
+  harmless and publishes nothing. Core warns once per model rather than
+  pretending it worked.
+- **A repeater is all-or-nothing.** Give it `sub_fields` and declare every one
+  of them, at every depth. WordPress measures a stored row against the closed
+  schema it was given, so a half-declared repeater reads back `null`, refuses a
+  write carrying the undeclared key, and drops that key on a write that does
+  not. Half a repeater is not half published; it is broken.
+- **`json` and `array` are not publishable at all**, nor is a repeater with no
+  `sub_fields`. Each unpublishes only itself and warns once per model, naming
+  the field. Declare a keyed value as a repeater instead.
+
+A scalar registers `show_in_rest => true` rather than a schema, so the `format`
+in `email` and `url` is advisory and never reaches `/wp/v2`. WordPress derives
+the schema from `type` alone, and the sanitizer is what enforces the shape — a
+schema `format` would validate stored legacy values and read them back as
+`null`.
+
+| Was | Now |
+|---|---|
+| `public_fields` — the model constructor's fourth positional argument | `'show_in_rest' => true` on the field's own description. The constructor is `(string $post_type, array $schema, string $meta_prefix, array $scopes)`, so a subclass still passing five arguments drops its scopes and nothing reports it |
+| a `public_shape` entry on the model | nothing. The shape an exposure emits belongs to the exposing service, not to the model |
+| `publicRows()` | `ntdst_data('gig')->where(...)->withMeta()->get()` and project in the caller, or read WordPress's own collection at `/wp/v2/<rest_base>` |
+| `publicRow()` | `getMeta()` on the row, or `/wp/v2/<rest_base>/{id}` |
+| `getPublicShape()` | `restFields()` — the fields the model declares may leave it. It is a CEILING, not a shape: which of them an exposure actually emits is the exposure's decision |
 
 **Field types — one registry, thirteen names retired.**
 
@@ -439,7 +528,7 @@ here, and the sweep refuses to exempt a name this table does not carry.
 | `NTDST_Service_Meta` | the optional service shape. Six implementers in bavi and dozens in netdust-legacy, all outside the swept roots. The script cannot enumerate an interface, so this row is its only check | interface |
 | `NTDST_Bootstrap::config()` | reads back the merged config a consumer passed to `register()`. Kept by FR-2 as the one read-back of that array | method |
 | `ntdst_container()` | the container accessor. ludoluykx's `FluentCRMIntegrationService` calls it twice (`:328`, `:335`); the rest of its callers are the fleet's test tearDowns and consumer bootstraps, and `tests/` is excluded from the sweep by design | function |
-| `ntdst_inline()` | the other half of the terminal response pair; `ntdst_download()` is read and this is not. Documented as a pair, and recorded as a deletion candidate for `core-shape` rather than exempted silently | function |
+| `ntdst_inline()` | the other half of the terminal response pair; `ntdst_download()` is read and this is not. Documented as a pair, and recorded as a deletion candidate for `core-shape` rather than exempted silently. `core-shape` KEPT it: 5.0.0 removes neither half of the pair | function |
 | `ntdst/core_ready` | stride — `stride-core.php` and `ProfileTypePolicy` hang their own wiring on it | action |
 | `ntdst/services_registered` | `netdust-mail`, which registers its own service once core's list is in | action |
 | `ntdst/model/registered` | josworld — `functions.php` and `YOOthemeSourcesService` | action |
@@ -651,6 +740,9 @@ it with `wp.apiFetch`, which sends the `wp_rest` nonce for you (INV-2, INV-4).
 | `add_filter('ntdst/api/public_actions', …)` | `->public()` chained onto the verb: `ntdst_rest('ns/v1')->get('/thing', $cb, ['rate_limit' => 30])->public()`. There is no options value that opens a route |
 | an anonymous WRITE action (`'public' => true` on a `POST`) | `->post('/interest', $cb, ['permission' => fn(): bool => true, 'rate_limit' => 30])`. `->public()` is refused on a write verb, so the callable is YOUR gate and the decision stays in your code |
 | `POST /ntdst/v1/get_nonce` | `wp_create_nonce('wp_rest')` — `wp.apiFetch` already sends it |
+| `GET /ntdst/v1/download?action=X` | a `->get()` route whose callback ends in `ntdst_download($content, $filename)`: `ntdst_rest('ns/v1')->get('/report', $cb, ['permission' => 'edit_others_posts'])`. The second door had zero consumers fleet-wide when it was removed |
+| `add_filter('ntdst/api_download/{action}', $cb)` | that route's own `callback`. The `{action}` name becomes the route path |
+| `verifyOrigin()` — the dispatcher's own `Origin` / `Referer` check | nothing to write. A cookie-authenticated REST request carrying no valid `wp_rest` nonce is anonymous to WordPress, and a cross-origin page cannot obtain that nonce — the check guarded nothing the nonce rule does not already guard (INV-4). A site that wants a belt as well writes its own `rest_pre_dispatch` filter and owns it |
 | `assets/js/ntdst-api.js`, `window.ntdstAPI` | `wp.apiFetch` (`wp-api-fetch` is a WordPress-provided script handle) |
 | `ntdst_enqueue_api_client()` | nothing — depend on `wp-api-fetch` instead |
 | `add_filter('ntdst/api/allowed_origins', $cb)` | `->cors(['https://example.com'])` on the namespace. CORS is a decision of the route surface now, not a filter beside a dispatcher |
@@ -683,7 +775,16 @@ it with `wp.apiFetch`, which sends the `wp_rest` nonce for you (INV-2, INV-4).
 | `NTDST_Template_Loader::getCustomPaths()` | nothing — it was a read-only copy of the registry with no readers. `NTDST_Template_Loader::addPath($dir)` registers; `locate($name)` resolves |
 | a template rendered through the response helper, reading a loose `$title` | read `$args['title']`. `html()` hands the data to WordPress's `load_template($file, false, $data)`, which puts it in scope as `$args` — core no longer `extract()`s a caller array into the template |
 
-**Page routes: declare them on `init`, and flush once.** A rewrite rule is only
+**Page routes are rewrite rules: declare them on `init`, and flush once.** A
+page route is not a dispatcher entry any more — `path()` calls
+`add_rewrite_rule()` and names its placeholders on `query_vars`, so WordPress
+parses the URL and the callback runs on `template_redirect`. Two consequences
+follow, and both are new. First, a pattern must open with a LITERAL first
+segment: `path('/card/:slug', …)` registers, and `path('/:slug', …)` and
+`path('/', …)` are REFUSED with a `_doing_it_wrong()` and register no rule at
+all — at the top of the rewrite list they would match every one-segment URL, and
+the front page, on the whole site. Second, the rules live in an option, so a new
+or edited route is invisible until that option is rewritten. A rewrite rule is only
 heard while WordPress is still building its rule set, so `ntdst_pages()->path()`
 belongs on `init` (any priority). Declare every route UNCONDITIONALLY: a route's
 identity is its POSITION in the list — the rule writes the index — so a
