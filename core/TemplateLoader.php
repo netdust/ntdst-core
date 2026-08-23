@@ -113,6 +113,15 @@ final class NTDST_Template_Loader
 
         $located = locate_template([$template]);
 
+        // Hold the fallthrough to the same bar as the registered paths.
+        // WordPress's locate_template() is a bare file_exists() against the
+        // theme directories with no traversal guard of its own, so a name like
+        // '../../outside/secret.php' resolves there and would be CACHED — the
+        // one way out of the sandbox that every other branch already closes.
+        if ($located && !self::isInsideTheme($located)) {
+            return null;
+        }
+
         // Cache HITS only. A cached negative poisons the whole request: one
         // early "not found" (e.g. before a path registration) makes the
         // template unresolvable for every later caller — page-dependent
@@ -134,10 +143,38 @@ final class NTDST_Template_Loader
      */
     private static function searchPaths(): array
     {
-        return array_merge(self::$custom_paths, [
-            get_stylesheet_directory() . '/templates',
-            get_template_directory() . '/templates',
-        ]);
+        return array_merge(self::$custom_paths, array_map(
+            static fn (string $dir): string => $dir . '/templates',
+            self::themeDirs()
+        ));
+    }
+
+    /**
+     * The theme directories, derived ONCE for the whole class: searchPaths()
+     * appends '/templates' to them, and isInsideTheme() bounds what
+     * locate_template() is allowed to hand back. Two readings of "the theme"
+     * that could drift apart is exactly how the fallthrough got unguarded.
+     *
+     * @return list<string>
+     */
+    private static function themeDirs(): array
+    {
+        return [get_stylesheet_directory(), get_template_directory()];
+    }
+
+    /**
+     * Is the file within either theme directory? The bound on WordPress's own
+     * resolution, checked with the same isInside() the registry uses.
+     */
+    private static function isInsideTheme(string $file): bool
+    {
+        foreach (self::themeDirs() as $dir) {
+            if (self::isInside($file, $dir)) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /**

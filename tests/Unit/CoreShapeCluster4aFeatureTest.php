@@ -250,8 +250,6 @@ final class CoreShapeCluster4aFeatureTest extends TestCase
      * `../` in a candidate name is refused. WordPress never produces such a
      * candidate, so this is the injected one — a plugin filtering the hierarchy,
      * or a slug that survived into a name.
-     *
-     * @group red-finding
      */
     public function testTraversalInACandidateNameIsRefused(): void
     {
@@ -270,8 +268,6 @@ final class CoreShapeCluster4aFeatureTest extends TestCase
 
     /**
      * locate() itself refuses the classic traversal, whatever the caller.
-     *
-     * @group red-finding
      */
     public function testLocateRefusesTraversalOutOfEveryRegisteredPath(): void
     {
