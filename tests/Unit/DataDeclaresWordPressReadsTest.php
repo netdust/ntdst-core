@@ -170,35 +170,33 @@ final class DataDeclaresWordPressReadsTest extends TestCase
         return (string) json_encode($call);
     }
 
-    // -- 1. Nesting, two levels down -----------------------------------------
+    // -- 1. A repeater is one level, and it publishes all of it or none -------
 
     /**
      * The behaviour says "including a sub-field inside a declared repeater",
-     * and a repeater's sub-field may itself be a repeater. Depth is not a
-     * special case, and a partial publication is not an option: WordPress
-     * validates the stored row against the schema it was given, so a repeater
-     * published without one of its keys reads back null, refuses a write that
-     * carries that key, and loses it on a write that does not. An undeclared
-     * grandchild therefore makes the whole top-level field unpublishable — the
-     * name never leaves, and neither does anything around it.
+     * and a partial publication is not an option: WordPress validates the
+     * stored row against the schema it was given, so a repeater published
+     * without one of its keys reads back null, refuses a write that carries
+     * that key, and loses it on a write that does not. One undeclared child
+     * therefore makes the whole top-level field unpublishable — the name never
+     * leaves, and neither does anything around it.
+     *
+     * These two cases asked the same question two levels down until the Cluster
+     * C re-review: a repeater inside a repeater is refused at register() now
+     * (spec FR-4 against FR-2 — `repeater` is `cell = false`), so depth two is
+     * not a shape any site can declare, and the promise is the same one at the
+     * only depth there is. The refusal is pinned in DataReadsTheVocabularyTest.
      */
-    public function testAnUndeclaredGrandchildKeepsTheWholeRepeaterOffWordPress(): void
+    public function testAnUndeclaredChildKeepsTheWholeRepeaterOffWordPress(): void
     {
         $this->declareModel('gig', [
-            'venue_city'  => ['type' => 'text', 'show_in_rest' => true],
+            'venue_city' => ['type' => 'text', 'show_in_rest' => true],
             'provenance' => [
                 'type' => 'repeater',
                 'show_in_rest' => true,
                 'sub_fields' => [
-                    'year' => ['type' => 'text', 'show_in_rest' => true],
-                    'lots' => [
-                        'type' => 'repeater',
-                        'show_in_rest' => true,
-                        'sub_fields' => [
-                            'lot_number'    => ['type' => 'int', 'show_in_rest' => true],
-                            'hammer_price'  => ['type' => 'float'], // silent — must never leave
-                        ],
-                    ],
+                    'year'         => ['type' => 'text', 'show_in_rest' => true],
+                    'hammer_price' => ['type' => 'float'], // silent — must never leave
                 ],
             ],
         ]);
@@ -207,16 +205,15 @@ final class DataDeclaresWordPressReadsTest extends TestCase
 
         $this->assertSame(['_gig_venue_city'], $this->metaKeys(), 'The repeater is not publishable; the scalar is.');
         $this->assertStringNotContainsString('hammer_price', $encoded);
-        $this->assertStringNotContainsString('lot_number', $encoded);
+        $this->assertStringNotContainsString('year', $encoded);
         $this->assertStringNotContainsString('provenance', $encoded);
     }
 
     /**
-     * The publishable version of the same tree: every name at every depth opted
-     * in. It travels as one closed schema, so WordPress accepts the stored rows
-     * and no key that was never named can ride along inside them.
+     * The publishable version of the same tree: every name opted in, so the
+     * field travels as one closed object of registry leaves.
      */
-    public function testAFullyDeclaredNestedRepeaterTravelsClosedAtEveryLevel(): void
+    public function testAFullyDeclaredRepeaterTravelsClosed(): void
     {
         $this->declareModel('gig', [
             'provenance' => [
@@ -224,13 +221,7 @@ final class DataDeclaresWordPressReadsTest extends TestCase
                 'show_in_rest' => true,
                 'sub_fields' => [
                     'year' => ['type' => 'text', 'show_in_rest' => true],
-                    'lots' => [
-                        'type' => 'repeater',
-                        'show_in_rest' => true,
-                        'sub_fields' => [
-                            'lot_number' => ['type' => 'int', 'show_in_rest' => true],
-                        ],
-                    ],
+                    'lot'  => ['type' => 'int', 'show_in_rest' => true],
                 ],
             ],
         ]);
@@ -239,23 +230,17 @@ final class DataDeclaresWordPressReadsTest extends TestCase
 
         $this->assertIsArray($schema, 'A fully declared repeater must travel as a full schema.');
 
-        // Level 1 — the declared repeater itself.
         $this->assertSame('array', $schema['type']);
         $this->assertSame('object', $schema['items']['type']);
-        $this->assertSame(['year', 'lots'], array_keys($schema['items']['properties']));
+        $this->assertSame(['year', 'lot'], array_keys($schema['items']['properties']));
         $this->assertFalse(
             $schema['items']['additionalProperties'],
-            'The outer object must be closed.',
+            'The object must be closed: nothing that was never named rides along inside a row.',
         );
-
-        // Level 2 — the declared repeater INSIDE it, closed on the same rule.
-        $inner = $schema['items']['properties']['lots'];
-        $this->assertSame('array', $inner['type']);
-        $this->assertSame('object', $inner['items']['type']);
-        $this->assertSame(['lot_number'], array_keys($inner['items']['properties']));
-        $this->assertFalse(
-            $inner['items']['additionalProperties'],
-            'The nested object must be closed too — depth is not an exemption.',
+        $this->assertSame(
+            NTDST_FieldTypes::get('int')->schema,
+            $schema['items']['properties']['lot'],
+            'And every property is the registry\'s shape for its declared type.',
         );
     }
 

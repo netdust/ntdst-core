@@ -216,9 +216,13 @@ final class DataReadsTheVocabularyTest extends TestCase
      * rather than copied out of it — `cell = false` is the vocabulary's own
      * verdict and this file must not carry a second copy of it (INV-8).
      *
-     * `repeater` is the one exception: it is cell = false because a row cannot
-     * RENDER a repeater control, but a repeater nested in a repeater is legal
-     * and its rows are sanitized recursively (pinned at the Cluster A gate).
+     * `repeater` is IN the list, with no exception (Cluster C re-review, spec
+     * FR-4 read against FR-2). It was carved out while the sanitizer's
+     * recursion was taken for a licence to declare one — but a row cannot
+     * RENDER a repeater control, so `render_repeater_row()` threw on a
+     * declaration `register()` had just accepted: a white screen on the edit
+     * screen of a model that booted cleanly. FR-4 says a `cell = false` type
+     * inside `sub_fields` throws at register(), and it says it about all four.
      *
      * @return array<string, array{string}>
      */
@@ -226,7 +230,7 @@ final class DataReadsTheVocabularyTest extends TestCase
     {
         $rows = [];
         foreach (NTDST_FieldTypes::names() as $name) {
-            if ($name !== 'repeater' && NTDST_FieldTypes::get($name)->cell === false) {
+            if (NTDST_FieldTypes::get($name)->cell === false) {
                 $rows[$name] = [$name];
             }
         }
@@ -369,17 +373,17 @@ final class DataReadsTheVocabularyTest extends TestCase
                 ['provenance' => ['type' => 'repeater', 'sub_fields' => ['notes' => ['type' => 'wysiwyg']]]],
                 ['provenance', 'notes', "Use 'html'"],
             ],
-            // FR-4: depth buys a cell-less type no way in — a nested repeater's
-            // rows are rendered as cells too.
-            'a cell-less type at depth two' => [
-                ['provenance' => [
-                    'type'       => 'repeater',
-                    'sub_fields' => ['rows' => [
-                        'type'       => 'repeater',
-                        'sub_fields' => ['body' => ['type' => 'html']],
-                    ]],
-                ]],
-                ['body', "'html' cannot be a repeater sub-field"],
+            // A REPEATER inside a repeater, with everything under it declared
+            // correctly. It is still refused, and refused at the OUTER walk:
+            // there is no depth 2 for a cell-less type to hide at, because
+            // there is no depth 2 at all. The row a nested repeater would have
+            // to render is the row nothing can render — until this ruling,
+            // register() said yes and render_repeater_row() threw.
+            'a repeater declared inside a repeater' => [
+                ['rows' => ['type' => 'repeater', 'sub_fields' => [
+                    'inner' => ['type' => 'repeater', 'sub_fields' => ['t' => 'text']],
+                ]]],
+                ["Field 'rows' sub-field 'inner': 'repeater' cannot be a repeater sub-field"],
             ],
             // A row is stored under rowKey() of its cell name, so two names that
             // fold into one key are one cell: the second declaration silently
@@ -440,45 +444,26 @@ final class DataReadsTheVocabularyTest extends TestCase
      * hard-coded list here would be the second table INV-8 forbids, and an empty
      * provider would make the case above vacuously green.
      */
-    public function testTheRefusedSubFieldTypesAreTheCellLessOnesApartFromRepeater(): void
+    public function testTheRefusedSubFieldTypesAreEveryCellLessTypeWithNoException(): void
     {
         $this->assertSame(
-            ['html', 'relation', 'gallery'],
+            ['html', 'relation', 'gallery', 'repeater'],
             array_keys(self::cellLessTypeProvider()),
-            'Derived from NTDST_FieldTypes::get()->cell — if this changes, the vocabulary changed.',
-        );
-        $this->assertFalse(
-            NTDST_FieldTypes::get('repeater')->cell,
-            'A repeater is cell = false for RENDERING; nesting is still legal (next case).',
+            'Derived from NTDST_FieldTypes::get()->cell — if this changes, the vocabulary changed. '
+            . 'All FOUR: a composite cannot be edited in a table cell, and `repeater` is not the '
+            . 'exception it was read as.',
         );
     }
 
-    /** Cluster A pinned recursion: a repeater inside a repeater is a legal declaration. */
-    public function testANestedRepeaterIsAllowed(): void
-    {
-        $model = $this->model([
-            'provenance' => [
-                'type'       => 'repeater',
-                'sub_fields' => [
-                    'title' => ['type' => 'text'],
-                    'rows'  => [
-                        'type'       => 'repeater',
-                        'sub_fields' => ['qty' => ['type' => 'int']],
-                    ],
-                ],
-            ],
-        ]);
-
-        $model->update(1, ['provenance' => [
-            ['title' => ' <b>a</b> ', 'rows' => [['qty' => '-2']]],
-        ]]);
-
-        $this->assertSame(
-            [['title' => 'text:a', 'rows' => [['qty' => -2]]]],
-            $this->storedValue('provenance'),
-            'A nested repeater sanitizes its grandchildren through their declared types.',
-        );
-    }
+    // The case that stood here pinned the OPPOSITE — "a repeater inside a
+    // repeater is a legal declaration", read off the sanitizer's recursion at
+    // the Cluster A gate. The Cluster C re-review found what that licence
+    // bought: register() accepted the declaration and render_repeater_row()
+    // threw on it, so the model booted and its edit screen white-screened. The
+    // declaration is refused now (see the provider row above). The registry's
+    // row walk still recurses — a defensive answer for a value that arrives
+    // shaped that way, which is FieldTypesTest's subject, not a declaration
+    // this vocabulary accepts.
 
     // ------------------------------------------------- 2. int keeps its sign
 

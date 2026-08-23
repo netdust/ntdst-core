@@ -489,78 +489,57 @@ final class DataRegistersRestMetaTest extends TestCase
     }
 
     /**
-     * Depth is not an exemption. A nested repeater follows the same rule, so a
-     * grandchild-complete tree publishes closed at BOTH levels.
+     * THE COMPOSITE TREE HAS A FLOOR: one object level, and no way to declare a
+     * second (Cluster C re-review).
+     *
+     * Three cases stood here, all three about depth TWO — a nested repeater
+     * publishing closed at both levels, an undeclared grandchild taking the
+     * top-level field down, an empty inner repeater doing the same. Every one
+     * of them declared a repeater inside a repeater, which the vocabulary now
+     * refuses at register() (spec FR-4 read against FR-2: `repeater` is
+     * `cell = false`, and a `cell = false` type inside `sub_fields` throws).
+     * They were pinning the behaviour of a declaration no site can make, and
+     * their promises hold unchanged one level up: the all-or-nothing rule
+     * (testARepeaterWithAnyUndeclaredSubFieldIsNeverPublished), the closed
+     * object (testAFullyDeclaredRepeaterPublishesEverySubFieldInAClosedObject)
+     * and the empty vocabulary (testARepeaterWithNoDeclaredSubFieldsIsNeverPublished).
+     * The refusal itself is pinned in DataReadsTheVocabularyTest, on both
+     * callers.
+     *
+     * What is left to say is the FLOOR, and it is worth saying: a published
+     * repeater is `array → object → registry leaves`, and no property inside it
+     * is another composite. That is what makes the closed-schema rule decidable
+     * at all — WordPress validates the stored row against this schema, and a
+     * tree that could nest without limit could nest past the point where a
+     * partial declaration is visible.
      */
-    public function testANestedRepeaterPublishesClosedAtEveryLevelWhenEveryNameOptedIn(): void
+    public function testAPublishedRepeaterIsExactlyOneObjectDeepWithRegistryLeaves(): void
     {
         $schema = $this->publishedRepeaterSchema([
             'year' => ['type' => 'text', 'show_in_rest' => true],
-            'lots' => [
-                'type' => 'repeater',
-                'show_in_rest' => true,
-                'sub_fields' => [
-                    'lot_number' => ['type' => 'int', 'show_in_rest' => true],
-                ],
-            ],
+            'lot'  => ['type' => 'int', 'show_in_rest' => true],
         ]);
 
         $this->assertIsArray($schema);
-        $this->assertSame(['year', 'lots'], array_keys($schema['items']['properties']));
-        $this->assertFalse($schema['items']['additionalProperties']);
+        $this->assertSame('array', $schema['type']);
+        $this->assertSame('object', $schema['items']['type']);
+        $this->assertFalse($schema['items']['additionalProperties'], 'The one object level is closed.');
+
+        foreach ($schema['items']['properties'] as $name => $leaf) {
+            $this->assertNotSame(
+                'array',
+                $leaf['type'] ?? null,
+                "Property '{$name}' publishes another composite. A repeater cell is a LEAF: the "
+                    . 'vocabulary has no declaration that puts a second object level under this one.',
+            );
+            $this->assertArrayNotHasKey('properties', $leaf, "Property '{$name}' must be a registry leaf.");
+        }
+
         $this->assertSame(
-            NTDST_FieldTypes::get('text')->schema,
-            $schema['items']['properties']['year'],
-            'A leaf two levels in is still the registry\'s shape.',
+            [NTDST_FieldTypes::get('text')->schema, NTDST_FieldTypes::get('int')->schema],
+            array_values($schema['items']['properties']),
+            'And each leaf is the registry\'s shape for its declared type.',
         );
-
-        $inner = $schema['items']['properties']['lots'];
-        $this->assertSame('array', $inner['type']);
-        $this->assertSame(['lot_number'], array_keys($inner['items']['properties']));
-        $this->assertFalse($inner['items']['additionalProperties']);
-        $this->assertSame(
-            NTDST_FieldTypes::get('int')->schema,
-            $inner['items']['properties']['lot_number'],
-        );
-    }
-
-    /** And one undeclared grandchild takes the TOP-LEVEL field down with it. */
-    public function testOneUndeclaredGrandchildMakesTheTopLevelFieldUnpublishable(): void
-    {
-        $this->assertNull(
-            $this->publishedRepeaterSchema([
-                'year' => ['type' => 'text', 'show_in_rest' => true],
-                'lots' => [
-                    'type' => 'repeater',
-                    'show_in_rest' => true,
-                    'sub_fields' => [
-                        'lot_number'   => ['type' => 'int', 'show_in_rest' => true],
-                        'hammer_price' => ['type' => 'float'], // silent, two levels down
-                    ],
-                ],
-            ]),
-            'An undeclared grandchild breaks the rows of the field that contains it.',
-        );
-        $this->assertSame([], $this->metaCalls);
-    }
-
-    /**
-     * Depth does not rescue an empty vocabulary either. The inner repeater
-     * declares no sub-fields, so it cannot publish; a parent that published
-     * around it would hand WordPress a closed object whose `lots` property
-     * nulls every inner row, and the parent's own rows go with it. The
-     * TOP-LEVEL field is what must be refused.
-     */
-    public function testANestedRepeaterWithNoSubFieldsMakesTheTopLevelFieldUnpublishable(): void
-    {
-        $this->assertNull(
-            $this->publishedRepeaterSchema([
-                'year' => ['type' => 'text', 'show_in_rest' => true],
-                'lots' => ['type' => 'repeater', 'show_in_rest' => true, 'sub_fields' => []],
-            ]),
-            'An empty repeater inside a repeater takes the whole field down.',
-        );
-        $this->assertSame([], $this->metaCalls);
     }
 
     // -- SC-5: what the Data layer is allowed to be asked ---------------------
