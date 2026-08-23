@@ -111,7 +111,7 @@ EXCEPTIONS=(
     'ntdst/trusted_proxies|published security knob; a site config sets it, no fleet reader today — README extension-point table'
     'NTDST_Service_Meta|optional service-shape interface; six implementers in bavi and dozens in netdust-legacy, all outside the swept roots. An INTERFACE cannot be enumerated by this script at all — README is its only check — README extension-point table'
     'ntdst_container|kept by FR-6 as the container accessor. INERT since ludoluykx joined the roots: FluentCRMIntegrationService calls it. Its other readers are the fleet test tearDowns (22 files) and consumer bootstraps, and tests/ is excluded from this sweep by design — README extension-point table'
-    'ntdst_inline|kept by core-shape as the other half of the terminal response pair; ntdst_download() is read and ntdst_inline() is not. Documented as a pair — README extension-point table. A deletion candidate for core-shape, recorded there rather than exempted silently'
+    'ntdst_inline|kept by core-shape as the other half of the terminal response pair; ntdst_download() is read and ntdst_inline() is not. Documented as a pair — README extension-point table. core-shape KEPT it: 5.0.0 removes neither half of the pair, so this is an exemption on a shipped symbol, not a deletion candidate'
     'NTDST_Bootstrap::config()|reads the merged config a consumer passed to register(); kept by FR-2 as the one read-back of that array — README extension-point table'
 )
 
