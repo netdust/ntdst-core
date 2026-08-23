@@ -167,10 +167,9 @@ ntdst_rest('shop/v1')
 ```
 
 `['permission' => 'public']` used to reach the same `'__return_true'` that
-`->public()` does. It is REFUSED now: the route does not register, one
-`_doing_it_wrong` names `->public()`, and one `error` reaches the `api` log.
-One decision with two doors is how a route ends up anonymous without anybody
-deciding it — and the second door was a value, so any array built from config,
+`->public()` does, and is REFUSED now — the migration table below names the
+replacement. One decision with two doors is how a route ends up anonymous
+without anybody deciding it — and the second door was a value, so any array built from config,
 a constant or a merge could open a route. Anonymity is a mark on the
 declaration that only `->public()` can make; no option value reaches it.
 `'logged_in'` is unchanged, and every other string is a capability asked
@@ -184,9 +183,7 @@ default and `->public()` all land on `is_user_logged_in` or `__return_true`, and
 neither of those is a gate. A `->post()`, `->put()`, `->patch()` or `->delete()`
 that resolves to one is REFUSED — the route does not register, one
 `_doing_it_wrong` names the verbs that may carry a posture, and one `error`
-reaches the `api` log. It refuses rather than registering a denying callback,
-because a route WordPress never received cannot be re-opened by a filter
-somebody removes later. On a site with open registration "logged in" is
+reaches the `api` log. On a site with open registration "logged in" is
 "anyone", so an unnamed write endpoint is world-writable. A write that really is
 open states that itself:
 
@@ -763,7 +760,7 @@ it with `wp.apiFetch`, which sends the `wp_rest` nonce for you (INV-2, INV-4).
 | `NTDST_Pages::redirect($url)` | `ntdst_response()->redirect($url)`, or WordPress's own `wp_safe_redirect($url); exit;` from an earlier hook. A page router that exits is the contract 5.0.0 removed |
 | a page callback signature of `function ($params, $template)` | `function (array $params)`. There is no template argument at `template_redirect` — WordPress has not chosen one yet |
 | a page callback returning `ntdst_response()->with(...)->template(...)` | `return NTDST_Template_Loader::page('project/single', ['project' => $project]);`. The same for `single()`, `page()`, `archive()`, `template()` and `when()`: a callback returns a path, and the data it stashes is read with `ntdst_page_data()` |
-| a page pattern that opens with a placeholder (`path('/:slug', …)`) or the site root (`path('/', …)`) | give the route a literal first segment (`path('/card/:slug', …)`). Both are REFUSED with a `_doing_it_wrong()` and register no rule: at the top of the rewrite list they match every one-segment URL, and the front page, on the whole site |
+| a page pattern that opens with a placeholder (`path('/:slug', …)`) or the site root (`path('/', …)`) | give the route a literal first segment (`path('/card/:slug', …)`) — see *Page routes are rewrite rules* below for why both are refused |
 | `NTDST_Response::json()` / `jsonPayload()` | `wp_send_json_success($data)` / `wp_send_json_error(['error' => $msg], $status)`, or a REST route through `ntdst_rest()`. WordPress owns the JSON envelope, the header and the exit |
 | `NTDST_Response::render($template, $data)` | from a page route, `return NTDST_Template_Loader::page($template, $data);` — WordPress includes the file, so `wp_head()`/`wp_footer()` still fire. Anywhere else, `echo ntdst_response()->html($template, $data);`. Nothing in core renders-and-exits any more |
 | `NTDST_Response::renderError()` / `getErrorHtml()` | `wp_die($message, '', ['response' => $status])`, which is themed, status-aware and filterable (`wp_die_handler`). The red `<div>` core used to echo was markup no theme could reach |
