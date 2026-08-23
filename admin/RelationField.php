@@ -86,9 +86,11 @@ final class NTDST_RelationField
             // ONE LINE EACH, and that is load-bearing: `string` is also a
             // RETIRED field-type name, and the pin that keeps it out of shipped
             // code exempts a line only when the line ITSELF shows it is a REST
-            // `args` schema — a `type` beside a `required`, a `sanitize_callback`
-            // or an `items`. Split across lines, the bare `'type' => 'string'`
-            // is indistinguishable from the retired declaration and fires.
+            // `args` schema — a `type` beside a `sanitize_callback`, a
+            // `validate_callback`, an `items` or an `enum`. Not `required`: the
+            // field registry spells that too. Split across lines, the bare
+            // `'type' => 'string'` is indistinguishable from the retired
+            // declaration and fires.
             'args'        => [
                 'search'    => ['type' => 'string', 'required' => true, 'sanitize_callback' => 'sanitize_text_field'],
                 'post_type' => ['type' => 'array', 'maxItems' => self::MAX_REQUESTED_TYPES, 'items' => ['type' => 'string']],
@@ -123,17 +125,16 @@ final class NTDST_RelationField
      *     hold it, and this returns EVERY row of the type — which is precisely
      *     the T23/T32 finding. Empty or non-string capabilities deny.
      *
-     * With an anonymous caller impossible, T24's attachment widening no longer
-     * needs `canQueryUnpublishedMedia()`, `nonViewableMediaParentIds()` (T30's
-     * uncached full-attachment scan) or T31's fail-open `post_parent__not_in`
-     * sibling: every caller who reaches this point may already edit others'
-     * posts of the type, which is the same claim those three gates were
-     * computing the hard way.
-     *
      * @return array|WP_Error
      */
     public function handleRelationSearch(\WP_REST_Request $request)
     {
+        // The arg's `sanitize_callback` already ran this — WordPress cleans a
+        // declared argument at the door. It is called AGAIN because this method
+        // is public and its own guarantee should not depend on the caller
+        // having come through the route: `sanitize_text_field()` is idempotent,
+        // so the second call costs one pass over a search term and removes the
+        // only way this handler could be reached with raw input.
         $search = trim(sanitize_text_field((string) $request->get_param('search')));
         if ($search === '') {
             // The STATUS is the third argument or WordPress answers 500. A

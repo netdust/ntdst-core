@@ -199,7 +199,7 @@ class NTDST_Theme
      *
      * The filter name is passed through VERBATIM, for the same reason `on()`
      * does (FR-11) — and it matters more here, because this framework's own
-     * filter vocabulary is namespaced (`ntdst/api/public_actions`) and a
+     * filter vocabulary is namespaced (`ntdst/service/{slug}/config`) and a
      * normaliser would strip the separators straight out of it.
      *
      * @param string   $filter   Filter name (used exactly as given)
