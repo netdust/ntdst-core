@@ -24,10 +24,16 @@ declare(strict_types=1);
  *   - null (or true)         → the callback answered the request itself, and
  *                              the DISPATCHER then ends the request (nothing
  *                              of WordPress's own render follows those bytes)
- *   - false / anything else  → WordPress's own not-found, through set_404()
+ *   - false                   → WordPress's own not-found, through set_404().
+ *                              No warning: false is this contract's own word
+ *                              for "refuse"
+ *   - anything else           → a _doing_it_wrong() naming the type, then the
+ *                              same not-found. A string that is not a file
+ *                              that exists names the path instead
  * Returning an NTDST_Response no longer renders-and-exits from inside a
  * template filter; build the path with NTDST_Template_Loader::page() instead,
- * which stashes the data ntdst_page_data() reads.
+ * which stashes the data ntdst_page_data() reads. README's "What a page
+ * callback's return value means" table is this list, and only this list.
  *
  * Its verb methods are deliberately absent. `get()`/`post()` used to live here
  * and meant "a page pattern matched on this request method" — which collides
