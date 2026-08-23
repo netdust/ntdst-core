@@ -36,24 +36,54 @@ final class NTDST_RelationField
 
     private function init(): void
     {
-        // The autocomplete's own action. It used to borrow the router's public
-        // `search_posts`, which is how a PUBLIC, caller-parameterised query
-        // surface came to exist for the sake of one ADMIN picker — and why five
-        // generations of security review were spent gating it.
-        // Login-required (no per-action cap_type): its cap is per-REQUESTED-type,
-        // resolved inside mayPickFrom(), so a single per-action floor would be wrong.
-        ntdst_actions()->register('relation_search', [$this, 'handleRelationSearch']);
+        // The autocomplete is a READ of the site's own rows by an editor, so it
+        // is ONE resource route on the framework's single HTTP surface — never a
+        // command on a dispatcher of its own. It used to borrow the router's
+        // public `search_posts`, which is how a PUBLIC, caller-parameterised
+        // query surface came to exist for the sake of one ADMIN picker, and why
+        // five generations of security review were spent gating it.
+        //
+        // THE PERMISSION IS A CLOSURE, and it has to be. A route that names none
+        // registers as `is_user_logged_in`, and on a site with open registration
+        // that is "anyone" — every account enumerating every row of every
+        // relation target, published or not. A capability STRING cannot express
+        // it either, because the capability is per REQUESTED type: it is read
+        // off each type object, and EVERY requested type must pass.
+        //
+        // THE BUDGET is 60 requests per 60 seconds, and the framework spends it
+        // only for callers this permission admits. An autocomplete fires on
+        // keystrokes, so the ceiling is a keyboard's worth of typing, and the
+        // refusal carries `retry_after` — a limit with no back-off signal is a
+        // picker that dies silently mid-word.
+        ntdst_rest('ntdst/v1')->get('/relation/search', [$this, 'handleRelationSearch'], [
+            'permission' => fn(\WP_REST_Request $request): bool
+                => $this->mayPickFromAll((array) $request->get_param('post_type')),
+            'rate_limit'  => 60,
+            'rate_window' => 60,
+            'args'        => [
+                'search' => [
+                    'type'              => 'string',
+                    'required'          => true,
+                    'sanitize_callback' => 'sanitize_text_field',
+                ],
+                'post_type' => [
+                    'type'  => 'array',
+                    'items' => ['type' => 'string'],
+                ],
+            ],
+        ]);
 
         // Register reverse relationship metaboxes
         add_action('add_meta_boxes', [$this, 'registerReverseRelationshipMetaboxes'], 20);
     }
 
     /**
-     * Resolve the relation-field autocomplete.
+     * Serve GET /ntdst/v1/relation/search.
      *
-     * NOT in `ntdst/api/public_actions`, so the router requires a logged-in
-     * caller before this runs. Two further conditions, and they are the whole
-     * gate:
+     * The GATE is not here: it is the route's permission, so a refused caller
+     * never reaches this method and no query is ever built for one. Read
+     * mayPickFromAll() for it. The two conditions it enforces are the whole
+     * gate, and they are these:
      *
      *  1. THE TYPE MUST BE A DECLARED RELATION TARGET. The allow-list is
      *     DERIVED from the registered schemas — exactly the `post_type` values
@@ -78,34 +108,24 @@ final class NTDST_RelationField
      * posts of the type, which is the same claim those three gates were
      * computing the hard way.
      *
-     * @param  mixed $data   Filter carry-through, unused.
-     * @param  array $params Untrusted request parameters.
      * @return array|WP_Error
      */
-    public function handleRelationSearch($data, $params)
+    public function handleRelationSearch(\WP_REST_Request $request)
     {
-        $search = trim(sanitize_text_field((string) ($params['search'] ?? '')));
+        $search = trim(sanitize_text_field((string) $request->get_param('search')));
         if ($search === '') {
             return new \WP_Error('empty_search', 'Search term required');
         }
 
-        $targets = $this->relationTargetTypes();
-        $requested = $params['post_types'] ?? $params['post_type'] ?? [];
+        // The SAME normalization the permission ran, so the list WordPress is
+        // asked for is the list that was gated — a second shaping here is how
+        // one of them stops matching the other.
+        $allowed = $this->normalizeTypes((array) $request->get_param('post_type'));
 
-        $allowed = [];
-        foreach (is_array($requested) ? $requested : [$requested] as $type) {
-            if (!is_string($type)) {
-                continue;
-            }
-
-            $type = sanitize_text_field($type);
-            if ($type !== '' && in_array($type, $targets, true) && $this->mayPickFrom($type)) {
-                $allowed[] = $type;
-            }
-        }
-
-        $allowed = array_values(array_unique($allowed));
-
+        // Unreachable through the route: the permission refuses an empty list
+        // before this runs. Kept because WP_Query with no `post_type` searches
+        // `post`, so the fail-open direction of this branch answers rows nobody
+        // asked for and nobody gated.
         if ($allowed === []) {
             return new \WP_Error(
                 'forbidden_post_type',
@@ -193,7 +213,74 @@ final class NTDST_RelationField
     }
 
     /**
-     * May the current caller pick from this type?
+     * May the current caller pick from EVERY requested type?
+     *
+     * The route's permission, and the only way in. Three refusals, one per way
+     * a gate like this fails open:
+     *
+     *  1. NOTHING REQUESTED. A loop over an empty list answers true unless the
+     *     emptiness is checked first, so a caller who simply omits `post_type`
+     *     would be admitted to a handler asked to search nothing — or, one hand
+     *     later, everything.
+     *  2. ANY refusal refuses the REQUEST. Admitting when any requested type
+     *     passes hands back the refused type's rows in the same response, and
+     *     the happy path never shows it.
+     *  3. A type the caller may edit but nobody points a relation field at is
+     *     still refused: the picker is not a general query surface over the
+     *     site.
+     *
+     * @param array<int, mixed> $requested Untrusted, straight off the request.
+     */
+    private function mayPickFromAll(array $requested): bool
+    {
+        $types = $this->normalizeTypes($requested);
+
+        if ($types === []) {
+            return false;
+        }
+
+        $targets = $this->relationTargetTypes();
+
+        foreach ($types as $type) {
+            if (!in_array($type, $targets, true) || !$this->mayPickFrom($type)) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /**
+     * The requested types as a clean, unique list of non-empty strings.
+     *
+     * One shaping, used by the permission and by the handler, so the list that
+     * was gated is the list WordPress is handed. A non-string entry is dropped
+     * by BOTH — never gated by one and queried by the other.
+     *
+     * @param  array<int, mixed> $requested
+     * @return list<string>
+     */
+    private function normalizeTypes(array $requested): array
+    {
+        $types = [];
+
+        foreach ($requested as $type) {
+            if (!is_string($type)) {
+                continue;
+            }
+
+            $type = sanitize_text_field($type);
+
+            if ($type !== '') {
+                $types[] = $type;
+            }
+        }
+
+        return array_values(array_unique($types));
+    }
+
+    /**
+     * May the current caller pick from this ONE type?
      *
      * The capability is read off the TYPE, so a CPT that remaps its map narrows
      * this with it. Fail-closed on an unregistered type or a missing/non-string
@@ -265,10 +352,10 @@ final class NTDST_RelationField
         $models = [];
         $data_manager = ntdst_data();
 
-        // Get all registered post types
-        $post_types = get_post_types(['public' => true], 'names');
+        // Every public type, filtered to the ones with an NTDST schema.
+        $candidates = get_post_types(['public' => true], 'names');
 
-        foreach ($post_types as $post_type) {
+        foreach ($candidates as $post_type) {
             if (!$data_manager->isRegistered($post_type)) {
                 continue;
             }

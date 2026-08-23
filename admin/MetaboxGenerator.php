@@ -53,14 +53,17 @@ final class NTDST_MetaboxGenerator
      * repeater) on registered-model edit screens.
      *
      * The client ships WITH this class in ntdst-core — it drives the markup
-     * render_* below emits and calls the `relation_search` api_data action
-     * NTDST_RelationField registers, so the three travel together. It used
+     * render_* below emits and calls the relation-search ROUTE
+     * NTDST_RelationField declares, so the three travel together. It used
      * to be probed from the active theme's `assets/dist/theme-services.js`,
      * which no theme ever shipped: every site's pickers were silently dead.
      *
-     * The relation autocomplete transports through window.ntdstAPI, so the
-     * shared API client is enqueued alongside and declared as a dependency
-     * — without it metabox-fields.js disables relation fields on its own.
+     * The relation autocomplete transports through wp.apiFetch, WordPress's
+     * own REST client, so `wp-api-fetch` is declared as a dependency — and it
+     * is a security control, not a bundling detail: apiFetch is what sends the
+     * REST nonce, so without it the picker's cookie-authenticated call reaches
+     * GET /ntdst/v1/relation/search as an anonymous one and is answered 401.
+     * The package ships no JS client of its own any more.
      */
     public function enqueue_metabox_scripts(string $hook): void
     {
@@ -74,10 +77,7 @@ final class NTDST_MetaboxGenerator
             return;
         }
 
-        $deps = ['jquery', 'jquery-ui-sortable'];
-
-        ntdst_enqueue_api_client();
-        $deps[] = 'ntdst-api';
+        $deps = ['jquery', 'jquery-ui-sortable', 'wp-api-fetch'];
 
         $path = dirname(__DIR__) . '/assets/js/metabox-fields.js';
         wp_enqueue_script(

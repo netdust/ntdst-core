@@ -2,11 +2,11 @@
  * Metabox Fields - All field interactions for NTDST MetaboxGenerator
  *
  * Handles:
- * - Relation field autocomplete (posts, via relation_search)
+ * - Relation field autocomplete (posts, via GET /ntdst/v1/relation/search)
  * - Gallery field (media library + sortable)
  * - Repeater field (add/remove rows + sortable)
  *
- * Requires: ntdstAPI (from ntdst-api.js), jQuery, jQuery UI Sortable
+ * Requires: wp.apiFetch (the wp-api-fetch script WordPress ships), jQuery, jQuery UI Sortable
  * @version 2.0.0
  */
 
@@ -36,9 +36,11 @@
 	// =========================================================================
 
 	function initRelationFields() {
-		// Check if ntdstAPI is available
-		if (typeof window.ntdstAPI === 'undefined') {
-			console.warn('MetaboxFields: ntdstAPI not found. Relation fields disabled.');
+		// wp.apiFetch is WordPress's own REST client, declared as a dependency
+		// of this script. It is what carries the REST nonce, so without it the
+		// picker would call the route anonymously and be answered 401.
+		if (typeof wp === 'undefined' || typeof wp.apiFetch !== 'function') {
+			console.warn('MetaboxFields: wp.apiFetch not found. Relation fields disabled.');
 			return;
 		}
 
@@ -99,28 +101,30 @@
 		resultsContainer.innerHTML = '<div class="ntdst-relation-result-loading">Searching...</div>';
 
 		try {
-			// `relation_search` is NTDST_RelationField's own login-required
-			// action (ntdst-core/admin/RelationField.php). It replaced the
-			// public `search_posts` example action the framework deleted;
-			// result count is capped server-side at 20.
-			const response = await window.ntdstAPI.call('relation_search', {
-				search: query,
-				post_types: [postType]
+			// GET /ntdst/v1/relation/search — the route NTDST_RelationField
+			// declares (ntdst-core/admin/RelationField.php). The type list goes
+			// out as post_type[]=…, which is the argument the route declares and
+			// its permission gates, one requested type at a time. The result set
+			// is capped server-side at 20 and each row is an id and a title.
+			const params = new URLSearchParams({ search: query });
+			params.append('post_type[]', postType);
+
+			const response = await wp.apiFetch({
+				path: '/ntdst/v1/relation/search?' + params.toString()
 			});
 
-			if (response.error) {
-				showError(resultsContainer, response.error);
-				return;
-			}
-
 			const results = (response.results || []).map(post => ({
-				id: post.ID || post.id,
-				title: post.post_title || post.title
+				id: post.id,
+				title: post.title
 			}));
 
 			renderResults(results, resultsContainer, selectedContainer, searchInput, allowMultiple, fieldName);
 		} catch (error) {
-			showError(resultsContainer, 'Search failed');
+			// apiFetch REJECTS on a non-2xx answer rather than resolving with an
+			// error body, so the route's own message (a 403 from the per-type
+			// gate, a 429 telling the picker to wait) arrives here and is the
+			// thing worth showing.
+			showError(resultsContainer, (error && error.message) || 'Search failed');
 		}
 	}
 
