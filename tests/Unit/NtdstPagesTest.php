@@ -463,6 +463,41 @@ final class NtdstPagesTest extends TestCase
         );
     }
 
+    public function testAPlainPermalinkSiteHasNothingToCheckAndNothingToFlush(): void
+    {
+        // R-S4. Page routes need pretty permalinks: with plain permalinks
+        // WordPress keeps no rewrite rules at all, so the presence probe finds
+        // ours missing on EVERY request and flushes on every page view — a
+        // rebuild-and-save of the whole rule set per hit. "No permalinks" is
+        // "nothing to check", not "the rules are gone".
+        $pages = new NTDST_Pages();
+        $pages->path('/card/:slug', fn (): string => __FILE__);
+
+        $pages->flushWhenRulesChanged();
+        $this->assertSame([false], $this->flushes, 'the first run stores the hash.');
+
+        $GLOBALS['wp_rewrite'] = new class {
+            public function using_permalinks(): bool
+            {
+                return false;
+            }
+
+            /** @return array<string, string> */
+            public function wp_rewrite_rules(): array
+            {
+                return [];
+            }
+        };
+
+        $pages->flushWhenRulesChanged();
+
+        $this->assertSame(
+            [false],
+            $this->flushes,
+            'a plain-permalink site must not flush the whole rule set on every request.',
+        );
+    }
+
     public function testNoFlushWhenTheLiveRulesStillCarryOurRoutes(): void
     {
         $pages = new NTDST_Pages();

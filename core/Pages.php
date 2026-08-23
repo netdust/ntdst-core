@@ -376,12 +376,21 @@ class NTDST_Pages
      * together; asking about every one of them would be the same answer N
      * times. wp_rewrite_rules() reads the option and rebuilds it when it is
      * empty — which is the rebuild this method is here to trigger anyway.
+     *
+     * PAGE ROUTES NEED PRETTY PERMALINKS. A rewrite rule is what path()
+     * registers, and a plain-permalink site keeps no rules to register it in —
+     * so the probe would find ours missing on every single request and flush
+     * the whole rule set per page view. No permalinks is "nothing to check".
      */
     protected function rulesAreMissing(): bool
     {
         global $wp_rewrite;
 
         if ($this->routes === [] || !is_object($wp_rewrite) || !method_exists($wp_rewrite, 'wp_rewrite_rules')) {
+            return false;
+        }
+
+        if (method_exists($wp_rewrite, 'using_permalinks') && !$wp_rewrite->using_permalinks()) {
             return false;
         }
 
