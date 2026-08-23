@@ -653,7 +653,16 @@ it with `wp.apiFetch`, which sends the `wp_rest` nonce for you (INV-2, INV-4).
 | `NTDST_Response::apiSuccess()`, `apiError()` | return the array or a `WP_Error`; WordPress builds the body |
 | `NTDST_Response::apiSuccessResponse()`, `apiErrorResponse()` | `new WP_REST_Response($data, $status)`, or `WP_Error` |
 | `NTDST_Template_Loader::templateInclude()` | nothing to write — the loader is on `{$type}_template` now and picks from WordPress's own candidate list. Register the directory (`NTDST_Template_Loader::addPath()`) and name the file the way WordPress names it (`single-gig.php`, `page-about.php`); `{$type}_template_hierarchy` is the list core reads |
-| `NTDST_Response::addPath()` | `NTDST_Template_Loader::addPath()` — one registry. A per-call directory is `NTDST_Template_Loader::locate($name, [$dir])`; `html()` keeps its two-parameter signature |
+| `NTDST_Response::addPath(get_stylesheet_directory())` | delete the call. `locate()` falls through to `locate_template([$name])`, which searches the stylesheet directory LAST — the same position the per-call path held |
+| `NTDST_Response::addPath($dir)` for any other directory | `NTDST_Template_Loader::addPath($dir)` once at boot. It is the ONE registry, and it is searched FIRST. `html()` keeps its two-parameter signature and takes a NAME (`html('card', $data)`), never a path; a one-off directory for a single lookup is `NTDST_Template_Loader::locate($name, [$dir])` |
+| a registered NON-`.php` theme file answered through `theme_file_path` | WordPress's own path, unchanged. The registry answers `theme_file_path` through `locate()`, which appends `.php` to a name that has none — so registered directories answer `.php` names only. A non-PHP theme file resolves the way WordPress resolves it, as before |
+
+**The loader row above covers five hooks now, and three of them are new.**
+`index_template`, `singular_template` and `page_template` are mounted beside
+`single_template` and `archive_template`. A registered directory that holds an
+`index.php` therefore captures the site's fallback template — every request
+that falls through to `index` is served that file. Register directories that
+hold only the templates they mean to serve.
 
 A route's response shape changes with it: the dispatcher wrapped every answer in
 `{success:true,data:{…}}`, and a REST route returns the payload itself. A client

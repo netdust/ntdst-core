@@ -177,13 +177,19 @@ the origin list is `allowed_http_origins`. The hand-listed template hierarchy is
 gone at `94f1f89` (Cluster 4a, T09): `templateInclude()` is deleted and
 `NTDST_Template_Loader::pickFromCandidates()` reads WordPress's own candidate
 list off the `{$type}_template` filter's third argument, so core spells no
-template name. Re-running the check at that sha, the `static array` hits are
-`Rest::$limits`, `$reported`, `$instances`, `$cors` (declared/max_age only),
-`$corsOrigins`, `$corsResolvers`, `$defaults`, `Response::$mimeTypes`,
+template name. Re-run at `4b9dca1`, the check returns 21 hits and all 21 are
+named here: `Rest::OWN`, `Rest::READ`, `Rest::RETIRED`,
+`Rest::PUBLIC_REFUSALS` (four `private const` vocabularies of the route
+surface's OWN option keys, read verbs, retired option names and refused
+`->public()` verbs — words WordPress keeps no table for), `Rest::$limits`,
+`$reported`, `$instances`, `$cors` (declared/max_age only), `$corsOrigins`,
+`$corsResolvers`, `$defaults`, `Response::$mimeTypes`,
 `Template_Loader::$custom_paths`, `$template_cache`, `$page_data`,
 `Logger::$batchedLogs`, `Data::$models`, `Data::$globalScopes`,
 `FieldTypes::$table`/`::RETIRED` and `ClientIp::DEFAULT_TRUSTED_PROXIES` — the
-loader's three moved file with the class and are unchanged in number. Only
+loader's three moved file with the class and are unchanged in number. (The four
+`Rest` consts were always in the grep's output; the earlier enumeration listed
+17 of the 21 and read as if that were the whole answer.) Only
 `Response::$mimeTypes` is still outstanding, for T10. The `api*` envelopes are
 no longer outstanding: T08 deleted `apiSuccess()`, `apiError()`,
 `apiSuccessResponse()` and `apiErrorResponse()` with the dispatcher that wrapped
@@ -207,7 +213,17 @@ phase 4); `NTDST_Pages::path()` → `add_rewrite_rule()` + the `query_vars` filt
 way to pass data to a template (`extract()` over a caller array); a second
 `addPath`.
 **Mechanical check:** `grep -rn "is_404 = false\|redirect_canonical\|locate_template(\|extract(" --include=*.php api core` → the hits Status names: `core/Pages.php:53` (a `redirect_canonical` filter) and `:380`, and `api/Response.php:273`, `:290`, `:311`, `:667` (two `extract()` calls over a caller array, a second `is_404 = false`, and a `locate_template()` outside the loader). `grep -rn "function addPath\|function redirect" --include=*.php api core` → two each, not one: `api/Response.php:126` + `:579` and `api/Response.php:235` + `core/Pages.php:458`. Phase 4 takes both counts to one.
-**Status:** established by phase 4 (today `core/Pages.php` and `api/Response.php` violate every clause).
+**Status:** partially satisfied at `94f1f89` (Cluster 4a, T09), re-checked at
+`4b9dca1`. `function addPath` is now ONE — `core/TemplateLoader.php:26`; the
+second registry in `api/Response.php` is gone. `locate_template(` moved to
+`core/TemplateLoader.php:116`, the only CALL in the package, with two comment
+mentions at `:119` and `:157` that document the guard on its result (its hit is
+refused unless it lies inside a theme directory, `5fa3d61`). Outstanding for
+phase 4's remaining tasks: `api/Response.php:215` and `:253` (two `extract()`
+calls over a caller array), `:232` (a second `is_404 = false`), `function
+redirect` still two (`api/Response.php:177`, `core/Pages.php:457`), and
+`core/Pages.php:52` (the `redirect_canonical` filter) + `:379`. Line numbers
+re-pinned at T14.
 
 ## INV-7 — Throttling is one primitive, charged from the permission callback
 

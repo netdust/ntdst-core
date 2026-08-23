@@ -47,7 +47,8 @@ final class NTDST_Template_Loader
      * instead of returning a guessed path.
      *
      * @param array<string, mixed> $data       Carried across to the include.
-     * @param list<string>         $extraPaths Per-call priority dirs (a Response's addPath).
+     * @param list<string>         $extraPaths Per-call priority dirs, searched before the
+     *                                         registry and never cached.
      */
     public static function page(string $template, array $data = [], array $extraPaths = []): ?string
     {
@@ -92,9 +93,10 @@ final class NTDST_Template_Loader
             return self::$template_cache[$template];
         }
 
-        // Per-call directories (a Response's addPath) resolve for this call
-        // only and never populate the shared cache — a private template must
-        // not hijack another caller's lookup of the same name.
+        // $extraPaths resolve for THIS call only and never populate the shared
+        // cache — a private template must not hijack another caller's lookup
+        // of the same name. A directory every caller should see belongs in the
+        // registry (addPath()), not here.
         foreach ($extraPaths as $path) {
             $path = rtrim($path, '/');
             $file = $path . '/' . $template;
