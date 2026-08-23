@@ -576,6 +576,56 @@ final class NtdstPagesTest extends TestCase
         $this->assertNull($this->templateIncludeFilter());
     }
 
+    public function testAHeadRequestIsServedByTheGetRoute(): void
+    {
+        // R-2. RFC 9110: a server that answers GET on a URL answers HEAD on
+        // it too — HEAD is GET without the body, and WordPress sends the body
+        // or not by itself. A GET route that 404s a HEAD tells every crawler,
+        // link checker and monitor that the page is gone.
+        $ran = 0;
+        $pages = new NTDST_Pages();
+        $pages->path('/card', function () use (&$ran): string {
+            $ran++;
+
+            return __FILE__;
+        });
+
+        $this->dispatch($pages, 0, 'HEAD');
+
+        $this->assertSame(1, $ran, 'a HEAD request must reach the GET route.');
+        $this->assertSame([], $this->statuses, 'HEAD on a GET route is not a 404.');
+        $this->assertSame(__FILE__, $this->templateIncludeFilter()('/theme/index.php'));
+    }
+
+    public function testAHeadRequestDoesNotReachAPostOnlyRoute(): void
+    {
+        // The other half: HEAD normalises to GET and to nothing else, so a
+        // POST-only route still has no representation for it.
+        $wp_query = new class {
+            public bool $notFound = false;
+
+            public function set_404(): void
+            {
+                $this->notFound = true;
+            }
+        };
+        $GLOBALS['wp_query'] = $wp_query;
+
+        $ran = 0;
+        $pages = new NTDST_Pages();
+        $pages->path('/x', function () use (&$ran): string {
+            $ran++;
+
+            return __FILE__;
+        }, 'POST');
+
+        $this->dispatch($pages, 0, 'HEAD');
+
+        $this->assertSame(0, $ran, 'HEAD must not reach a POST-only route.');
+        $this->assertTrue($wp_query->notFound, 'a matched rule with a verb it has no representation for is a 404.');
+        $this->assertSame([404], $this->statuses);
+    }
+
     public function testAnUnknownRouteIndexIsNotOurRequestAtAll(): void
     {
         // The other half of I-2: `ntdst_page=7` with no route 7 is not a

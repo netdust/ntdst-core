@@ -212,7 +212,18 @@ class NTDST_Pages
             return;
         }
 
-        if ($route['method'] !== strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'))) {
+        // HEAD is GET without the body (RFC 9110 §9.3.2): a server that
+        // answers GET on a URL answers HEAD on it. WordPress decides whether
+        // the body is sent, so the route only has to be reachable — a GET
+        // route that 404s HEAD tells every crawler and monitor the page is
+        // gone. A genuinely wrong verb still 404s.
+        $method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
+
+        if ($method === 'HEAD') {
+            $method = 'GET';
+        }
+
+        if ($route['method'] !== $method) {
             $this->notFound();
 
             return;
