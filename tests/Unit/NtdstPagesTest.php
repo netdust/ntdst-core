@@ -99,11 +99,30 @@ final class NtdstPagesTest extends TestCase
      * rewrite rule and put the route's index in `ntdst_page`, so a dispatch is
      * that query var plus the request method.
      */
-    private function dispatch(NTDST_Pages $pages, int $index, string $method): void
+    private function dispatch(NTDST_Pages $pages, int $index, string $method, array $params = []): void
     {
         $this->queryVars['ntdst_page'] = (string) $index;
+
+        // The placeholders WordPress parsed. They arrive as query vars, which
+        // is also how a hand-written `?ntdst_p_slug[]=x` arrives — so this is
+        // the entry the param check has to be sound over, not the rule's regex.
+        foreach ($params as $name => $value) {
+            $this->queryVars['ntdst_p_' . $name] = $value;
+        }
+
         $_SERVER['REQUEST_METHOD'] = $method;
         $pages->dispatch();
+    }
+
+    /** A router whose terminator is observable instead of ending the process. */
+    private function terminatingPages(): NTDST_Pages
+    {
+        return new class extends NTDST_Pages {
+            protected function terminate(): never
+            {
+                throw new NtdstPagesTerminated();
+            }
+        };
     }
 
     /** The callback the template_include filter mounted, if any. */
@@ -191,7 +210,35 @@ final class NtdstPagesTest extends TestCase
         $this->assertNull($this->templateIncludeFilter(), 'a refusal mounts no template.');
     }
 
-    public function testANullReturnSetsNothing(): void
+    public function testAHandledReturnStopsTheWordPressRender(): void
+    {
+        // C-1. `null`/`true` means "the callback wrote the response itself".
+        // Returning out of template_redirect leaves WordPress to render the
+        // query it already resolved, so the theme's blog index is appended to
+        // bytes that were already sent — after a Content-Length, after a
+        // vCard. The ONE dispatcher ends the request, the way WordPress's own
+        // template_redirect consumers do.
+        foreach ([null, true] as $handled) {
+            $pages = $this->terminatingPages();
+            $pages->path('/card/:slug', fn () => $handled);
+
+            $terminated = false;
+
+            try {
+                $this->dispatch($pages, 0, 'GET', ['slug' => 'ace-of-cups']);
+            } catch (NtdstPagesTerminated) {
+                $terminated = true;
+            }
+
+            $this->assertTrue(
+                $terminated,
+                'a handled return must end the request; anything else renders the resolved query after it.',
+            );
+            $this->assertNull($this->templateIncludeFilter(), 'a handled request mounts no template.');
+        }
+    }
+
+    public function testANullReturnIsNotARefusal(): void
     {
         $wp_query = new class {
             public bool $notFound = false;
@@ -203,14 +250,18 @@ final class NtdstPagesTest extends TestCase
         };
         $GLOBALS['wp_query'] = $wp_query;
 
-        $pages = new NTDST_Pages();
+        $pages = $this->terminatingPages();
         $pages->path('/card/:slug', fn (): ?string => null);
 
-        $this->dispatch($pages, 0, 'GET');
+        $this->expectException(NtdstPagesTerminated::class);
 
-        $this->assertFalse($wp_query->notFound, 'null means the callback answered; it is not a refusal.');
-        $this->assertSame([], $this->statuses);
-        $this->assertNull($this->templateIncludeFilter());
+        try {
+            $this->dispatch($pages, 0, 'GET', ['slug' => 'ace-of-cups']);
+        } finally {
+            $this->assertFalse($wp_query->notFound, 'null means the callback answered; it is not a refusal.');
+            $this->assertSame([], $this->statuses);
+            $this->assertNull($this->templateIncludeFilter());
+        }
     }
 
     public function testTheRuleSetFlushesOnceAndNotAgain(): void
@@ -346,4 +397,9 @@ final class NtdstPagesTest extends TestCase
             );
         }
     }
+}
+
+/** The observable end of a request — what the test double's terminate() raises. */
+final class NtdstPagesTerminated extends RuntimeException
+{
 }

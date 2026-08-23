@@ -21,7 +21,9 @@ declare(strict_types=1);
  * A CALLBACK RETURNS A PATH AND NEVER EXITS. The return contract is the same
  * for path(), template() and when():
  *   - an existing file path  → that file is the template WordPress includes
- *   - null (or true)         → the callback answered the request itself
+ *   - null (or true)         → the callback answered the request itself, and
+ *                              the DISPATCHER then ends the request (nothing
+ *                              of WordPress's own render follows those bytes)
  *   - false / anything else  → WordPress's own not-found, through set_404()
  * Returning an NTDST_Response no longer renders-and-exits from inside a
  * template filter; build the path with NTDST_Template_Loader::page() instead,
@@ -195,9 +197,16 @@ class NTDST_Pages
 
         $result = call_user_func($route['callback'], $params);
 
-        // The callback handled its own output (status included).
+        // The callback handled its own output (status included), so the
+        // request is finished. Returning here would leave WordPress to render
+        // the query it had already resolved — the theme's blog index appended
+        // to bytes that were sent, after a declared Content-Length, after a
+        // vCard. This is the ONE place in the package that ends a request, and
+        // it ends it the way WordPress's own template_redirect consumers
+        // (feeds, canonical redirects) end theirs. A CALLBACK still never
+        // exits; the dispatcher does. (INV-6 `## Deliberate exceptions`.)
         if ($result === null || $result === true) {
-            return;
+            $this->terminate();
         }
 
         if (is_string($result) && $result !== '') {
@@ -217,6 +226,19 @@ class NTDST_Pages
         }
 
         $this->notFound();
+    }
+
+    /**
+     * End the request.
+     *
+     * A seam, not decoration: `exit` is untestable and a dispatcher that ends
+     * the request is the one behaviour a test most needs to observe, so the
+     * terminator is a method a double can override. It is `never` because a
+     * caller that could continue past it is the defect this closes.
+     */
+    protected function terminate(): never
+    {
+        exit;
     }
 
     /**
