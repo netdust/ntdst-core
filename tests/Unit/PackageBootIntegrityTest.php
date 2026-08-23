@@ -1315,7 +1315,7 @@ final class PackageBootIntegrityTest extends TestCase
      * bin/guard.sh mirrors this rule; the shapes are the contract, not the
      * file they were found in.
      */
-    private const REST_ARG_SCHEMA_LINE = "/(?=.*'type' *=> *'[a-z_]+')(?=.*'(?:required|sanitize_callback|validate_callback|items|enum)' *=>)/";
+    private const REST_ARG_SCHEMA_LINE = "/(?=.*'type' *=> *'[a-z_]+')(?=.*'(?:sanitize_callback|validate_callback|items|enum)' *=>)/";
 
     private const VERSIONS_PROSE_ALLOWANCES = [
         '/one exception, and it is `signed_int`/'
