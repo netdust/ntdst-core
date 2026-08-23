@@ -53,7 +53,12 @@ final class NTDST_Template_Loader
      *
      * @param array<string, mixed> $data       Carried across to the include.
      * @param list<string>         $extraPaths Per-call priority dirs, searched before the
-     *                                         registry and never cached.
+     *                                         registry and never cached. TRUSTED,
+     *                                         developer-supplied directories only: a
+     *                                         request-derived value here is an
+     *                                         arbitrary-file-read by construction, since
+     *                                         isInside() bounds the name to the directory
+     *                                         and the caller chose the directory.
      */
     public static function page(string $template, array $data = [], array $extraPaths = []): ?string
     {
@@ -88,7 +93,9 @@ final class NTDST_Template_Loader
      * resolved. The registry is read LIVE here, which is what eliminates the
      * old seed-once ordering hazard.
      *
-     * @param list<string> $extraPaths Searched first, never cached.
+     * @param list<string> $extraPaths Searched first, never cached. Trusted,
+     *                                 developer-supplied directories only — never a
+     *                                 request-derived value (see page()).
      */
     public static function locate(string $template, array $extraPaths = []): ?string
     {
@@ -205,6 +212,12 @@ final class NTDST_Template_Loader
      * here instead. Failing closed is the ruling — the bound is the only thing
      * that makes the fallthrough safe, core's five hook candidates never live
      * in theme-compat, and the caller keeps WordPress's own path either way.
+     *
+     * The bound is the theme ROOT, not <theme>/templates: WordPress's own
+     * candidates (single-gig.php, page-about.php, index.php) live at the root
+     * of the theme, so bounding to the templates subdirectory would refuse
+     * every legitimate fallthrough. searchPaths() is the half that adds
+     * '/templates'; this half answers for what locate_template() found.
      */
     private static function isInsideTheme(string $file): bool
     {
