@@ -72,25 +72,25 @@ Integration gate: `cd ~/Sites/ntdst-core && composer gate && grep -rn "do_action
 
 Stakes: standard — removals; the two behaviours that must survive are stride's reminders (T11 re-creates them with WordPress) and stride's mail (T11 receives the class).
 
-- [ ] T07 — Container keeps set/get/has; RelationField stops claiming to be a service [Tier A]  (files: core/Container.php, admin/RelationField.php, tests/Unit/ContainerSurfaceTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
+- [x] T07 — Container keeps set/get/has; RelationField stops claiming to be a service [Tier A]  (files: core/Container.php, admin/RelationField.php, tests/Unit/ContainerSurfaceTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
   Satisfies: FR-6, FR-10, SC-3
   Test-author: solo — cluster stakes standard; removal pinned by a surface test plus the kept autowiring
   Proven by: new test
   Unit test: `ReflectionClass(NTDST_Container)` public methods are exactly `__construct`, `set`, `get`, `has`; `function_exists('ntdst_make')` is false; `function_exists()` is true for `ntdst_container`, `ntdst_set`, `ntdst_get`; `ntdst_set(Probe::class)` then `ntdst_get(Probe::class)` twice returns the same instance whose constructor dependency (`ProbeDep`) was autowired; `ReflectionClass(NTDST_Container)` has no property `callableReflections`; `ReflectionClass(NTDST_RelationField)` has no method `metadata` and does not implement `NTDST_Service_Meta`. Every existing test that called `flush()`/`forget()`/`make()`/`call()` (found by `grep -rlE "->(flush|forget|make|call)\(|ntdst_make" tests/`) is rewritten to construct a fresh `NTDST_Container` instead. `removedSymbolProvider()` gains `ntdst_make`, `callableReflections` (`5.0.0`); `make`, `call`, `forget`, `flush`, `keys` are too generic for the scanner — `bin/guard.sh` pins them as `grep -c "function make\|function call\|function forget\|function flush\|function keys" core/Container.php` = 0.
 
-- [ ] T08 — Scheduler leaves the package [Tier B]  (files: services/Scheduler.php, tests/Unit/SchedulerTest.php, tests/bootstrap.php, ntdst-core.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
+- [x] T08 — Scheduler leaves the package [Tier B]  (files: services/Scheduler.php, tests/Unit/SchedulerTest.php, tests/bootstrap.php, ntdst-core.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
   Satisfies: FR-7, SC-3
   Test-author: solo — cluster stakes standard; file deletion pinned by the loader-list test and the removed-symbol scanner
   Proven by: machine gate — `composer gate` (the loader-list test fails if `ntdst-core.php` or `tests/bootstrap.php` still names the file; the scanner fails if any shipped file names `NTDST_Scheduler`)
   Unit test: none new — `SchedulerTest.php` is deleted with the class; `removedSymbolProvider()` gains `NTDST_Scheduler`, `ntdst_scheduler`, `ntdst_schedule_recurring`, `ntdst_clear_recurring` (`5.0.0`) and that existing test is the assertion (Tier B).
 
-- [ ] T09 — Theme loses mixin(), __call(), when(), templatePath(); on()/filter() stay [Tier A]  (files: core/Theme.php, tests/Unit/ThemeTrimTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
+- [x] T09 — Theme loses mixin(), __call(), when(), templatePath(); on()/filter() stay [Tier A]  (files: core/Theme.php, tests/Unit/ThemeTrimTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
   Satisfies: FR-8, SC-3
   Test-author: solo — cluster stakes standard; removal pinned by a surface test; the kept pair tested through the hooks they register
   Proven by: new test
   Unit test: `ReflectionClass(NTDST_Theme)` has no method `__call`, `mixin`, `when`, `templatePath`, and no property `mixins`; `on('init', $cb, 5, 2)` results in `has_action('init', $cb) === 5` and `filter('the_title', $cb2)` in `has_filter('the_title', $cb2) === 10` (Brain Monkey hook stubs); constructing `new NTDST_Theme([])` calls none of `ntdst_data`, `ntdst_pages`, `ntdst_response`, `ntdst_log`, `ntdst_mail` (`Functions\expect(...)->never()` for each); calling `$theme->pages()` throws `Error` (undefined method) — this replaces core-shape T12's mixin-proxy assertion if that test already exists (plan `## Sequencing note`). `removedSymbolProvider()` gains `wireMixins`, `templatePath` (`5.0.0`); `bin/guard.sh` pins `grep -c "function __call\|function mixin\|function when" core/Theme.php` = 0.
 
-- [ ] T10 — Mailer leaves core [Tier B]  (files: services/Mailer.php, ntdst-core.php, tests/bootstrap.php, core/Theme.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php, README.md)
+- [x] T10 — Mailer leaves core [Tier B]  (files: services/Mailer.php, ntdst-core.php, tests/bootstrap.php, core/Theme.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php, README.md)
   Satisfies: FR-9 (core half)
   Test-author: solo — file deletion pinned by the loader-list test and the removed-symbol scanner
   Proven by: machine gate — `composer gate`; `grep -rn "ntdst_mail\|NTDST_Mailer\|ntdst_send_queued_mail\|ntdst_notify" api core admin services ntdst-core.php` = 0 lines
