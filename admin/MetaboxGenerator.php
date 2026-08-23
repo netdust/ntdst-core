@@ -333,10 +333,10 @@ final class NTDST_MetaboxGenerator
             $data = ntdst_data()->get($model_name)->find($post->ID, 'any');
             $values = ($data && !is_wp_error($data)) ? $data->fields : [];
         } else {
-            // The save's own key rule — see render_metabox().
+            // The declared key, verbatim — see render_metabox().
             $values = [];
             foreach (array_keys($all_fields) as $field_name) {
-                $values[$field_name] = get_post_meta($post->ID, sanitize_key((string) $field_name), true);
+                $values[$field_name] = get_post_meta($post->ID, (string) $field_name, true);
             }
         }
 
@@ -695,12 +695,13 @@ final class NTDST_MetaboxGenerator
             $values = ($data && !is_wp_error($data)) ? $data->fields : [];
         } else {
             // Use WordPress native functions for unregistered/native post types.
-            // sanitize_key() is the SAME key rule the save writes under — one
-            // question, asked on both sides, or a screen reads a key its own
-            // save never wrote.
+            // The DECLARED key, verbatim — the same key save_metabox_data()
+            // writes under. A key rule applied on both sides still agrees with
+            // itself while disagreeing with every value the site already
+            // stored.
             $values = [];
             foreach (array_keys($fields) as $field_name) {
-                $values[$field_name] = get_post_meta($post->ID, sanitize_key((string) $field_name), true);
+                $values[$field_name] = get_post_meta($post->ID, (string) $field_name, true);
             }
         }
 
@@ -1988,19 +1989,25 @@ final class NTDST_MetaboxGenerator
                 }
             } else {
                 foreach ($values as $field_name => $value) {
-                    // The key a posted field is stored under is WordPress's own
-                    // answer, not the browser's string.
-                    $meta_key = sanitize_key($field_name);
+                    // The DECLARED key, verbatim. array_intersect_key() above
+                    // is what makes it safe: every key left here came out of
+                    // the site's own `fields` array, so there is nothing for a
+                    // key rule to clean — and sanitize_key() lowercases, so
+                    // applying one would move `venueCity` to a second meta key
+                    // and orphan the row the site already wrote. (The repeater
+                    // ROW key is a different question, and the vocabulary's:
+                    // NTDST_FieldTypes::rowKey() answers it, because that key
+                    // is one the BROWSER echoes back.)
 
                     // An empty list is a CLEARED field: deleting is cleaner
                     // than storing a serialized empty array.
                     if (is_array($value) && $value === []) {
-                        delete_post_meta($post_id, $meta_key);
+                        delete_post_meta($post_id, $field_name);
 
                         continue;
                     }
 
-                    update_post_meta($post_id, $meta_key, $value);
+                    update_post_meta($post_id, $field_name, $value);
                 }
             }
 
