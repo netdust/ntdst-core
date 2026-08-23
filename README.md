@@ -729,11 +729,23 @@ string and logs `html(): no template resolved`, where it used to return a red
 error `<div>` of core's own markup. Check the return value if the template name
 can be wrong.
 
+**A loose variable in the template does not just vanish either.**
+`load_template()` runs `extract($wp_query->query_vars, EXTR_SKIP)` before it
+includes your file, so a template that reads a loose `$name`, `$error`,
+`$author`, `$order`, `$page`, `$s`, `$term` or `$post_type` — instead of
+`$args['…']` — silently reads WordPress's own query var of that name rather
+than yours. The scope a template runs in is WordPress's full template scope
+now (the same one `get_template_part()` hands out), not a scope this class
+built.
+
 **Core does not widen what your site accepts on upload.** `mime_types` is also
 the base of `get_allowed_mime_types()`, so the four types core adds there are
 taken back off the upload list through `upload_mimes` — an SVG upload is markup
 that executes in your origin. A site that DOES want SVG uploads says so itself
-with its own `upload_mimes` filter.
+with its own `upload_mimes` filter, and it must run at priority `11` or later:
+core's own `upload_mimes` filter runs at the default priority (`10`) and its
+`array_diff_key()` strips core's four types back off the list, taking an
+earlier addition at the same priority with them.
 
 **The loader row above covers five hooks now, and three of them are new.**
 `index_template`, `singular_template` and `page_template` are mounted beside
