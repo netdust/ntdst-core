@@ -213,17 +213,24 @@ phase 4); `NTDST_Pages::path()` → `add_rewrite_rule()` + the `query_vars` filt
 way to pass data to a template (`extract()` over a caller array); a second
 `addPath`.
 **Mechanical check:** `grep -rn "is_404 = false\|redirect_canonical\|locate_template(\|extract(" --include=*.php api core` → the hits Status names: `core/Pages.php:53` (a `redirect_canonical` filter) and `:380`, and `api/Response.php:273`, `:290`, `:311`, `:667` (two `extract()` calls over a caller array, a second `is_404 = false`, and a `locate_template()` outside the loader). `grep -rn "function addPath\|function redirect" --include=*.php api core` → two each, not one: `api/Response.php:126` + `:579` and `api/Response.php:235` + `core/Pages.php:458`. Phase 4 takes both counts to one.
-**Status:** partially satisfied at `94f1f89` (Cluster 4a, T09), re-checked at
-`4b9dca1`. `function addPath` is now ONE — `core/TemplateLoader.php:26`; the
-second registry in `api/Response.php` is gone. `locate_template(` moved to
-`core/TemplateLoader.php:116`, the only CALL in the package, with two comment
-mentions at `:119` and `:157` that document the guard on its result (its hit is
-refused unless it lies inside a theme directory, `5fa3d61`). Outstanding for
-phase 4's remaining tasks: `api/Response.php:215` and `:253` (two `extract()`
-calls over a caller array), `:232` (a second `is_404 = false`), `function
-redirect` still two (`api/Response.php:177`, `core/Pages.php:457`), and
-`core/Pages.php:52` (the `redirect_canonical` filter) + `:379`. Line numbers
-re-pinned at T14.
+**Status:** partially satisfied at `5bee797` (Cluster 4b, T10), which closed the
+page-router half. `NTDST_Pages::path()` (`core/Pages.php:114`) calls
+`add_rewrite_rule()` at `:138` and names its query vars on the `query_vars`
+filter (`queryVars()` `:153`); `dispatch()` (`:174`) runs on `template_redirect`
+and reads `get_query_var('ntdst_page')` at `:176`. `core/Pages.php` returns NO hit from either
+command now: the canonical-redirect filter, the `is_404` clear, the
+render-and-exit and `function redirect` are all gone (six methods, pinned in
+`bin/guard.sh` `METHOD_PINS["core/Pages.php"]` and — the five distinctive ones —
+in `PackageBootIntegrityTest::removedSymbolProvider()`). `function redirect` and
+`function addPath` are each ONE: `api/Response.php:177` and
+`core/TemplateLoader.php:31`. `locate_template(` is still the single CALL at
+`core/TemplateLoader.php:151`, with four comment mentions documenting the guard
+on its result (`:154`, `:195`, `:209`, `:220` — refused unless the hit lies
+inside a theme directory, `5fa3d61`). Outstanding, all in the file T11 owns:
+`api/Response.php:215` and `:253` (two `extract()` calls over a caller array)
+and `:232` (the last `is_404 = false`). Two stale comments there name
+`NTDST_Pages::commitOk()` (`:193`, `:224`), which no longer exists — T11 scrubs
+them with the rest. Line numbers re-pinned at T14.
 
 ## INV-7 — Throttling is one primitive, charged from the permission callback
 
