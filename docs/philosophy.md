@@ -254,14 +254,11 @@ REST route. Core does not make it worse and does not fix it unless asked. The
 fix is one call, and `README.md` says so where a consumer will meet it.
 
 **Revised at 5.0.0 — the list is WordPress's, and the declaration is
-site-wide.** The per-route `cors` option is gone, and so is core's own
-allow-list: `ntdst_rest($ns)->cors([...])` ADDS its origins to WordPress's
-`allowed_http_origins`, and every allowed-or-not question is put to
-`is_allowed_http_origin()`. Two lists is one too many — §1's rule, applied to
-the primitive this section admitted. The decision stayed a pure function
-(`corsDecision()`), so §6.5 still holds: every branch is assertable at the unit
-tier, with `sendCors()` a thin emitter over it. One thing the admission did NOT
-foresee: `allowed_http_origins` is read by `admin-ajax.php`, `admin-post.php`
+site-wide.** Core's own allow-list is gone; README's *CORS is site-wide*
+section carries the mechanism. Two lists is one too many — §1's rule, applied
+to the primitive this section admitted — and §6.5 still holds, because the
+decision stayed a pure function (`corsDecision()`). One thing the admission did
+NOT foresee: `allowed_http_origins` is read by `admin-ajax.php`, `admin-post.php`
 and the customizer too, and `send_origin_headers()` grants credentials to an
 allowed origin unconditionally. So the declaration is scoped to
 `wp_is_serving_rest_request()` — a REST origin must not be able to fetch
