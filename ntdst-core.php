@@ -52,6 +52,9 @@ require_once NTDST_PATH . '/support/RateLimiter.php';
 // Load API layer (request flow)
 require_once NTDST_PATH . '/api/FieldTypes.php'; // the field vocabulary; Data reads it
 require_once NTDST_PATH . '/api/Data.php';
+// The template resolver is its own file (FR-10) and loads BEFORE Response,
+// which calls NTDST_Template_Loader::locate() from page(), html() and error().
+require_once NTDST_PATH . '/core/TemplateLoader.php';
 require_once NTDST_PATH . '/api/Response.php';
 
 // Load admin UI (edit-screen rendering + persistence)
