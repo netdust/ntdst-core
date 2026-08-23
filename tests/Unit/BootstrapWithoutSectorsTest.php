@@ -68,20 +68,52 @@ final class BootstrapWithoutSectorsTest extends TestCase
         $this->assertSame([], $boot->getServices());
     }
 
-    public function testABootWithDiscoveryOffScansNoThemeDirectory(): void
+    public function testNoDirectoryIsScannedWhateverTheConfigSays(): void
     {
+        // WAS: "a boot with discovery OFF scans no theme directory".
         // `discoverSectorServices()` ran on EVERY boot, and its base path fell
         // back to get_stylesheet_directory() — so a mu-plugin consumer that had
         // deliberately switched auto-discovery off still scanned whatever theme
-        // happened to be active. This is the half of F5 that the removal
-        // deletes outright rather than fixes.
+        // happened to be active. That was the half of F5 the sector removal
+        // deleted outright rather than fixed.
+        //
+        // RE-POINTED for core-trim FR-1 / INV-10. "Off" is no longer the
+        // question, because there is no switch: core scans no directory at all.
+        // So this asks the harder version — discovery turned ON, a populated
+        // `discovery_paths`, a file that matches the retired `*Service.php`
+        // glob exactly — and still nothing is read and nothing registers.
+        // BootstrapResolvesOnlyLoadedClassesTest owns the full contract; this
+        // case keeps the theme question dead where it was first asked.
         Functions\expect('ntdst_sectors')->never();
         Functions\expect('get_stylesheet_directory')->never();
 
-        $boot = new NTDST_Bootstrap(['services' => ['auto_discover' => false]]);
-        $boot->register();
+        $GLOBALS['_ntdst_sectors_probe_included'] = [];
+        $dir = sys_get_temp_dir() . '/ntdst-sectors-' . getmypid() . '-' . uniqid();
+        mkdir($dir, 0777, true);
+        file_put_contents(
+            $dir . '/ProbeService.php',
+            "<?php namespace NtdstT01Sectors;\n"
+                . "\$GLOBALS['_ntdst_sectors_probe_included'][] = __FILE__;\n"
+                . "class ProbeService { public static function metadata(): array { return []; } }\n",
+        );
 
-        $this->assertSame([], $boot->getServices());
+        try {
+            $boot = new NTDST_Bootstrap([
+                'services' => ['auto_discover' => true, 'discovery_paths' => [$dir]],
+            ]);
+            $boot->register();
+
+            $this->assertSame(
+                [],
+                $GLOBALS['_ntdst_sectors_probe_included'],
+                'Core executed a file out of a configured directory: '
+                    . implode(', ', $GLOBALS['_ntdst_sectors_probe_included']),
+            );
+            $this->assertSame([], $boot->getServices(), 'A directory is not a service list.');
+        } finally {
+            unlink($dir . '/ProbeService.php');
+            rmdir($dir);
+        }
     }
 
     public function testAServiceDeclaringSectorsIsNoLongerFilteredOnThem(): void

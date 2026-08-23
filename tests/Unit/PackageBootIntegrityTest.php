@@ -146,6 +146,29 @@ final class PackageBootIntegrityTest extends TestCase
             'retired type person' => ["/'type' *=> *'person'|=> *'person'|NTDST_FieldType\\('person'/", '5.0.0', 'api/FieldTypes.php', '/^\\s*(\'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)\'\\s*=>\\s*\'(bool|date|float|html|int|relation|text|textarea)\',|\\[\'type\' *=> *\'(integer|number|boolean|string|array)\'.*\\], *\'[a-z_]+\', *(true|false),)\\s*$/'],
             'retired type post_relation' => ["/'type' *=> *'post_relation'|=> *'post_relation'|NTDST_FieldType\\('post_relation'/", '5.0.0', 'api/FieldTypes.php', '/^\\s*(\'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)\'\\s*=>\\s*\'(bool|date|float|html|int|relation|text|textarea)\',|\\[\'type\' *=> *\'(integer|number|boolean|string|array)\'.*\\], *\'[a-z_]+\', *(true|false),)\\s*$/'],
             'restSchemaFor' => ['restSchemaFor', '5.0.0'],
+            // v5.0.0 core-trim (FR-1, INV-10) — Bootstrap's service scanner and
+            // the two config keys that armed it. The scanner globbed
+            // `*Service.php` under `services.discovery_paths`, `require_once`d
+            // every hit and regex-parsed the source for its class name; a
+            // writable directory on that list was code execution. It had zero
+            // users: all five consumer sites set `auto_discover => false` and
+            // load their services by `require_once` or by Composer.
+            //
+            // The two KEYS are swept as well as the two methods, and that is
+            // the point of the pair. Deleting the methods while a shipped line
+            // still reads `$config['services']['auto_discover']` leaves the
+            // switch half-alive — a config key core consults and then does
+            // nothing with is exactly the "loads nothing by guessing" promise
+            // read back as a maybe. `discoverServicesInPath` needs no row of
+            // its own: `discoverServices` is a substring of it.
+            //
+            // A consumer config may still CARRY both keys — core simply never
+            // reads them (AF-4), and README's core-trim table says so. This
+            // sweep is over what the PACKAGE ships, not over what a site writes.
+            'discoverServices' => ['discoverServices', '5.0.0'],
+            'getClassNameFromFile' => ['getClassNameFromFile', '5.0.0'],
+            'auto_discover' => ['auto_discover', '5.0.0'],
+            'discovery_paths' => ['discovery_paths', '5.0.0'],
         ];
     }
 
