@@ -81,6 +81,13 @@ class NTDST_Data_Model
         $this->meta_prefix = $meta_prefix;
         $this->scopes = $scopes;
 
+        // The declaration rules are the VOCABULARY's, and both callers ask it —
+        // this constructor and NTDST_MetaboxGenerator::register(). A copy of a
+        // rule is a second vocabulary (INV-8), and while the metabox kept none
+        // at all, the declaration that fatally refused to register here was
+        // accepted by a plain post type and surfaced to an editor instead.
+        NTDST_FieldTypes::assertDeclarations($schema, "Model '{$post_type}'");
+
         $this->bindFields();
     }
 
@@ -267,7 +274,7 @@ class NTDST_Data_Model
             return null;
         }
 
-        $type = self::declaredType($config);
+        $type = NTDST_FieldTypes::declaredType($config);
 
         // Ask the vocabulary what this name means, through the same resolver the
         // constructor used, so a name outside the 17 throws with the FIELD in the
@@ -349,37 +356,28 @@ class NTDST_Data_Model
     }
 
     /**
-     * Bind every declared field to the vocabulary — and refuse a declaration
-     * the vocabulary has no word for.
+     * Bind every declared field to the vocabulary: its sanitizer and its
+     * validation rules, in ONE walk, with the type name resolved once for both.
      *
-     * ONE walk of the declaration, because each field is ONE declaration: it
-     * binds the sanitizer, it walks a repeater's rows, and it reads the
-     * validation rules, and the type name is resolved once for all three. Three
-     * loops over the same array could be given three different answers by a
-     * schema that changed between them, and each of them cost a reader a pass.
+     * What the vocabulary REFUSES is asked before this runs — the constructor
+     * calls NTDST_FieldTypes::assertDeclarations(), which owns the four
+     * declaration rules and answers for the metabox's register() too. So a
+     * retired name, an invention, a cell-less type in a row and a sub-field
+     * `sanitizer` have already failed at `init`, naming the field.
      *
-     * This runs at construction, which on a site is register() time: a retired
-     * name, an invention, a type that cannot render inside a repeater row, or a
-     * sub-field carrying a `sanitizer` nothing would run, fails at `init` naming
-     * the field, instead of becoming a text input that stores whatever the box
-     * held. The whole declaration is kept as the
-     * field's config — the sanitizer reads `sub_fields`, `min`, `max` and the
-     * rest out of it.
+     * The whole declaration is kept as the field's config — the sanitizer reads
+     * `sub_fields`, `min`, `max` and the rest out of it.
      */
     private function bindFields(): void
     {
         foreach ($this->schema as $field => $config) {
             $field = (string) $field;
-            $type = self::declaredType($config);
+            $type = NTDST_FieldTypes::declaredType($config);
 
             $this->sanitizers[$field] = $this->sanitizerFor($field, $config, $type);
 
             if (!is_array($config)) {
                 continue;
-            }
-
-            if ($type === 'repeater') {
-                $this->assertRowTypes($field, $config['sub_fields'] ?? null, '');
             }
 
             $this->validators[$field] = [
@@ -421,71 +419,6 @@ class NTDST_Data_Model
     }
 
     /**
-     * Every sub-field of a repeater, at every depth, against the same table.
-     *
-     * Four refusals, all of them at register(): a name outside the vocabulary,
-     * a `cell = false` type (it cannot be edited in a row, and today it renders
-     * as a text input that stores the escaped soup), two names
-     * that NTDST_FieldTypes::rowKey() folds into ONE key (a row stores one cell
-     * per key, so the second declaration would silently take the first one's
-     * type), and a sub-field that declares its own `sanitizer`.
-     *
-     * That last one is refused because nothing runs it: the row walk sanitizes
-     * each cell by its DECLARED TYPE and never looks for a callable, so the
-     * declaration means the author believes a cell is being tightened while it
-     * is not. "Quietly does nothing" is the worst answer a security declaration
-     * can get.
-     *
-     * A repeater INSIDE a repeater is legal — it is cell = false for RENDERING
-     * only — and its own sub-fields are walked the same way.
-     */
-    private function assertRowTypes(string $field, mixed $subFields, string $path): void
-    {
-        if (!is_array($subFields)) {
-            return;
-        }
-
-        $seen = [];
-
-        foreach ($subFields as $name => $config) {
-            $name = (string) $name;
-            $key = NTDST_FieldTypes::rowKey($name);
-            $at = $path === '' ? $name : $path . '.' . $name;
-            $where = "Field '{$field}' sub-field '{$at}'";
-
-            if (is_array($config) && array_key_exists('sanitizer', $config)) {
-                throw new InvalidArgumentException(
-                    "{$where}: a sub-field cannot declare a 'sanitizer'.",
-                );
-            }
-
-            if (isset($seen[$key])) {
-                throw new InvalidArgumentException(
-                    "{$where}: '{$seen[$key]}' and '{$name}' both sanitize to the key "
-                    . "'{$key}', and a repeater row holds one cell per key.",
-                );
-            }
-
-            $seen[$key] = $name;
-
-            $type = self::declaredType($config);
-
-            if ($type === 'repeater') {
-                $this->assertRowTypes($field, is_array($config) ? ($config['sub_fields'] ?? null) : null, $at);
-
-                continue;
-            }
-
-            if (!$this->typeFor($type, $where)->cell) {
-                throw new InvalidArgumentException(
-                    "{$where}: '{$type}' cannot be a repeater sub-field — it has no cell control. "
-                    . "Use 'textarea' for a cell, or declare '{$type}' as a top-level field.",
-                );
-            }
-        }
-    }
-
-    /**
      * The vocabulary's entry for a name, with the declaration that asked for it.
      *
      * The registry's message says what to write instead; this says WHERE, and
@@ -498,22 +431,6 @@ class NTDST_Data_Model
         } catch (InvalidArgumentException $e) {
             throw new InvalidArgumentException($where . ': ' . $e->getMessage(), 0, $e);
         }
-    }
-
-    /**
-     * The type a declaration names. A bare string IS the type; an array says so
-     * under `type`; a declaration with neither is text — a label-only field is
-     * the commonest declaration on the fleet and it must not fatal at init.
-     */
-    private static function declaredType(mixed $config): string
-    {
-        if (is_array($config)) {
-            $type = $config['type'] ?? 'text';
-
-            return is_string($type) && $type !== '' ? $type : 'text';
-        }
-
-        return is_string($config) && $config !== '' ? $config : 'text';
     }
 
     /**
@@ -1825,7 +1742,7 @@ class NTDST_Data_Model
      */
     private function readValue(mixed $config, mixed $value): mixed
     {
-        $entry = NTDST_FieldTypes::get(self::declaredType($config));
+        $entry = NTDST_FieldTypes::get(NTDST_FieldTypes::declaredType($config));
 
         return ($entry->read ?? $entry->sanitize)($value, is_array($config) ? $config : []);
     }

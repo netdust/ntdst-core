@@ -132,6 +132,170 @@ final class NTDST_FieldTypes
             : (string) preg_replace('/[^a-z0-9_\-]/', '', strtolower($name));
     }
 
+    /**
+     * THE DECLARATION RULE, and there is one of it: the type a declaration NAMES.
+     *
+     * A bare string IS the type; an array says so under `type`; a declaration
+     * with neither is `text`, because a label-only field is the commonest
+     * declaration on the fleet and it must not fatal at init.
+     *
+     * JUNK is not quietly rewritten to `text`: `['type' => 123]` is carried to
+     * get(), which refuses it by name. "Someone wrote no type" and "someone
+     * typo'd a type" are different mistakes, and only the first one is legal.
+     *
+     * Four readers each carried a copy of this rule — the model's constructor,
+     * its sanitizer binding, the metabox render and the metabox save — and one
+     * of them defaulted a missing type to `string`, a name v5.0.0 retired. A
+     * copy of a rule is a second vocabulary (INV-8).
+     */
+    public static function declaredType(mixed $declaration): string
+    {
+        $type = is_array($declaration) ? ($declaration['type'] ?? null) : $declaration;
+
+        if ($type === null || $type === '') {
+            return 'text';
+        }
+
+        // A non-scalar names nothing. It is reported AS the shape it is, in a
+        // form no entry can ever answer to, rather than cast into a name — the
+        // cast that lands on a real entry is the silent wrong answer.
+        return is_scalar($type) ? (string) $type : '(' . get_debug_type($type) . ')';
+    }
+
+    /**
+     * Every rule the vocabulary has about a `fields` DECLARATION, asked once,
+     * at registration — by the model's constructor AND by the metabox's
+     * register().
+     *
+     * Until v5.0.0 only the model asked. The same declaration that fatally
+     * refused to register as a model was accepted by a plain post type and
+     * surfaced later — as a save-time notice, or as a text input that stored
+     * escaped markup over the real content. One `fields` array is one `fields`
+     * array, whoever declares it.
+     *
+     * Four refusals, all of them at register(): a name outside the vocabulary,
+     * a `cell = false` type inside a row, two sub-field names that
+     * NTDST_FieldTypes::rowKey() folds into ONE key (a row holds one cell per
+     * key, so the second declaration would silently take the first one's type),
+     * and a sub-field that declares its own `sanitizer` — refused because
+     * nothing runs it: the row walk cleans each cell by its DECLARED TYPE and
+     * never looks for a callable, so the declaration means the author believes
+     * a cell is being tightened while it is not. "Quietly does nothing" is the
+     * worst answer a security declaration can get.
+     *
+     * `callback` is legal here and has no entry: it is a RENDER DIRECTIVE — the
+     * field draws itself and the consumer's own code owns what it stores. It is
+     * live on the fleet, so the gate accepts it; what a MODEL then does with one
+     * is the model's own question, asked later.
+     *
+     * A repeater INSIDE a repeater is legal — `cell = false` is a RENDERING
+     * verdict — and its own sub-fields are walked the same way.
+     *
+     * @param array<array-key, mixed> $fields
+     * @param string $where names the declaring model or metabox: on a site this
+     *        fatal is the whole bug report, and a message with no subject in it
+     *        is one nobody can act on.
+     *
+     * @throws InvalidArgumentException naming the field, the sub-field and the
+     *         canonical name to write instead.
+     */
+    public static function assertDeclarations(array $fields, string $where): void
+    {
+        $prefix = $where === '' ? '' : $where . ': ';
+
+        foreach ($fields as $field => $declaration) {
+            $field = (string) $field;
+            $type = self::declaredType($declaration);
+
+            if ($type === 'callback') {
+                continue;
+            }
+
+            $entry = self::entry($type, "{$prefix}Field '{$field}'");
+
+            if ($entry->name === 'repeater') {
+                self::assertRow(
+                    $field,
+                    is_array($declaration) ? ($declaration['sub_fields'] ?? null) : null,
+                    '',
+                    $prefix,
+                );
+            }
+        }
+    }
+
+    /**
+     * Every sub-field of a repeater, at every depth, against this same table.
+     *
+     * @param mixed  $subFields the repeater's declared `sub_fields`, whatever shape it arrived in
+     * @param string $path      the dotted trail to this row, so a depth-two fault names where it is
+     */
+    private static function assertRow(string $field, mixed $subFields, string $path, string $prefix): void
+    {
+        if (!is_array($subFields)) {
+            return;
+        }
+
+        $seen = [];
+
+        foreach ($subFields as $name => $declaration) {
+            $name = (string) $name;
+            $key = self::rowKey($name);
+            $at = $path === '' ? $name : $path . '.' . $name;
+            $where = "{$prefix}Field '{$field}' sub-field '{$at}'";
+
+            if (is_array($declaration) && array_key_exists('sanitizer', $declaration)) {
+                throw new InvalidArgumentException(
+                    "{$where}: a sub-field cannot declare a 'sanitizer'.",
+                );
+            }
+
+            if (isset($seen[$key])) {
+                throw new InvalidArgumentException(
+                    "{$where}: '{$seen[$key]}' and '{$name}' both sanitize to the key "
+                    . "'{$key}', and a repeater row holds one cell per key.",
+                );
+            }
+
+            $seen[$key] = $name;
+
+            $type = self::declaredType($declaration);
+            $entry = self::entry($type, $where);
+
+            if ($entry->name === 'repeater') {
+                self::assertRow(
+                    $field,
+                    is_array($declaration) ? ($declaration['sub_fields'] ?? null) : null,
+                    $at,
+                    $prefix,
+                );
+
+                continue;
+            }
+
+            if (!$entry->cell) {
+                throw new InvalidArgumentException(
+                    "{$where}: '{$type}' cannot be a repeater sub-field — it has no cell control. "
+                    . "Use 'textarea' for a cell, or declare '{$type}' as a top-level field.",
+                );
+            }
+        }
+    }
+
+    /**
+     * The table's entry for a name, with the declaration that asked for it.
+     *
+     * get()'s message says what to write instead; this says WHERE.
+     */
+    private static function entry(string $type, string $where): NTDST_FieldType
+    {
+        try {
+            return self::get($type);
+        } catch (InvalidArgumentException $e) {
+            throw new InvalidArgumentException($where . ': ' . $e->getMessage(), 0, $e);
+        }
+    }
+
     /** @return array<string, NTDST_FieldType> */
     private static function table(): array
     {
@@ -213,8 +377,25 @@ final class NTDST_FieldTypes
                 ['type' => 'string'], 'textarea', true,
                 read: $readString,
             ),
-            // cell = false: markup cannot be edited in a repeater row, and a
-            // row that renders it as a text input stores the escaped soup.
+            // OUTPUT CONTRACT — the 'html' field type.
+            //
+            // Stored: wp_kses_post()'s answer and nothing else. It keeps a safe
+            // HTML subset (<p>, <a href>, <strong>, <em>, <ul>/<li>, <br>, ...)
+            // where 'textarea' would strip every tag. A <script> TAG does not
+            // survive; the script's BODY does, as text — kses removes the tag
+            // and keeps what was between them. So the stored value is markup
+            // that is safe to PRINT, never a value that is safe to EXECUTE.
+            //
+            // Printing it is the consumer's half of the contract: run
+            // wp_kses_post() again at render time. NEVER esc_html() (it encodes
+            // the markup and prints a literal "<p>" to the visitor) and NEVER a
+            // raw echo (wp_update_post() and direct DB access reach this value
+            // without ever passing this table).
+            //
+            // cell = false: markup cannot be edited in a repeater row. A row
+            // that renders it as a single-line text input hands the editor raw
+            // markup in a one-line box — unusable, not lossy: esc_attr() on the
+            // way out is undone by the browser on the way back.
             new NTDST_FieldType(
                 'html',
                 static fn(mixed $value, array $config): string => wp_kses_post(self::scalar($value)),

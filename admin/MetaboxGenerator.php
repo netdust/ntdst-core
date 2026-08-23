@@ -2,30 +2,24 @@
 declare(strict_types=1);
 
 /**
- * Auto Metabox Generator
+ * Auto Metabox Generator — the edit screen for a declared `fields` array,
+ * whether or not the post type has a Data model behind it.
  *
- * Automatically generates metaboxes from registered field definitions
- * Works with NTDST Data.php ORM
- *
- * THIS CLASS DOES NOT SANITIZE. It reads the POST, unslashes it, and hands
- * the values on: to the Data model, which cleans them inside update()/
- * create(), or — where a post type has no model — straight to
- * NTDST_FieldTypes::get($type)->sanitize. The metabox once carried a private
- * type switch of its own, and two tables that answer "what is a bool" can
- * disagree (INV-8): this one read the string 'false' as true and absint()'d
+ * THIS CLASS DOES NOT SANITIZE. It reads the POST, unslashes it once, narrows
+ * it to the fields the SITE declared, and hands the values on: to the Data
+ * model, which cleans them inside update(), or — where a post type has no
+ * model — straight to NTDST_FieldTypes::get($type)->sanitize. It once carried a
+ * private type switch of its own, and two tables that answer "what is a bool"
+ * can disagree (INV-8): this one read the string 'false' as true and absint()'d
  * the sign off an int, while the model's table did neither.
  *
- * OUTPUT CONTRACT — the 'html' field type:
- * An 'html' field is sanitized with wp_kses_post(), which preserves a safe
- * HTML subset (<p>, <a href>, <strong>, <em>, <ul>/<li>, <br>, ...) rather
- * than stripping all markup like 'textarea' does. Because the stored value
- * legitimately CONTAINS HTML, any template/consumer that outputs one MUST
- * escape it with wp_kses_post() again at render time — NEVER with esc_html()
- * (which encodes the HTML and renders literal "<p>" tags to the visitor
- * instead of a paragraph break) and NEVER with a raw echo (which would
- * defeat the sanitization boundary entirely if the stored value is ever
- * hand-edited via wp_update_post()/direct DB access). This is the rule that
- * must exist BEFORE any template consumes an 'html' field.
+ * The `html` type's storage and output rules belong to the VOCABULARY and live
+ * with the entry that owns them — the `html` row in api/FieldTypes.php. What
+ * matters here: an `html` field stores wp_kses_post()'s answer and nothing
+ * else. A <script> TAG does not survive it; the script's BODY does, as text,
+ * because kses removes the tag and keeps what was between them. Escaping on the
+ * way OUT is the consumer's half, and it is wp_kses_post() again — never
+ * esc_html(), never a raw echo.
  *
  * @package NTDST
  * @version 1.0.0
@@ -106,10 +100,25 @@ final class NTDST_MetaboxGenerator
     }
 
     /**
-     * Register a model for auto-metabox generation
+     * Register a model for auto-metabox generation.
+     *
+     * The declaration is checked HERE, by the vocabulary itself, exactly as the
+     * Data model's constructor checks its own (reviewer S-5): a `fields` array
+     * is a `fields` array, and the plain-post-type half of the fleet declares
+     * one too. Until v5.0.0 this door checked nothing, so a retired name became
+     * a "Saving failed" notice after an editor had typed a screenful, and a
+     * cell-less sub-field became a text input in a repeater row.
+     *
+     * @throws InvalidArgumentException naming the field and what to write instead.
      */
     public function register(string $model_name, array $config): void
     {
+        $fields = $config['fields'] ?? [];
+
+        if (is_array($fields)) {
+            NTDST_FieldTypes::assertDeclarations($fields, "Metabox '{$model_name}'");
+        }
+
         $this->registered_models[$model_name] = $config;
     }
 
@@ -311,8 +320,6 @@ final class NTDST_MetaboxGenerator
      */
     public function render_tabbed_metabox(\WP_Post $post, array $metabox): void
     {
-        static $nonce_rendered = [];
-
         $model_name = $metabox['args']['model_name'];
         $all_fields = $metabox['args']['fields'];
         $field_groups = $metabox['args']['field_groups'];
@@ -326,17 +333,15 @@ final class NTDST_MetaboxGenerator
             $data = ntdst_data()->get($model_name)->find($post->ID, 'any');
             $values = ($data && !is_wp_error($data)) ? $data->fields : [];
         } else {
+            // The save's own key rule — see render_metabox().
             $values = [];
             foreach (array_keys($all_fields) as $field_name) {
-                $values[$field_name] = get_post_meta($post->ID, $field_name, true);
+                $values[$field_name] = get_post_meta($post->ID, sanitize_key((string) $field_name), true);
             }
         }
 
-        // Render nonce once per post type
-        if (!isset($nonce_rendered[$model_name])) {
-            wp_nonce_field("ntdst_save_{$model_name}", "ntdst_{$model_name}_nonce");
-            $nonce_rendered[$model_name] = true;
-        }
+        // The post's own nonce — see render_metabox().
+        wp_nonce_field($this->nonce_action($model_name, $post->ID), "ntdst_{$model_name}_nonce");
 
         // Render tab navigation
         echo '<div class="ntdst-tabbed-metabox">';
@@ -556,19 +561,27 @@ final class NTDST_MetaboxGenerator
         </style>
         <?php
 
-        // Output shared field styles (only once)
-        static $shared_styles_rendered = false;
-        if (!$shared_styles_rendered) {
-            $this->render_shared_field_styles();
-            $shared_styles_rendered = true;
-        }
+        $this->render_shared_field_styles();
     }
 
     /**
-     * Render shared field styles (used by both tabbed and normal metaboxes)
+     * The field styles both metabox renders share, emitted once per request.
+     *
+     * The guard is INSIDE, not at each call site: two callers each kept their
+     * own `static $shared_styles_rendered` flag, so the block was emitted twice
+     * on a screen carrying one tabbed metabox and one plain one — and a third
+     * caller would have had to remember to bring a third flag.
      */
     private function render_shared_field_styles(): void
     {
+        static $rendered = false;
+
+        if ($rendered) {
+            return;
+        }
+
+        $rendered = true;
+
         echo '<style>
             /* Required-field marker */
             .ntdst-required {
@@ -668,8 +681,6 @@ final class NTDST_MetaboxGenerator
      */
     public function render_metabox(\WP_Post $post, array $metabox): void
     {
-        static $nonce_rendered = [];
-
         $model_name = $metabox['args']['model_name'];
         $fields = $metabox['args']['fields'];
 
@@ -683,18 +694,23 @@ final class NTDST_MetaboxGenerator
             $data = ntdst_data()->get($model_name)->find($post->ID, 'any');
             $values = ($data && !is_wp_error($data)) ? $data->fields : [];
         } else {
-            // Use WordPress native functions for unregistered/native post types
+            // Use WordPress native functions for unregistered/native post types.
+            // sanitize_key() is the SAME key rule the save writes under — one
+            // question, asked on both sides, or a screen reads a key its own
+            // save never wrote.
             $values = [];
             foreach (array_keys($fields) as $field_name) {
-                $values[$field_name] = get_post_meta($post->ID, $field_name, true);
+                $values[$field_name] = get_post_meta($post->ID, sanitize_key((string) $field_name), true);
             }
         }
 
-        // Nonce for security - only render once per post type
-        if (!isset($nonce_rendered[$model_name])) {
-            wp_nonce_field("ntdst_save_{$model_name}", "ntdst_{$model_name}_nonce");
-            $nonce_rendered[$model_name] = true;
-        }
+        // One nonce per POST, minted on every box this screen draws: the token
+        // is the post's, and a screen that reuses another post's is a
+        // "save any {$model_name}" credential. Re-emitting it for a second
+        // metabox on the same screen is a duplicate hidden input, which the
+        // browser posts once — the price of a per-post token, and the reason
+        // the old per-model static could not stay.
+        wp_nonce_field($this->nonce_action($model_name, $post->ID), "ntdst_{$model_name}_nonce");
 
         echo '<div class="ntdst-metabox-fields">';
 
@@ -735,12 +751,7 @@ final class NTDST_MetaboxGenerator
             }
         </style>';
 
-        // Output shared field styles
-        static $shared_styles_rendered = false;
-        if (!$shared_styles_rendered) {
-            $this->render_shared_field_styles();
-            $shared_styles_rendered = true;
-        }
+        $this->render_shared_field_styles();
     }
 
     /**
@@ -778,7 +789,7 @@ final class NTDST_MetaboxGenerator
         // read the developer's own words — options, sub_fields, post_type,
         // button_text — out of one place instead of two.
         $config = is_array($type) ? $type : ['type' => $type];
-        $type_name = is_string($config['type'] ?? null) ? $config['type'] : 'text';
+        $type_name = NTDST_FieldTypes::declaredType($type);
         $readonly = !empty($config['readonly']);
         $required = !empty($config['required']);
         $safe_value = $value ?? '';
@@ -822,10 +833,10 @@ final class NTDST_MetaboxGenerator
             && $entry->cell
             && !in_array($control, ['checkbox', 'media'], true);
 
-        // Emitted on the control for natively-validatable types, and on the
-        // .ntdst-field wrapper otherwise, so the constraint is always exposed
-        // to assistive tech even where `required` itself would be harmful.
-        $required_attrs = $native_required ? ' required aria-required="true"' : '';
+        // The constraint is exposed to assistive tech either way: the control
+        // carries `required aria-required` where the browser can honour it (see
+        // render_control()), and the .ntdst-field wrapper carries the aria hint
+        // alone where `required` itself would be harmful.
         $wrapper_attrs = ($required && !$native_required) ? ' aria-required="true"' : '';
         $label_marker = $required
             ? ' <span class="ntdst-required" aria-hidden="true">*</span>'
@@ -855,7 +866,7 @@ final class NTDST_MetaboxGenerator
             return;
         }
 
-        $this->render_control($control, $field_id, $field_name, $value, $config, false, $name, $required_attrs);
+        $this->render_control($control, $field_id, $field_name, $value, $config, false, $name, $native_required);
 
         echo '</div>';
     }
@@ -877,56 +888,70 @@ final class NTDST_MetaboxGenerator
      * it can only mean the registry grew a control this renderer has not been
      * taught — a fault to fix, never a text box to ship.
      *
-     * @param string               $control  The registry entry's `control` — rendering
-     *                                       intent, never a type name.
-     * @param string               $field_id The control's DOM id.
-     * @param string               $name     The submitted name: `ntdst_fields[<field>]`
-     *                                       at top level, `ntdst_fields[<field>][<i>][<sub>]`
+     * ONE ESCAPING RULE: this method hands every arm the RAW id and name, and
+     * every arm escapes what it prints. It used to escape both here and pass
+     * the escaped pair down — except to the four arms that need the raw values
+     * (wp_editor() cannot take an escaped id; the pickers echo the name into
+     * their own attributes), so a reader had to know, per parameter, which of
+     * the two a given arm had been given.
+     *
+     * @param string               $control    The registry entry's `control` —
+     *                                       rendering intent, never a type name.
+     * @param string               $field_id   The control's DOM id, raw.
+     * @param string               $input_name The submitted name, raw:
+     *                                       `ntdst_fields[<field>]` at top level,
+     *                                       `ntdst_fields[<field>][<i>][<sub>]`
      *                                       inside a repeater row.
-     * @param mixed                $value    The stored value.
-     * @param array<string, mixed> $config   The field's own declaration.
-     * @param bool                 $inCell   TRUE inside a repeater row: the column
+     * @param mixed                $value      The stored value.
+     * @param array<string, mixed> $config     The field's own declaration.
+     * @param bool                 $inCell     TRUE inside a repeater row: the column
      *                                       header is the label, so the control renders
      *                                       bare and in the row's own classes.
-     * @param string               $field_key The DECLARED field key. The composite
-     *                                       controls hand it to their JS as
+     * @param string               $data_field_name The DECLARED field key. `relation`
+     *                                       and `gallery` hand it to their JS as
      *                                       `data-field-name`; it is NOT the submitted
      *                                       name, which is bracketed.
-     * @param string               $required_attrs Already decided by render_field()
-     *                                       against the registry entry. A row never
-     *                                       carries one.
+     * @param bool                 $native_required Already decided by render_field()
+     *                                       against the registry entry — the browser
+     *                                       constraint is only safe on a control it can
+     *                                       focus. A row never carries one.
      *
      * @throws LogicException on a control this renderer does not know.
      */
     private function render_control(
         string $control,
         string $field_id,
-        string $name,
+        string $input_name,
         mixed $value,
         array $config,
         bool $inCell,
-        string $field_key = '',
-        string $required_attrs = '',
+        string $data_field_name = '',
+        bool $native_required = false,
     ): void {
-        $id = esc_attr($field_id);
-        $nm = esc_attr($name);
+        // Emitted on the control itself; the .ntdst-field wrapper carries the
+        // aria hint where the constraint would be harmful (see render_field()).
+        $attrs = $native_required ? ' required aria-required="true"' : '';
+
+        // The three single-line string controls take the CONTROL as the input
+        // type: `text`, `email` and `url` name the HTML input they are.
+        $line = $inCell ? 'ntdst-repeater-input' : 'regular-text';
 
         match ($control) {
-            'text'     => $this->control_input('text', $inCell ? 'ntdst-repeater-input' : 'regular-text', '', $id, $nm, $value, $required_attrs),
-            'email'    => $this->control_input('email', $inCell ? 'ntdst-repeater-input' : 'regular-text', '', $id, $nm, $value, $required_attrs),
-            'url'      => $this->control_input('url', $inCell ? 'ntdst-repeater-input' : 'regular-text', '', $id, $nm, $value, $required_attrs),
-            'date'     => $this->control_input('date', $inCell ? 'ntdst-repeater-date' : '', '', $id, $nm, $value, $required_attrs),
-            'number'   => $this->control_input('number', $inCell ? 'ntdst-repeater-number' : 'small-text', ' step="1"', $id, $nm, $value, $required_attrs),
-            'decimal'  => $this->control_input('number', $inCell ? 'ntdst-repeater-number' : 'small-text', ' step="0.01"', $id, $nm, $value, $required_attrs),
-            'textarea' => $this->control_textarea($id, $nm, $value, $inCell, $required_attrs),
-            'checkbox' => $this->control_checkbox($id, $nm, $value, $inCell),
-            'select'   => $this->control_select($id, $nm, $value, $config, $inCell, $required_attrs),
-            'html'     => $this->control_html($field_id, $name, $value),
-            'json'     => $this->control_json($id, $nm, $value, $inCell, $required_attrs),
-            'media'    => $this->control_media($id, $nm, $value, $config),
-            'relation' => $this->render_relation_field($field_id, $name, $field_key, $value, $config),
-            'gallery'  => $this->render_gallery_field($field_id, $name, $field_key, $value, $config),
-            'repeater' => $this->render_repeater_field($field_id, $name, $field_key, $value, $config),
+            'text'     => $this->control_input($control, $line, '', $field_id, $input_name, $value, $attrs),
+            'email'    => $this->control_input($control, $line, '', $field_id, $input_name, $value, $attrs),
+            'url'      => $this->control_input($control, $line, '', $field_id, $input_name, $value, $attrs),
+            'date'     => $this->control_input('date', $inCell ? 'ntdst-repeater-date' : '', '', $field_id, $input_name, $value, $attrs),
+            'number'   => $this->control_input('number', $inCell ? 'ntdst-repeater-number' : 'small-text', ' step="1"', $field_id, $input_name, $value, $attrs),
+            'decimal'  => $this->control_input('number', $inCell ? 'ntdst-repeater-number' : 'small-text', ' step="0.01"', $field_id, $input_name, $value, $attrs),
+            'textarea' => $this->control_textarea($field_id, $input_name, $value, $inCell, $attrs),
+            'checkbox' => $this->control_checkbox($field_id, $input_name, $value, $inCell),
+            'select'   => $this->control_select($field_id, $input_name, $value, $config, $inCell, $attrs),
+            'html'     => $this->control_html($field_id, $input_name, $value),
+            'json'     => $this->control_json($field_id, $input_name, $value, $inCell, $attrs),
+            'media'    => $this->control_media($field_id, $input_name, $value, $config),
+            'relation' => $this->render_relation_field($field_id, $input_name, $data_field_name, $value, $config),
+            'gallery'  => $this->render_gallery_field($field_id, $input_name, $data_field_name, $value, $config),
+            'repeater' => $this->render_repeater_field($field_id, $input_name, $data_field_name, $value, $config),
             default    => throw new \LogicException("Unknown control '{$control}'."),
         };
     }
@@ -936,23 +961,24 @@ final class NTDST_MetaboxGenerator
         string $input_type,
         string $class,
         string $extra,
-        string $id,
-        string $nm,
+        string $field_id,
+        string $input_name,
         mixed $value,
         string $required_attrs,
     ): void {
-        echo '<input type="' . $input_type . '" id="' . $id . '" name="' . $nm . '" value="'
-            . esc_attr($value ?? '') . '"' . ($class !== '' ? ' class="' . $class . '"' : '')
+        echo '<input type="' . $input_type . '" id="' . esc_attr($field_id) . '" name="'
+            . esc_attr($input_name) . '" value="' . esc_attr($value ?? '') . '"'
+            . ($class !== '' ? ' class="' . $class . '"' : '')
             . $extra . $required_attrs . '>';
     }
 
-    private function control_textarea(string $id, string $nm, mixed $value, bool $inCell, string $required_attrs): void
+    private function control_textarea(string $field_id, string $input_name, mixed $value, bool $inCell, string $required_attrs): void
     {
         $rows = $inCell ? '2' : '5';
         $class = $inCell ? 'ntdst-repeater-textarea' : 'large-text';
 
-        echo '<textarea id="' . $id . '" name="' . $nm . '" rows="' . $rows . '" class="' . $class . '"'
-            . $required_attrs . '>' . esc_textarea($value ?? '') . '</textarea>';
+        echo '<textarea id="' . esc_attr($field_id) . '" name="' . esc_attr($input_name) . '" rows="' . $rows
+            . '" class="' . $class . '"' . $required_attrs . '>' . esc_textarea($value ?? '') . '</textarea>';
     }
 
     /**
@@ -963,9 +989,11 @@ final class NTDST_MetaboxGenerator
      * `required` is never emitted here — see render_field(): on a checkbox it
      * would mean "must be ticked".
      */
-    private function control_checkbox(string $id, string $nm, mixed $value, bool $inCell): void
+    private function control_checkbox(string $field_id, string $input_name, mixed $value, bool $inCell): void
     {
         $checked = $value ? ' checked' : '';
+        $id = esc_attr($field_id);
+        $nm = esc_attr($input_name);
 
         echo '<input type="hidden" name="' . $nm . '" value="0">';
 
@@ -980,12 +1008,14 @@ final class NTDST_MetaboxGenerator
     }
 
     /** @param array<string, mixed> $config */
-    private function control_select(string $id, string $nm, mixed $value, array $config, bool $inCell, string $required_attrs): void
+    private function control_select(string $field_id, string $input_name, mixed $value, array $config, bool $inCell, string $required_attrs): void
     {
         $options = is_array($config['options'] ?? null) ? $config['options'] : [];
         $readonly = !empty($config['readonly']);
         $class = $inCell ? 'ntdst-repeater-select' : 'regular-text';
         $safe_value = $value ?? '';
+        $id = esc_attr($field_id);
+        $nm = esc_attr($input_name);
 
         echo '<select id="' . $id . '" name="' . $nm . '" class="' . $class . '"'
             . ($readonly ? ' disabled' : '') . $required_attrs . '>';
@@ -1011,19 +1041,21 @@ final class NTDST_MetaboxGenerator
      * input here. Both arguments are the RAW id and name — the editor escapes
      * its own output.
      */
-    private function control_html(string $field_id, string $name, mixed $value): void
+    private function control_html(string $field_id, string $input_name, mixed $value): void
     {
         wp_editor($value ?? '', sanitize_key($field_id), [
-            'textarea_name' => $name,
+            'textarea_name' => $input_name,
             'textarea_rows' => 10,
             'media_buttons' => false,
             'teeny'         => true,
         ]);
     }
 
-    private function control_json(string $id, string $nm, mixed $value, bool $inCell, string $required_attrs): void
+    private function control_json(string $field_id, string $input_name, mixed $value, bool $inCell, string $required_attrs): void
     {
         $json_value = is_array($value) ? json_encode($value, JSON_PRETTY_PRINT) : ($value ?? '');
+        $id = esc_attr($field_id);
+        $nm = esc_attr($input_name);
 
         if ($inCell) {
             echo '<textarea id="' . $id . '" name="' . $nm . '" rows="2" class="ntdst-repeater-textarea"'
@@ -1102,7 +1134,7 @@ final class NTDST_MetaboxGenerator
         // Selected items display
         echo '<div class="ntdst-relation-selected" id="' . esc_attr($field_id) . '_selected">';
         foreach ($selected_items as $item) {
-            $item_id = $is_user_field ? $item->ID : $item->ID;
+            $item_id = $item->ID;
             $item_title = $is_user_field ? $item->display_name : $item->post_title;
 
             echo '<span class="ntdst-relation-tag" data-id="' . esc_attr($item_id) . '">';
@@ -1331,7 +1363,7 @@ final class NTDST_MetaboxGenerator
      */
     private function render_repeater_field(string $field_id, string $field_name, string $name, mixed $value, array $options): void
     {
-        static $repeater_js_loaded = false;
+        static $repeater_styles_rendered = false;
 
         $description = $options['description'] ?? '';
         $sub_fields = $options['sub_fields'] ?? [];
@@ -1350,7 +1382,27 @@ final class NTDST_MetaboxGenerator
             $rows[] = [];
         }
 
-        echo '<div class="ntdst-repeater-field" data-field-name="' . esc_attr($name) . '" data-field-id="' . esc_attr($field_id) . '" data-max-rows="' . esc_attr($max_rows ?? '') . '">';
+        // The media picker's assets are emitted ONCE per request, by the first
+        // `media` control that renders — and on a repeater with no rows yet
+        // that control is the one inside the hidden ROW TEMPLATE. A
+        // `<script type="text/html">` block ends at the first `</script>` the
+        // parser sees, wherever it came from: the template closed on the
+        // picker's own script tag, the rest of the row markup spilled onto the
+        // visible page, and "Add Row" cloned a truncated row. So a repeater
+        // that HAS a media cell emits them here, ahead of its own markup.
+        foreach ($sub_fields as $sub_field_type) {
+            if (NTDST_FieldTypes::get(NTDST_FieldTypes::declaredType($sub_field_type))->control === 'media') {
+                $this->render_media_picker_assets();
+
+                break;
+            }
+        }
+
+        // No `data-field-name` here: the repeater's JS finds its rows and its
+        // template through `data-field-id`, and the row inputs carry the
+        // submitted name themselves. `relation` and `gallery` keep theirs —
+        // their JS reads them to build the inputs it appends.
+        echo '<div class="ntdst-repeater-field" data-field-id="' . esc_attr($field_id) . '" data-max-rows="' . esc_attr($max_rows ?? '') . '">';
 
         if ($description) {
             echo '<p class="description" style="margin-top: 0;">' . esc_html($description) . '</p>';
@@ -1383,7 +1435,7 @@ final class NTDST_MetaboxGenerator
         echo '</table>';
 
         // Add row button
-        echo '<button type="button" class="button ntdst-repeater-add" data-field-name="' . esc_attr($name) . '">' . esc_html($button_text) . '</button>';
+        echo '<button type="button" class="button ntdst-repeater-add">' . esc_html($button_text) . '</button>';
 
         // Row template (hidden, used by JavaScript)
         echo '<script type="text/html" id="' . esc_attr($field_id) . '_template">';
@@ -1392,8 +1444,15 @@ final class NTDST_MetaboxGenerator
 
         echo '</div>';
 
-        // Inline CSS and JavaScript (only once)
-        if (!$repeater_js_loaded) {
+        // Inline CSS, once per request. The add/remove/sort BEHAVIOUR is
+        // assets/js/metabox-fields.js's — enqueued by enqueue_metabox_scripts()
+        // on every post.php/post-new.php screen of a registered model, which is
+        // every screen that can render a repeater. This block used to ship a
+        // second copy of those handlers, delegated on `document` exactly as the
+        // asset delegates them, so both fired: one click on "Add Row" appended
+        // TWO rows and one click on "Remove" ran the asset's confirm() beside
+        // this copy's fadeOut().
+        if (!$repeater_styles_rendered) {
             echo '<style>
                 .ntdst-repeater-field {
                     margin-top: 8px;
@@ -1509,71 +1568,7 @@ final class NTDST_MetaboxGenerator
                 }
             </style>';
 
-            // JavaScript for repeater add/remove functionality
-            echo '<script>
-            jQuery(document).ready(function($) {
-                // Add row button click handler
-                $(document).on("click", ".ntdst-repeater-add", function(e) {
-                    e.preventDefault();
-
-                    var $field = $(this).closest(".ntdst-repeater-field");
-                    var fieldId = $field.data("field-id");
-                    var maxRows = $field.data("max-rows");
-                    var $tbody = $field.find(".ntdst-repeater-rows");
-                    var $template = $("#" + fieldId + "_template");
-
-                    // Check max rows limit
-                    if (maxRows && $tbody.find("tr").length >= maxRows) {
-                        alert("Maximum number of rows reached (" + maxRows + ")");
-                        return;
-                    }
-
-                    // Get next index
-                    var nextIndex = 0;
-                    $tbody.find("tr").each(function() {
-                        var idx = parseInt($(this).data("index"), 10);
-                        if (!isNaN(idx) && idx >= nextIndex) {
-                            nextIndex = idx + 1;
-                        }
-                    });
-
-                    // Clone template and replace __INDEX__ placeholder
-                    var templateHtml = $template.html();
-                    var newRow = templateHtml.replace(/__INDEX__/g, nextIndex);
-                    $tbody.append(newRow);
-
-                    // Trigger change event for any listeners
-                    $tbody.trigger("repeater:row-added");
-                });
-
-                // Remove row button click handler
-                $(document).on("click", ".ntdst-repeater-remove", function(e) {
-                    e.preventDefault();
-
-                    var $row = $(this).closest("tr");
-                    var $tbody = $row.closest("tbody");
-
-                    $row.fadeOut(200, function() {
-                        $(this).remove();
-                        $tbody.trigger("repeater:row-removed");
-                    });
-                });
-
-                // Enable drag-and-drop sorting if jQuery UI sortable is available
-                if ($.fn.sortable) {
-                    $(".ntdst-repeater-rows").sortable({
-                        handle: ".ntdst-repeater-drag-handle",
-                        placeholder: "ntdst-repeater-row ui-sortable-placeholder",
-                        axis: "y",
-                        update: function(event, ui) {
-                            $(this).trigger("repeater:row-reordered");
-                        }
-                    });
-                }
-            });
-            </script>';
-
-            $repeater_js_loaded = true;
+            $repeater_styles_rendered = true;
         }
     }
 
@@ -1605,9 +1600,22 @@ final class NTDST_MetaboxGenerator
             $sub_field_full_name = "{$field_name}[{$row_index}][{$sub_field_name}]";
 
             // The same normalisation render_field() does: a bare string is a
-            // type and nothing else.
+            // type and nothing else, and the vocabulary answers which.
             $config = is_array($sub_field_type) ? $sub_field_type : ['type' => $sub_field_type];
-            $sub_type = is_string($config['type'] ?? null) ? $config['type'] : 'text';
+            $sub_type = NTDST_FieldTypes::declaredType($sub_field_type);
+            $entry = NTDST_FieldTypes::get($sub_type);
+
+            // `cell = false` is the vocabulary's RENDERING verdict: this cell
+            // cannot be drawn in a table row. register() refuses the
+            // declaration outright, so reaching here means one was injected
+            // past it — a `fields` filter, a cached registration — and the row
+            // must fault rather than draw a single-line box holding markup.
+            if (!$entry->cell) {
+                throw new \LogicException(
+                    "Field '{$name}' sub-field '{$sub_field_name}': '{$sub_type}' cannot be drawn "
+                    . 'in a repeater row — it has no cell control.',
+                );
+            }
 
             echo '<td>';
 
@@ -1615,7 +1623,7 @@ final class NTDST_MetaboxGenerator
             // constraint inside a row that JavaScript clones would be cloned
             // with it.
             $this->render_control(
-                NTDST_FieldTypes::get($sub_type)->control,
+                $entry->control,
                 $sub_field_id,
                 $sub_field_full_name,
                 $sub_field_value,
@@ -1659,11 +1667,13 @@ final class NTDST_MetaboxGenerator
      *
      * @param array<string, mixed> $config The field's own declaration.
      */
-    private function control_media(string $id, string $nm, mixed $value, array $config): void
+    private function control_media(string $field_id, string $input_name, mixed $value, array $config): void
     {
         wp_enqueue_media();
         $this->render_media_picker_assets();
 
+        $id = esc_attr($field_id);
+        $nm = esc_attr($input_name);
         $attachment_id = absint($value);
         $is_image = (($config['type'] ?? '') === 'image');
         $is_attachment = $attachment_id > 0 && get_post_type($attachment_id) === 'attachment';
@@ -1789,26 +1799,70 @@ final class NTDST_MetaboxGenerator
     }
 
     /**
-     * Save metabox data using Data.php ORM or WordPress native functions
+     * The action a post's nonce is minted for and verified against.
+     *
+     * It carries the POST ID because a nonce is the post's, not the post type's:
+     * one token per model was a general-purpose "save any gig" credential that
+     * travelled in the page of anything its holder could already edit.
+     *
+     * The FIELD NAME stays per model. The browser has to post a name the save
+     * path can look up before it knows which action to verify, and the post id
+     * is already in $post_id — putting it in the name too buys nothing and
+     * breaks every form that posts the name this class has always emitted.
+     */
+    private function nonce_action(string $model_name, int $post_id): string
+    {
+        return "ntdst_save_{$model_name}_{$post_id}";
+    }
+
+    /**
+     * Save an edit screen: the DECLARED fields of it, and nothing else.
+     *
+     * THE DECLARATION IS THE ALLOW-LIST. `$_POST['ntdst_fields']` was walked
+     * verbatim, so the browser chose which keys the save wrote: on a Data model
+     * those keys reach update(), which maps `post_status`, `post_author` and
+     * `post_parent` onto wp_posts COLUMNS — a contributor could publish their
+     * own draft with one extra input — and on a plain post type they became
+     * meta rows, `_thumbnail_id` among them. array_intersect_key() against the
+     * declaration is what closes that: it is the only list on this screen the
+     * SITE wrote.
+     *
+     * ABSENT MEANS CLEARED, for every control built out of the inputs it emits.
+     * `relation`, `gallery` and `repeater` post one input per picked item and,
+     * emptied, only their container — so a screen with nothing but emptied
+     * pickers posts a nonce and no `ntdst_fields` at all. The old early return
+     * on an empty POST made that one save the one save that did nothing. The
+     * nonce already proved the form was submitted; that is what a submission is.
+     *
+     * WHICH fields those are is the REGISTRY's answer — the entry's `control`,
+     * never a type name matched here (INV-8). Asked of the raw declared name, a
+     * retired alias ('person', which v5.0.0 folded into 'relation') simply did
+     * not match, and the emptied picker was silently left standing while the
+     * rest of the screen saved around it.
+     *
+     * NOTHING IS WRITTEN UNTIL EVERY FIELD HAS RESOLVED. The vocabulary refuses
+     * a name outside the seventeen, so a declaration a `fields` filter or an
+     * older cached registration slipped past register() throws while it is
+     * being resolved. Outside the try that is a white-screened post that loses
+     * every other field on it; written as it goes, it is a half-saved post
+     * beside a "Saving failed" notice. Resolve all, then write all, or write
+     * nothing and tell the editor.
      */
     public function save_metabox_data(int $post_id, \WP_Post $post): void
     {
         $model_name = $post->post_type;
 
-        // Check if this model is registered
         if (!isset($this->registered_models[$model_name])) {
             return;
         }
 
-        // Security checks
         $nonce_name = "ntdst_{$model_name}_nonce";
-        $nonce_action = "ntdst_save_{$model_name}";
 
         if (!isset($_POST[$nonce_name])) {
             return;
         }
 
-        if (!wp_verify_nonce(wp_unslash($_POST[$nonce_name]), $nonce_action)) {
+        if (!wp_verify_nonce(wp_unslash($_POST[$nonce_name]), $this->nonce_action($model_name, $post_id))) {
             return;
         }
 
@@ -1820,126 +1874,141 @@ final class NTDST_MetaboxGenerator
             return;
         }
 
+        $fields_config = $this->registered_models[$model_name]['fields'] ?? [];
+        $fields_config = is_array($fields_config) ? $fields_config : [];
+
+        // The boundary, crossed once: unslashed here and nowhere else, and
+        // narrowed to the declared set before a single field is looked at. A
+        // non-array `ntdst_fields` (`?ntdst_fields=x`) is a submission with a
+        // hostile shape, not a reason to skip the clearing rule below.
+        $submitted = $_POST['ntdst_fields'] ?? [];
+        $posted = is_array($submitted)
+            ? array_intersect_key(wp_unslash($submitted), $fields_config)
+            : [];
+
         // Prevent infinite loops - remove this hook temporarily
         remove_action('save_post', [$this, 'save_metabox_data'], 10);
 
-        // Get submitted fields
-        $fields_data = $_POST['ntdst_fields'] ?? [];
-
-        if (empty($fields_data)) {
-            add_action('save_post', [$this, 'save_metabox_data'], 10, 2);
-            return;
-        }
-
-        $fields_config = $this->registered_models[$model_name]['fields'];
-
-        // EVERYTHING from here to the write runs inside ONE try, and NOTHING
-        // is written until every field has resolved.
-        //
-        // The vocabulary REFUSES a name outside the seventeen, so a field
-        // declared with a retired alias ('wysiwyg', 'boolean', 'integer')
-        // throws while it is being resolved. Outside the try that is a fatal:
-        // a white-screened post that loses every other field on the screen.
-        // Inside a try but written as it goes, it is a post half-saved beside
-        // a "Saving failed" notice, which is the worse of the two answers a
-        // reader has to reconcile. Resolve all, then write all, or write
-        // nothing and tell the editor.
         try {
             $is_data_model = $this->isDataModel($model_name);
-            $sanitized_data = [];
+            $values = [];
 
-            foreach ($fields_data as $field_name => $field_value) {
-                // Remove WordPress slashes first: every branch below wants the
-                // value the editor actually typed.
-                $field_value = wp_unslash($field_value);
+            foreach ($posted as $field_name => $field_value) {
+                $declaration = $fields_config[$field_name];
+                $type = NTDST_FieldTypes::declaredType($declaration);
+
+                // A `callback` field renders ITSELF and the consumer's own code
+                // owns whatever it stores — a render directive, not a
+                // vocabulary entry. The render side has always answered it
+                // before asking the registry; the save side did not, so one
+                // posted `callback` field threw and killed the whole screen.
+                if ($type === 'callback') {
+                    continue;
+                }
 
                 if ($is_data_model) {
                     // Hand the model the posted value UNCLEANED. The model's
-                    // own registry-bound sanitizer runs inside update()/
-                    // create() and is the one and only clean (INV-8): a value
-                    // cleaned here and cleaned again there is a value cleaned
-                    // by two tables that can disagree. Idempotent functions
-                    // hide the disagreement — sanitize_text_field() twice
-                    // reads exactly like once — so it only ever surfaced on
-                    // the types where it costs: an int that lost its sign to
-                    // absint(), a bool that read the string 'false' as true.
-                    $sanitized_data[$field_name] = $field_value;
+                    // own registry-bound sanitizer runs inside update() and is
+                    // the one and only clean (INV-8): a value cleaned here and
+                    // cleaned again there is a value cleaned by two tables that
+                    // can disagree. Idempotent functions hide the disagreement
+                    // — sanitize_text_field() twice reads exactly like once —
+                    // so it only ever surfaced on the types where it costs: an
+                    // int that lost its sign to absint(), a bool that read the
+                    // string 'false' as true.
+                    $values[$field_name] = $field_value;
+
                     continue;
                 }
 
                 // No model here, so no model sanitizer: the registry is asked
                 // directly, exactly once per submitted field. The full config
-                // rides along because a `repeater` reads its own sub_fields
-                // out of it and resolves every cell through this same table —
-                // there is no second, hand-rolled row walk.
-                $field_config = $fields_config[$field_name] ?? 'text';
-                $field_type = is_array($field_config) ? ($field_config['type'] ?? 'text') : $field_config;
-
-                $sanitized_data[$field_name] = (NTDST_FieldTypes::get($field_type)->sanitize)(
+                // rides along because a `repeater` reads its own sub_fields out
+                // of it and resolves every cell through this same table — there
+                // is no second, hand-rolled row walk.
+                $values[$field_name] = (NTDST_FieldTypes::get($type)->sanitize)(
                     $field_value,
-                    is_array($field_config) ? $field_config : [],
+                    is_array($declaration) ? $declaration : [],
                 );
             }
 
-            // Handle relation/gallery fields that weren't submitted (treat as empty)
-            // This is critical for when users remove all items from a relation field
-            foreach ($fields_config as $field_name => $field_config) {
-                if (isset($sanitized_data[$field_name])) {
-                    continue; // Already processed
+            // A picker the editor emptied posts nothing at all: absent is how
+            // the screen says "cleared".
+            foreach ($fields_config as $field_name => $declaration) {
+                if (array_key_exists($field_name, $values)) {
+                    continue;
                 }
 
-                $type = is_array($field_config) ? ($field_config['type'] ?? 'text') : $field_config;
+                $type = NTDST_FieldTypes::declaredType($declaration);
 
-                // For relation and gallery fields, missing POST data means user cleared all items
-                if (in_array($type, ['relation', 'gallery'])) {
-                    $sanitized_data[$field_name] = [];
+                if ($type === 'callback') {
+                    continue;
+                }
+
+                // Resolved for EVERY declared field, submitted or not: a
+                // declaration this path cannot resolve stops the save here
+                // rather than being skipped, which is how a cleared picker
+                // comes back.
+                $control = NTDST_FieldTypes::get($type)->control;
+
+                if (in_array($control, ['relation', 'gallery', 'repeater'], true)) {
+                    $values[$field_name] = [];
                 }
             }
 
             if ($is_data_model) {
-                // Save using Data.php ORM for registered models
                 $model = ntdst_data()->get($model_name);
-                // 'any' is load-bearing. With the publish-only default this
-                // returns WP_Error for a draft, the branch below falls through
-                // to create(), and create() cannot honour post_id — so every
-                // draft save would fork a NEW published row. Pinned by
-                // DataLayerCharacterizationTest's metabox fork test.
+                // 'any': the edit screen edits whatever status the row has.
                 $existing = $model->find($post_id, 'any');
 
-                if ($existing && !is_wp_error($existing)) {
-                    // Update existing
-                    $result = $model->update($post_id, $sanitized_data);
-                } else {
-                    // Create new
-                    $sanitized_data['post_id'] = $post_id;
-                    $result = $model->create($sanitized_data);
+                if (!$existing || is_wp_error($existing)) {
+                    // "This row is not mine" is a REFUSAL, never a create. The
+                    // old branch fell through to create(), which cannot honour
+                    // a post_id, so a save of a row the model could not see
+                    // forked a second published post and said "saved".
+                    $this->record_save_error($post_id, $model_name, new \WP_Error(
+                        'metabox_save_no_row',
+                        'Saving failed — see logs.',
+                        "No existing {$model_name} row to update for post {$post_id}.",
+                    ));
+
+                    return;
                 }
 
-                // update()/create() RETURN WP_Error on a failed validate/persist
+                // update() RETURNS WP_Error on a failed validate/persist
                 // (validation_failed, meta_update_failed status 500). The catch
-                // below only traps \Throwable, so a WP_Error RETURN was captured
-                // into $result and discarded — a silent "saved". Surface it to
-                // the editor instead of firing the saved hook.
+                // below only traps \Throwable, so a WP_Error RETURN was
+                // captured and discarded — a silent "saved".
+                $result = $model->update($post_id, $values);
+
                 if (is_wp_error($result)) {
                     $this->record_save_error($post_id, $model_name, $result);
-                } else {
-                    // Fire hook for extensibility only on a genuine save.
-                    do_action("ntdst/metabox_saved/{$model_name}", $post_id, $sanitized_data);
+
+                    return;
                 }
             } else {
-                // Use WordPress native functions for unregistered/native post types
-                foreach ($sanitized_data as $field_name => $value) {
-                    // Delete meta if value is empty array (cleaner than storing serialized empty array)
-                    if (is_array($value) && empty($value)) {
-                        delete_post_meta($post_id, $field_name);
-                    } else {
-                        update_post_meta($post_id, $field_name, $value);
-                    }
-                }
+                foreach ($values as $field_name => $value) {
+                    // The key a posted field is stored under is WordPress's own
+                    // answer, not the browser's string.
+                    $meta_key = sanitize_key($field_name);
 
-                // Fire hook for extensibility
-                do_action("ntdst/metabox_saved/{$model_name}", $post_id, $sanitized_data);
+                    // An empty list is a CLEARED field: deleting is cleaner
+                    // than storing a serialized empty array.
+                    if (is_array($value) && $value === []) {
+                        delete_post_meta($post_id, $meta_key);
+
+                        continue;
+                    }
+
+                    update_post_meta($post_id, $meta_key, $value);
+                }
             }
+
+            // ONE hook, after both branches, on a genuine save only. On the Data
+            // branch the payload is what was POSTED (unslashed, uncleaned) — the
+            // model cleaned what it STORED. A listener reading this is reading
+            // raw input; that is a documented 5.0.0 BREAKING row.
+            do_action("ntdst/metabox_saved/{$model_name}", $post_id, $values);
         } catch (\Throwable $e) {
             // Converge on the same surfacing channel as a WP_Error RETURN
             // above: record_save_error() both sets the post-scoped transient
@@ -1960,10 +2029,13 @@ final class NTDST_MetaboxGenerator
                     $e->getMessage(),
                 ),
             );
+        } finally {
+            // Re-added on EVERY way out of the block above, the two refusal
+            // returns included: a save that left this method with the hook
+            // still detached would silently stop saving every later post in
+            // the request.
+            add_action('save_post', [$this, 'save_metabox_data'], 10, 2);
         }
-
-        // Re-add the hook after saving is complete
-        add_action('save_post', [$this, 'save_metabox_data'], 10, 2);
     }
 
     /**
