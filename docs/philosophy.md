@@ -1,7 +1,8 @@
 # What belongs in ntdst-core
 
-Written at v4.0.0. Every principle below is cited to code that already obeys
-it — this describes the package, it does not aspire past it.
+Written at v4.0.0, reconciled with v5.0.0 (2026-08-23, `specs/core-shape`).
+Every principle below is cited to code that already obeys it — this describes
+the package, it does not aspire past it.
 
 > ntdst-core is a small set of well-engineered primitives for WordPress
 > development. It wraps WordPress where WordPress is awkward, provides safe
@@ -32,10 +33,14 @@ answers, and the entry says so.
 `api/Data.php` holds the same line in its own first line: *"NTDST Data Layer — a
 chain API over WP_Query, and the meta registration a declared model owes
 WordPress."* It is not a database abstraction. `NTDST_Rest` wraps
-`register_rest_route()` and adds
-exactly two things WordPress does not have — a route without a callable
-`permission` never registers, and the permission runs once per request instead
-of twice.
+`register_rest_route()` and adds exactly two things WordPress does not have — a
+route that names no permission registers as `is_user_logged_in` rather than
+open, and the permission runs once per request instead of twice. WordPress's own
+default is the second one's mirror: WP fires `_doing_it_wrong()` for a missing
+`permission_callback` and registers the route anyway, leaving it public. Core
+lands on WordPress's own floor instead, and reserves the loud refusal for the
+case that is a threat and not a posture — a write verb whose gate nobody
+named (§4).
 
 The rule has a corollary that matters more than the rule: **anything WordPress
 understands passes straight through.** `NTDST_Rest::OWN` lists the three options
@@ -54,6 +59,25 @@ INV-10 in `ARCHITECTURE-INVARIANTS.md`). Guessing a file path from a class name
 was core re-answering a question the consumer had already answered, and a
 writable directory on the old discovery list was code execution.
 
+v5.0.0 is the rule applied three more times, each time by DELETING core's
+answer and asking WordPress's:
+
+- **A page route is a rewrite rule.** `ntdst_pages()->path()` calls
+  `add_rewrite_rule()` and names its placeholders on `query_vars`, so WordPress
+  parses the URL and the callback runs on `template_redirect`. Core used to
+  match the URL itself on `template_include`, which meant clearing the `is_404`
+  WordPress had just set and suppressing the canonical redirect. Neither exists
+  now: a URL WordPress parsed is a 200 already (INV-6).
+- **The template loader picks from WordPress's own candidate list.** It is
+  mounted on the `{$type}_template` filters and iterates the hierarchy WordPress
+  hands it, over the registered directories. Core spells no template name of its
+  own, and a callback returns a PATH rather than rendering and exiting.
+- **The field vocabulary is one table, and most of it is WordPress.**
+  `api/FieldTypes.php` is the single registry every reader asks, and the
+  declaration that publishes a field is WordPress's own `show_in_rest` key,
+  driving WordPress's own `register_post_meta()` — no second exposure layer
+  beside it (INV-1, INV-8).
+
 The hard case is where WordPress does something **badly**. That is not an
 exemption — it is the strongest reason to wrap. See §6.
 
@@ -65,17 +89,17 @@ A developer should be able to write:
 ntdst_rest('my/v1')->post('/thing', $handler, ['permission' => $permission]);
 ```
 
-without knowing about the rate limiter, WeakMap memoization, pre-dispatch
-preflight charging, route regex matching, transient semantics, or the fact that
-WordPress invokes `permission_callback` twice per request. Those are internals.
-The mental model is one line.
+without knowing about the rate limiter, WeakMap memoization, bucket keying,
+transient semantics, or the fact that WordPress invokes `permission_callback`
+twice per request. Those are internals. The mental model is one line.
 
-**This is why the docblocks are long and must stay long.** `chargePreflight()`
-carries more comment than code. That is the trade that keeps the surface small:
-the API is two sentences, and the *reasons* stay recoverable. A future pass
-that reads "small" and strips the explanations deletes the only record of why
-`$matched` was not widened — and the next author re-introduces the bug that
-charges three units for one preflight.
+**This is why the docblocks are long and must stay long.** `guard()` carries
+more comment than code, and so does the CORS decision. That is the trade that
+keeps the surface small: the API is two sentences, and the *reasons* stay
+recoverable. A future pass that reads "small" and strips the explanations
+deletes the only record of why the permission callable runs BEFORE the limiter
+is charged — and the next author swaps them, and every refused caller starts
+spending the budget of the one who was allowed.
 
 Small API. Large explanation. Both, deliberately.
 
@@ -94,9 +118,16 @@ This is the line, and the package's own history draws it in both directions.
   permission registers as `is_user_logged_in` — WordPress's own floor, never
   anonymous. Anonymous has no spelling in the options array at all; it is
   reached only by chaining `->public()`, and only on a read verb (`api/Rest.php`).
-- A capability read off the TYPE rather than hard-coded. A CPT that remaps its
-  capabilities narrows the gate with it, and an unresolvable capability denies
-  everyone.
+- A capability read off the TYPE where core owns the route.
+  `NTDST_RelationField::handleRelationSearch()` asks
+  `get_post_type_object($post_type)` for the capability rather than hard-coding
+  one, so a CPT that remaps its capabilities narrows the gate with it, and an
+  unresolvable capability denies everyone. On a CONSUMER's route the string is
+  the consumer's: 5.0.0 removed the dispatcher's `cap_type` floor, so
+  `['permission' => 'edit_others_posts']` is asked exactly as written. A remapped
+  type passes its own slug —
+  `get_post_type_object('artwork')->cap->edit_others_posts` — or a callable that
+  reads it.
 
 **Facts the application owns — refuse to guess them.**
 
@@ -204,9 +235,9 @@ embedding plus blocked third-party cookies, which CORS does not govern.
 "Consumer X is cross-origin" is not the test. "Consumer X needs THIS mechanism"
 is.
 
-**Decided 2026-08-20 — opt-in.** A route declaring no `cors` keeps WordPress's
-default, and core does not suppress `Allow-Origin` package-wide. Three reasons,
-and the third is the principle:
+**Decided 2026-08-20 — opt-in.** A namespace declaring no origins keeps
+WordPress's default, and core does not suppress `Allow-Origin` package-wide.
+Three reasons, and the third is the principle:
 
 - suppressing it would silently break any consumer relying on WP's reflection,
   however ill-advised that reliance is;
@@ -217,10 +248,26 @@ and the third is the principle:
   impossible** (§5), and its converse holds too: core does not silently change
   what it was not asked to change.
 
-State the residual rather than implying it away: an `ntdst_rest()` route with
-no `cors` policy is exactly as exposed as any other WordPress REST route. Core
-does not make it worse and does not fix it unless asked. The fix is one option
-key, and `README.md` says so where a consumer will meet it.
+State the residual rather than implying it away: an `ntdst_rest()` route in a
+namespace that declared no origins is exactly as exposed as any other WordPress
+REST route. Core does not make it worse and does not fix it unless asked. The
+fix is one call, and `README.md` says so where a consumer will meet it.
+
+**Revised at 5.0.0 — the list is WordPress's, and the declaration is
+site-wide.** The per-route `cors` option is gone, and so is core's own
+allow-list: `ntdst_rest($ns)->cors([...])` ADDS its origins to WordPress's
+`allowed_http_origins`, and every allowed-or-not question is put to
+`is_allowed_http_origin()`. Two lists is one too many — §1's rule, applied to
+the primitive this section admitted. The decision stayed a pure function
+(`corsDecision()`), so §6.5 still holds: every branch is assertable at the unit
+tier, with `sendCors()` a thin emitter over it. One thing the admission did NOT
+foresee: `allowed_http_origins` is read by `admin-ajax.php`, `admin-post.php`
+and the customizer too, and `send_origin_headers()` grants credentials to an
+allowed origin unconditionally. So the declaration is scoped to
+`wp_is_serving_rest_request()` — a REST origin must not be able to fetch
+`admin-ajax.php?action=rest-nonce` on a logged-in visitor's cookies. Converging
+on WordPress's table is right, and it still costs a reading of who else reads
+it.
 
 ### Parked, admitted in principle
 
