@@ -7,7 +7,8 @@ declare(strict_types=1);
  *
  * Moved out of api/Response.php at 5.0.0 (FR-10, INV-6): resolution is its own
  * concern with its own registry, and Response is the wire shape. Loaded before
- * api/Response.php, which calls locate() from page()/html()/error().
+ * api/Response.php, which calls locate() from html() — and from there only:
+ * page() is this loader's own, and error() renders no template.
  */
 
 defined('ABSPATH') || exit;
