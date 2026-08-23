@@ -105,6 +105,24 @@ final class CoreTrimClusterDFeatureTest extends TestCase
         $this->assertStringContainsString('missing-consumer-root', $run['out']);
     }
 
+    /**
+     * INV-9's "Deliberate exceptions" count is a hand-kept number, and a hand-
+     * kept number that disagrees with the array it describes teaches a reader
+     * to distrust the doc. This drives both sides from outside: the script's
+     * own `EXCEPTIONS` array (via `sweep_exceptions()`, the same helper other
+     * tests in this file use) and the count ARCHITECTURE-INVARIANTS.md
+     * publishes for INV-9.
+     */
+    public function testTheInvariantDocsExceptionCountMatchesTheSweepsArray(): void
+    {
+        $this->assertSame(
+            count($this->sweep_exceptions()),
+            $this->invariant_docs_exception_count(),
+            "bin/zero-readers.sh's EXCEPTIONS array and ARCHITECTURE-INVARIANTS.md's INV-9 "
+            . "\"Deliberate exceptions: N published symbols\" line must name the same count."
+        );
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // 2. INV-10 — the four published commands, run as written
     // ─────────────────────────────────────────────────────────────────────────
@@ -604,6 +622,22 @@ final class CoreTrimClusterDFeatureTest extends TestCase
         $this->assertNotEmpty($names, 'could not read the sweep exceptions');
 
         return $names;
+    }
+
+    /** The N in INV-9's "Deliberate exceptions: N published symbols" line. */
+    private function invariant_docs_exception_count(): int
+    {
+        $doc = file_get_contents(self::$repo . '/ARCHITECTURE-INVARIANTS.md') ?: '';
+
+        $this->assertMatchesRegularExpression(
+            '/\*\*Deliberate exceptions:\*\* (\d+) published symbols/',
+            $doc,
+            "ARCHITECTURE-INVARIANTS.md's INV-9 section has no \"Deliberate exceptions: N published symbols\" line"
+        );
+
+        preg_match('/\*\*Deliberate exceptions:\*\* (\d+) published symbols/', $doc, $m);
+
+        return (int) $m[1];
     }
 
     /** @return list<string> every quoted `ntdst/…` hook the package fires */

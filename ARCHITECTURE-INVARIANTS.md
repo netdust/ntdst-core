@@ -383,16 +383,17 @@ Three details are load-bearing, and each was got wrong first:
   `"ntdst/service/{$slug}/config"` is searched as `ntdst/service/`, because the
   reader writes the interpolated name.
 
-**Deliberate exceptions:** 19 published symbols, each with its reader named in
+**Deliberate exceptions:** 16 published symbols, each with its reader named in
 README's `#### Extension points` table (the human home) and its reason in
 `bin/zero-readers.sh`'s `EXCEPTIONS` array (the machine home). This document
 kept a third copy and it went stale; the two homes above are the list.
 **Status:** established by core-trim Clusters B and C; the script's reader
 definition, stem rule and README scoping were corrected at the Cluster D gate.
-Holds at `96560c5` — stdout empty and exit 0, with all thirteen consumer roots
-present and 28 advisory method candidates on stderr. Twelve of the nineteen
+Holds at `5506025` — stdout empty and exit 0, with all thirteen consumer roots
+present; the advisory method candidate count is on stderr, not pinned here,
+because it moves whenever a consumer repository does. Nine of the sixteen
 `EXCEPTIONS` rows are load-bearing: drop one and a finding appears. The seven
-inert rows are named under `## Deliberate exceptions`. The file and line totals the run prints are NOT
+redundant rows are named under `## Deliberate exceptions`. The file and line totals the run prints are NOT
 recorded here: they move whenever a consumer repository does, and a status line
 that goes stale on somebody else's commit teaches a reader to skip it.
 
@@ -541,14 +542,16 @@ Things core does that WordPress also does, kept on purpose. Each names why.
   published contract, so it is kept and named rather than deleted. The count is
   a hand count on purpose: the sweep cannot enumerate an interface, so no
   machine check will correct this number when it drifts.
-- **Seven of the 19 `EXCEPTIONS` rows are INERT** (INV-9). Drop the row and the
-  sweep still says nothing, because the symbol has a reader the script can see
-  or is a shape it cannot judge: `ntdst/model/created`, `ntdst/model/updated`,
-  `ntdst/model/registering`, `ntdst/service/`, `ntdst_container`,
-  `NTDST_Bootstrap::config()` and `NTDST_Service_Meta`. They are kept so the
-  array reads as the WHOLE published set — a reader should not have to ask which
-  extension point was left out for being called somewhere. The other twelve are
-  load-bearing: drop one and a finding appears.
+- **Seven of the 16 `EXCEPTIONS` rows are REDUNDANT** (INV-9; not to be confused
+  with the script's `inert-exception:` finding token, which fires on a
+  different case — an exempted symbol the package no longer ships at all).
+  Drop the row and the sweep still says nothing, because the symbol has a
+  reader the script can see or is a shape it cannot judge: `ntdst/model/created`,
+  `ntdst/model/updated`, `ntdst/model/registering`, `ntdst/service/`,
+  `ntdst_container`, `NTDST_Bootstrap::config()` and `NTDST_Service_Meta`. They
+  are kept so the array reads as the WHOLE published set — a reader should not
+  have to ask which extension point was left out for being called somewhere.
+  The other nine are load-bearing: drop one and a finding appears.
 - **The 13 retired type names are guarded by DECLARATION POSITION, not as bare
   words.** `signed_int` is a distinctive token and is pinned bare
   (`bin/guard.sh`, `removedSymbolProvider()`). The other 12 are ordinary
