@@ -74,9 +74,10 @@ final class NTDST_RelationField
         //
         // THE BUDGET is 60 requests per 60 seconds, and the framework spends it
         // only for callers this permission admits. An autocomplete fires on
-        // keystrokes, so the ceiling is a keyboard's worth of typing, and the
-        // refusal carries `retry_after` — a limit with no back-off signal is a
-        // picker that dies silently mid-word.
+        // keystrokes, so the ceiling is a keyboard's worth of typing. The
+        // refusal carries `retry_after` in the WP_Error's DATA — it is part of
+        // the JSON body, never a `Retry-After` header — so a client that wants
+        // to back off has a number to read there.
         ntdst_rest('ntdst/v1')->get('/relation/search', [$this, 'handleRelationSearch'], [
             'permission' => fn(\WP_REST_Request $request): bool
                 => $this->mayPickFromAll((array) $request->get_param('post_type')),

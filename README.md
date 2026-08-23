@@ -10,7 +10,7 @@ vendored copy that drifts. `bin/zero-readers.sh` sweeps six of them for readers
 
 - `core/` — Foundation (Container, Bootstrap, Theme, Pages)
 - `support/` — Primitives with no dependencies (ClientIp, Cidr, RateLimiter)
-- `api/` — Request flow (Actions, Rest, Data, Response)
+- `api/` — Request flow (Rest, Data, Response, FieldTypes)
 - `admin/` — Admin UI (MetaboxGenerator, RelationField)
 - `services/` — Built-in services (Logger)
 - `ntdst-core.php` — package-root loader; adopters require it via an explicit
@@ -37,7 +37,7 @@ vendored copy that drifts. `bin/zero-readers.sh` sweeps six of them for readers
 
 There is one HTTP surface, and it is `ntdst_rest()`. A command is a `->post()`
 route like any other: WordPress checks the `wp_rest` nonce, the route's
-`permission_callback` decides who may call it, and the browser reaches it with
+`permission` decides who may call it, and the browser reaches it with
 `wp.apiFetch`. 5.0.0 deleted the separate same-origin dispatcher that used to
 own commands — see `### 5.0.0 — BREAKING` for the migration table.
 
@@ -634,9 +634,10 @@ it with `wp.apiFetch`, which sends the `wp_rest` nonce for you (INV-2, INV-4).
 
 | Was | Now |
 |---|---|
-| `ntdst_actions()`, `NTDST_Actions` | `ntdst_rest('ns/v1')->post('/thing', $cb, ['permission_callback' => …])` |
+| `ntdst_actions()`, `NTDST_Actions` | `ntdst_rest('ns/v1')->post('/thing', $cb, ['permission' => 'edit_others_posts', 'rate_limit' => 30])` |
 | `add_filter('ntdst/api_data/{action}', $cb)` | the route's own `callback` |
-| `add_filter('ntdst/api/public_actions', …)` | `'permission_callback' => '__return_true'` on that route |
+| `add_filter('ntdst/api/public_actions', …)` | `->public()` chained onto the verb: `ntdst_rest('ns/v1')->get('/thing', $cb, ['rate_limit' => 30])->public()`. There is no options value that opens a route |
+| an anonymous WRITE action (`'public' => true` on a `POST`) | `->post('/interest', $cb, ['permission' => fn(): bool => true, 'rate_limit' => 30])`. `->public()` is refused on a write verb, so the callable is YOUR gate and the decision stays in your code |
 | `POST /ntdst/v1/get_nonce` | `wp_create_nonce('wp_rest')` — `wp.apiFetch` already sends it |
 | `assets/js/ntdst-api.js`, `window.ntdstAPI` | `wp.apiFetch` (`wp-api-fetch` is a WordPress-provided script handle) |
 | `ntdst_enqueue_api_client()` | nothing — depend on `wp-api-fetch` instead |
@@ -650,6 +651,18 @@ it with `wp.apiFetch`, which sends the `wp_rest` nonce for you (INV-2, INV-4).
 A route's response shape changes with it: the dispatcher wrapped every answer in
 `{success:true,data:{…}}`, and a REST route returns the payload itself. A client
 reading `response.data.thing` reads `response.thing` now.
+
+Two things do not survive the rename, and both are silent. THE BUDGET: the
+dispatcher metered every action at 30 requests per 60 seconds whether or not
+the author asked; `ntdst_rest()` meters nothing unless the route says
+`'rate_limit' => N`. The rows above carry the old default forward on purpose —
+drop it and the endpoint is unmetered, which no diff will tell you. THE
+CAPABILITY: an action that took its floor from `register()`'s `cap_type` read
+the capability OFF THE TYPE, so a CPT with remapped capabilities narrowed with
+it. A hard-coded `['permission' => 'edit_others_posts']` does not. On such a
+type pass the type's own slug —
+`['permission' => get_post_type_object('artwork')->cap->edit_others_posts]` —
+or a callable that reads it.
 
 **Two behavioural changes no rename carries.** Both used to be silent when the
 logger was absent, and both are unconditional now (FR-3):

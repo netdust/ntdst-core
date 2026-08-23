@@ -4,24 +4,22 @@ declare(strict_types=1);
 
 /**
  * The one canonical rate limiter for the fleet (spec `intake-to-core`, FR-2 /
- * FR-3), extracted from `NTDST_Actions::checkRateLimit()` so every consumer
- * counts against the same primitive instead of re-deriving it.
+ * FR-3), so every consumer counts against the same primitive instead of
+ * re-deriving it. It was extracted from the command dispatcher's own
+ * `checkRateLimit()`; 5.0.0 deleted the dispatcher and this outlived it.
  *
  * ── EVERYTHING THAT NAMES A CALLER STAYS WITH THE CALLER (FR-3) ───────────
  * The limiter receives the FINISHED transient key and the FINISHED numbers.
- * It resolves no user, no client IP, and applies no filters of its own. The
- * two consumers in this package show the range:
- *  - NTDST_Actions keys `u{userId}` when logged in, else `ip` + md5(client
- *    IP), under the `ntdst_rate_` prefix, with the limit and the window taken
- *    from `ntdst/api/rate_limit/{$action}` and `ntdst/api/rate_window/{$action}`
- *    over its own class constants — and only for an action it has already
- *    established is REGISTERED (F1: a request parameter may not name a bucket);
+ * It resolves no user, no client IP, and applies no filters of its own. One
+ * consumer is left in this package, and it is the shape to copy:
  *  - NTDST_Rest keys (namespace + route + verbs + user-or-IP) under the
  *    `ntdst_rest_` prefix, with the numbers declared per route as the
  *    `rate_limit` / `rate_window` route options, and no filters at all.
- * Two bucket shapes, two ways of arriving at the numbers, one counter. A
- * limiter that hashed, prefixed or re-filtered anything here would silently
- * move every consuming site's buckets and filter the callers' numbers twice.
+ * The dispatcher's shape was the other one: a bucket keyed on the ACTION name,
+ * with the numbers filtered per action. Both arrived here as two integers and
+ * a string, which is the point — a limiter that hashed, prefixed or
+ * re-filtered anything here would silently move every consuming site's buckets
+ * and filter the callers' numbers twice.
  *
  * A consumer outside this package does the same three things: build the key,
  * resolve the numbers however it resolves numbers, hand both over. Prefer the

@@ -85,16 +85,18 @@ This is the line, and the package's own history draws it in both directions.
 
 **Facts core owns — enforce them.**
 
-- Whether an action is registered. `NTDST_Actions::isRegisteredAction()` settles
-  it before a rate-limit bucket key exists; an unregistered action gets no
-  bucket and no nonce.
-- Whether a route declared a permission. A route without a callable
-  `permission` is refused at registration, loudly, with no implicit
-  `__return_true`.
-- A capability floor that is mechanically derivable. `register()`'s `cap_type`
-  installs a type-derived floor that bites at dispatch, ahead of the handler
-  and alongside it, and fails closed on an unresolvable capability
-  (`api/Actions.php`).
+- Whether a route exists. A declaration WordPress refused is a route that is
+  not there — `ntdst_rest()` refuses an unknown option, and an unregistered
+  path answers 404 rather than reaching a handler by accident.
+- What a route's permission MEANS. A `permission` string is a CAPABILITY, never
+  a callable name: `['permission' => 'edit_others_posts']` becomes
+  `current_user_can('edit_others_posts')`, and a route that states no
+  permission registers as `is_user_logged_in` — WordPress's own floor, never
+  anonymous. Anonymous has no spelling in the options array at all; it is
+  reached only by chaining `->public()`, and only on a read verb (`api/Rest.php`).
+- A capability read off the TYPE rather than hard-coded. A CPT that remaps its
+  capabilities narrows the gate with it, and an unresolvable capability denies
+  everyone.
 
 **Facts the application owns — refuse to guess them.**
 
@@ -119,14 +121,17 @@ Same test, opposite outcomes. That is what makes it a usable test.
 
 ## 4. Safe defaults where mistakes are expensive
 
-Deny is the default. `ntdst/api/public_actions` ships empty. Two things add to
-it, and both are a mark somebody MADE: an author writing `'public' => true` on a
-registration, which `NTDST_Actions::register()` unifies onto the site's one
-filter (`api/Actions.php`), and a site listening on that filter directly —
-stride's `QuestionnaireHandler` does. Anonymous reach is never a default and
-never something a merge can turn on. A REST route with no permission
-does not register. An unresolvable capability denies everyone, administrators
-included.
+Deny is the default, and anonymous reach is a mark somebody MADE. There is no
+value a consumer can put in an options array that opens a route: `->public()`
+is the only gesture in the language that does it, it is chained onto ONE
+declaration, and `api/Rest.php` refuses it on any verb but GET, HEAD and
+OPTIONS — "anyone may write" is the threat itself, not an exception to it. A
+route that states no permission is not open either: it registers as
+`is_user_logged_in`, which on a site with open registration is a floor and not
+a gate, so a read worth gating states its capability. A site that really does
+take anonymous writes — stride's `QuestionnaireHandler` is the fleet's one case
+— passes its own callable and owns that decision in its own code. An
+unresolvable capability denies everyone, administrators included.
 
 A service is off when `metadata()` returns `'enabled' => false`, or when its
 `services.conditional` condition returns false. There is no third way. Anything
