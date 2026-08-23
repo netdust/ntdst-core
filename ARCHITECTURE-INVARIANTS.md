@@ -222,31 +222,53 @@ phase 4); `NTDST_Pages::path()` → `add_rewrite_rule()` + the `query_vars` filt
 `redirect_canonical` filter; `exit` inside a template filter callback; a second
 way to pass data to a template (`extract()` over a caller array); a second
 `addPath`.
-**Mechanical check:** `grep -rn "is_404 = false\|redirect_canonical\|locate_template(\|extract(" --include=*.php api core` → the hits Status names: `core/Pages.php:53` (a `redirect_canonical` filter) and `:380`, and `api/Response.php:273`, `:290`, `:311`, `:667` (two `extract()` calls over a caller array, a second `is_404 = false`, and a `locate_template()` outside the loader). `grep -rn "function addPath\|function redirect" --include=*.php api core` → two each, not one: `api/Response.php:126` + `:579` and `api/Response.php:235` + `core/Pages.php:458`. Phase 4 takes both counts to one.
-**Status:** SATISFIED at `2fbde3d` (Cluster 4b, T11), which closed the Response
-half; `5bee797` (T10) closed the page-router half.
-`NTDST_Pages::path()` (`core/Pages.php:114`) calls
-`add_rewrite_rule()` at `:138` and names its query vars on the `query_vars`
-filter (`queryVars()` `:153`); `dispatch()` (`:174`) runs on `template_redirect`
-and reads `get_query_var('ntdst_page')` at `:176`. `core/Pages.php` returns NO hit from either
-command now: the canonical-redirect filter, the `is_404` clear, the
+**Deliberate exceptions:**
+- **The page dispatcher's terminator** — `NTDST_Pages::terminate()`
+  (`core/Pages.php:285`, `exit` at `:287`), called from `dispatch()` when a
+  `path()` callback returns `null`/`true`. ONE site. A callback that answered
+  the request itself has already written its bytes, and returning out of
+  `template_redirect` leaves WordPress to render the query it had resolved —
+  the theme's blog index appended to a vCard that declared a `Content-Length`.
+  This is what WordPress's own `template_redirect` consumers (feeds, canonical
+  redirects) do. The invariant's word still holds where it was aimed: a
+  CALLBACK never exits, and nothing exits from inside a template filter — the
+  DISPATCHER does, and it is a `protected function terminate(): never` so a
+  test double can observe the end of the request instead of dying with it.
+  Added by the core-shape Cluster 4b fix wave (C-1, `a5092a7`).
+**Mechanical check:** `grep -rn "is_404 = false\|redirect_canonical\|locate_template(\|extract(" --include=*.php api core` → FIVE hits, all
+`core/TemplateLoader.php`, and none of them a bypass: the single
+`locate_template()` CALL at `:146`, and four comments documenting the guard on
+its result (`:149`, `:190`, `:204`, `:215` — the hit is refused unless it lies
+inside a theme directory, `5fa3d61`). `api/Response.php` and `core/Pages.php`
+return ZERO: the canonical-redirect filter, both `is_404 = false` clears and
+both `extract()` calls over a caller array are gone.
+`grep -rn "function addPath\|function redirect" --include=*.php api core` → ONE
+each: `api/Response.php:140` and `core/TemplateLoader.php:31`.
+**Status:** SATISFIED at `ae6da3e` (core-shape Cluster 4b fix wave; the last
+behaviour commit of the wave is `db0b335`), which re-pins the page-router half after C-1/C-2/I-1/I-2/I-3; `2fbde3d` (T11) closed
+the Response half and `5bee797` (T10) first closed the page-router half.
+`NTDST_Pages::path()` (`core/Pages.php:125`) calls `add_rewrite_rule()` at
+`:149` and names its query vars on the `query_vars` filter (`queryVars()`
+`:164`); `dispatch()` (`:188`) runs on `template_redirect` and reads
+`get_query_var('ntdst_page')` at `:190`. Both greps return NO hit in
+`core/Pages.php`: the canonical-redirect filter, the `is_404` clear, the
 render-and-exit and `function redirect` are all gone (six methods, pinned in
 `bin/guard.sh` `METHOD_PINS["core/Pages.php"]` and — the five distinctive ones —
-in `PackageBootIntegrityTest::removedSymbolProvider()`). `function redirect` and
-`function addPath` are each ONE: `api/Response.php:140` and
-`core/TemplateLoader.php:31`. `locate_template(` is still the single CALL at
-`core/TemplateLoader.php:146`, with four comment mentions documenting the guard
-on its result (`:149`, `:190`, `:204`, `:215` — refused unless the hit lies
-inside a theme directory, `5fa3d61`; T11's deletion of `getCustomPaths()` moved
-all five up by five lines). `api/Response.php` returns ZERO hits from
-the first command at `2fbde3d`: both `extract()` calls went with `render()` and the rewritten `html()`, which hands
-its data to WordPress's own `load_template($file, false, $data)` inside a buffer
-(`:166`), and the last `is_404 = false` went with `commitRenderStatus()`. A
-route refuses by calling WordPress's `$wp_query->set_404()` from `notFound()`
-(`:78-80`) instead of setting a flag for something downstream to honour — since
-T10 nothing downstream reads this object. The two stale comments naming
-`NTDST_Pages::commitOk()` are gone with the methods whose docblocks carried
-them. Line numbers re-pinned at T14.
+in `PackageBootIntegrityTest::removedSymbolProvider()`). Besides the file's
+`defined('ABSPATH') || exit;` guard at `:80`, the ONE `exit` the file carries is
+`terminate()`'s at `:287` — named under `**Deliberate exceptions:**` above, and
+matched by neither grep. `function redirect` and `function addPath` are each
+ONE: `api/Response.php:140` and `core/TemplateLoader.php:31`. `locate_template(`
+is still the single CALL at `core/TemplateLoader.php:146`, with four comment
+mentions (`:149`, `:190`, `:204`, `:215`). A route refuses by calling
+WordPress's `$wp_query->set_404()` — from `NTDST_Response::notFound()`
+(`api/Response.php:92-93`) and from `NTDST_Pages::notFound()`
+(`core/Pages.php:297`) — instead of setting a flag for something downstream to
+honour. `html()` hands its data to WordPress's own
+`load_template($file, false, $data)` inside a buffer (`api/Response.php:181`),
+which is the one way data reaches a template besides
+`NTDST_Template_Loader::page()`. Line numbers re-pinned at the Cluster 4b fix
+wave; they move again at T14.
 
 ## INV-7 — Throttling is one primitive, charged from the permission callback
 

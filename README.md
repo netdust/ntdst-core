@@ -676,11 +676,43 @@ normal deploy. On a plugin or theme ACTIVATION, flush once yourself — the
 activation hook runs before your routes are declared — or run
 `wp rewrite flush` after the deploy.
 
-**A page callback that still returns a `NTDST_Response` no longer renders.**
-It returns a template path now, and the old object return would otherwise fall
-through in silence to a template with none of its data. Core says so with a
-`_doing_it_wrong()` naming the type it got, which is `WP_DEBUG`-gated — check
-every page route before you bump, and do not rely on the warning on a live site.
+**A page route answers at the site's canonical trailing-slash form.** The rule
+`add_rewrite_rule()` gets ends in `/?$`, and WordPress's own
+`redirect_canonical` then sends the other form to the canonical one. On a site
+with trailing slashes, `/card/contact.vcf` is one 301 to
+`/card/contact.vcf/`, which is where the route answers. Link the canonical
+form: a browser follows the hop, but a `fetch()` with `redirect: 'error'`, a
+`Link:` header consumer or a QR code does not have to. Do NOT try to avoid the
+hop by dropping `/?` from a file-like pattern — then the canonical form 404s
+and the hop becomes a dead end. The saved file is named by
+`Content-Disposition: filename=` (that is what `ntdst_download()` sends), not
+by the last segment of the URL, so the `.vcf` in the path is for humans
+reading the link.
+
+**What a page callback's return value means.** One table, and it is the whole
+contract — `path()` dispatches on `template_redirect`, so this is what the
+dispatcher does with what you hand back:
+
+| the callback returns | what the dispatcher does |
+|---|---|
+| a string that IS an existing file | that file is the template, through one `template_include` filter. WordPress renders it, so `wp_head()`/`wp_footer()` still fire |
+| a string that is NOT an existing file | `_doing_it_wrong()` naming the path, then WordPress's own 404. Build the path with `NTDST_Template_Loader::page()` / `::locate()`, which return `null` when the template is missing |
+| `false` | WordPress's own 404 — `$wp_query->set_404()` plus `status_header(404)`. NO warning: `false` is the contract's own word for "refuse" |
+| an object (a `NTDST_Response`), an int, an array, `''` | `_doing_it_wrong()` naming the type, then WordPress's own 404. The 5.0.0 break: an object return used to be rendered, and would otherwise fall through in silence to a template with none of its data |
+| `null` or `true` | "I answered this request myself." The DISPATCHER then ends the request, so nothing of WordPress's own render follows the bytes you sent |
+
+Both warnings are `WP_DEBUG`-gated — check every page route before you bump,
+and do not rely on the warning on a live site.
+
+**`null`/`true` means the dispatcher exits, and that is the only exit.** A
+callback still never exits on its own account: it writes its bytes and returns
+`null`, and `NTDST_Pages::dispatch()` ends the request there. Without that,
+WordPress would go on to render the query it had already resolved — the blog
+index appended to your vCard, after a `Content-Length` that said otherwise.
+There are exactly two helpers a callback may call that end the request
+themselves, and both are `never`-typed so the reading is local: `ntdst_download()`
+(sends the headers and the body) and `ntdst_response()->redirect()`. Everything
+else returns.
 | `NTDST_Response::json()` / `jsonPayload()` | `wp_send_json_success($data)` / `wp_send_json_error(['error' => $msg], $status)`, or a REST route through `ntdst_rest()`. WordPress owns the JSON envelope, the header and the exit |
 | `NTDST_Response::render($template, $data)` | from a page route, `return NTDST_Template_Loader::page($template, $data);` — WordPress includes the file, so `wp_head()`/`wp_footer()` still fire. Anywhere else, `echo ntdst_response()->html($template, $data);`. Nothing in core renders-and-exits any more |
 | `NTDST_Response::renderError()` / `getErrorHtml()` | `wp_die($message, '', ['response' => $status])`, which is themed, status-aware and filterable (`wp_die_handler`). The red `<div>` core used to echo was markup no theme could reach |
