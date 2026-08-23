@@ -926,6 +926,10 @@ class NTDST_Bootstrap
         $serviceConfig = $this->serviceConfigCache[$slug];
 
         // Register the filter with cached config (no closure over $this->config)
+        // Core never applies this filter — the consumer's own service does, with
+        // apply_filters("ntdst/service/{$slug}/config", $defaults) (README's
+        // getServiceConfig() migration row; stride's ServiceConfig trait). Core's
+        // job ends at mounting the configured override on the filter at priority 1.
         add_filter("ntdst/service/{$slug}/config", function ($defaults) use ($serviceConfig) {
             return array_merge($defaults, $serviceConfig);
         }, 1);
