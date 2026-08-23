@@ -25,16 +25,10 @@
 //    it registers, boots and comes back out of the container. A refusal there
 //    would be a fatal-shaped outage on a site that did nothing wrong.
 //
-// HOW "READ NO FILE" IS OBSERVED. Not with `Functions\expect('glob')->never()`:
-// `glob()` and `file_get_contents()` are INTERNAL PHP functions, and Patchwork
-// refuses to redefine an internal without a `redefinable-internals` entry in a
-// patchwork.json this package does not carry (it errors:
-// `Patchwork\Exceptions\NotUserDefined`). Every planted file therefore records
-// its own execution in `$GLOBALS['_ntdst_t01_included']` on the first line of
-// its body. That is a strictly stronger promise than a never()-ed mock: it
-// fails if core reaches the file by ANY route — glob, a derived path, an
-// autoloader core installed, a stream wrapper — and not merely by the one
-// function today's code happens to call.
+// WHERE "READ NO FILE" IS OBSERVED. Not here any more: the planted-file cases
+// moved to the composite feature test (BootstrapLoadsNothingByGuessingTest),
+// which plants the same traps inside a realistic consumer config. What stays in
+// this file is the admission test itself — refused, resolved, refused once.
 defined('ABSPATH') || exit; // direct web hit: ABSPATH undefined → exit; under phpunit the bootstrap defines it first
 
 use Brain\Monkey;
@@ -47,38 +41,16 @@ require_once __DIR__ . '/../../core/Bootstrap.php';
 final class BootstrapResolvesOnlyLoadedClassesTest extends TestCase
 {
     use MockeryPHPUnitIntegration;
-
-    /**
-     * Every `_doing_it_wrong()` call this test provoked: [function, message, version].
-     *
-     * Recorded through `Functions\when()->alias()` rather than counted by a
-     * Mockery `->times(1)`, which is the idiom the REST suites in this package
-     * already use. A refusal is judged on WHAT IT SAYS — the site owner reading
-     * the notice has to learn which class and which config key — so the message
-     * has to be readable back, and a count failure has to be able to print the
-     * refusals that did fire.
-     *
-     * @var list<array{0: string, 1: string, 2: string}>
-     */
-    private array $wrongs = [];
-
-    /** Throwaway tree for the planted files. */
-    private string $root = '';
-
-    /** Deepest-first cleanup list. */
-    private array $litter = [];
+    use NtdstRecordsRefusals;
 
     protected function setUp(): void
     {
         parent::setUp();
         Monkey\setUp();
 
-        $this->wrongs = [];
-        $this->litter = [];
-        $this->root = sys_get_temp_dir() . '/ntdst-t01-' . getmypid() . '-' . uniqid();
+        $this->recordRefusals();
 
-        // The three globals every planted file and inline service writes to.
-        $GLOBALS['_ntdst_t01_included'] = [];      // files core executed
+        // The globals the inline services write to.
         $GLOBALS['_ntdst_t01_constructed'] = [];   // services core booted
         $GLOBALS['_ntdst_t01_instances'] = [];     // the objects it booted
         $GLOBALS['_ntdst_t01_is_admin'] = false;
@@ -90,23 +62,10 @@ final class BootstrapResolvesOnlyLoadedClassesTest extends TestCase
         Functions\when('do_action')->justReturn(null);
         Functions\when('apply_filters')->alias(static fn($hook, $value = null) => $value);
         Functions\when('get_option')->justReturn('1');
-        Functions\when('_doing_it_wrong')->alias(function ($function = '', $message = '', $version = '') {
-            $this->wrongs[] = [(string) $function, (string) $message, (string) $version];
-        });
     }
 
     protected function tearDown(): void
     {
-        // Deepest path first, so a directory is empty by the time rmdir() sees
-        // it. Longest-string-first is the ordering: every entry lives under
-        // $this->root, so a longer path is a deeper one.
-        $litter = array_unique($this->litter);
-        usort($litter, static fn(string $a, string $b) => strlen($b) <=> strlen($a));
-
-        foreach ($litter as $path) {
-            is_dir($path) ? rmdir($path) : unlink($path);
-        }
-
         Monkey\tearDown();
         parent::tearDown();
     }
@@ -184,97 +143,13 @@ final class BootstrapResolvesOnlyLoadedClassesTest extends TestCase
         );
     }
 
-    /**
-     * FR-1 — a class name is never turned into a file path.
-     *
-     * The deleted branch built `dirname($basePath) . '/' . <class as a path>`,
-     * tried it as the namespace spells it and again with the leading segment
-     * dropped, and `require_once`d the first hit. This plants a file at BOTH
-     * candidate paths. Either one executing is arbitrary code running because
-     * a name in a config array looked like a directory.
-     */
-    public function testAClassNameIsNeverTurnedIntoAFilePathAndExecuted(): void
-    {
-        $fqcn = 'Acme\\Widgets\\T01GuessedService';
-
-        // Candidate 1: the path as the namespace spells it.
-        $this->plant('/plugin/Acme/Widgets', 'T01GuessedService.php', 'Acme\\Widgets', 'T01GuessedService');
-        // Candidate 2: the same path with the leading namespace segment dropped.
-        $this->plant('/plugin/Widgets', 'T01GuessedService.php', 'Acme\\Widgets', 'T01GuessedService');
-
-        $boot = new NTDST_Bootstrap([
-            'services' => [
-                'core' => [$fqcn],
-                'discovery_paths' => [$this->root . '/plugin/services'],
-            ],
-        ]);
-        $boot->register()->bootFeatures();
-
-        $this->assertSame(
-            [],
-            $GLOBALS['_ntdst_t01_included'],
-            'Core executed a file it found by deriving a path from a class name: '
-                . implode(', ', $GLOBALS['_ntdst_t01_included']),
-        );
-        $this->assertFalse(
-            class_exists($fqcn, false),
-            'A class core could not resolve must still be unresolvable afterwards — core loads nothing.',
-        );
-        $this->assertSame(
-            [],
-            $GLOBALS['_ntdst_t01_constructed'],
-            'Nothing found by path-guessing may be booted.',
-        );
-        $this->assertCount(
-            1,
-            $this->wrongs,
-            'The unresolvable class is refused exactly once, whatever is lying on disk: ' . $this->wrongsText(),
-        );
-    }
-
-    /**
-     * FR-1 — no directory is scanned, whatever the config says.
-     *
-     * `auto_discover => true` with a populated `discovery_paths` is the exact
-     * configuration the scanner existed to serve. The key is unread now (AF-4:
-     * a stale key in a consumer config is inert, not an error), so the planted
-     * `ProbeService.php` — a perfect match for the retired `*Service.php` glob
-     * — must neither run nor register, and no notice may fire either: nothing
-     * was LISTED, so there is nothing to refuse.
-     */
-    public function testADirectoryFullOfServicesIsNeitherScannedNorRead(): void
-    {
-        $this->plant('/discovery', 'ProbeService.php', 'NtdstT01Discovery', 'ProbeService');
-
-        $boot = new NTDST_Bootstrap([
-            'services' => [
-                'auto_discover' => true,
-                'discovery_paths' => [$this->root . '/discovery'],
-            ],
-        ]);
-        $boot->register()->bootFeatures();
-
-        $this->assertSame(
-            [],
-            $GLOBALS['_ntdst_t01_included'],
-            'Core read a file out of a discovery path: ' . implode(', ', $GLOBALS['_ntdst_t01_included']),
-        );
-        $this->assertFalse(
-            class_exists('NtdstT01Discovery\\ProbeService', false),
-            'A *Service.php sitting in a configured directory must stay unloaded — that directory is not core\'s to run.',
-        );
-        $this->assertSame(
-            [],
-            $GLOBALS['_ntdst_t01_constructed'],
-            'Zero services register from a discovery path.',
-        );
-        $this->assertSame(
-            [],
-            $this->wrongs,
-            'An unread config key is inert, not an error — a stale auto_discover must not print a notice: '
-                . $this->wrongsText(),
-        );
-    }
+    // The two planted-file cases that stood here — a class name turned into a
+    // file path, and a directory full of *Service.php — are the composite
+    // feature test's now: BootstrapLoadsNothingByGuessingTest plants BOTH traps
+    // under one realistic consumer config and asserts the same promise
+    // (`_ntdst_ca_included === []`, both classes still unresolvable) on a boot
+    // that also has live services in it. Two suites planting the same files
+    // proved it twice; the stronger of the two is the one that kept it.
 
     /**
      * FR-1 / AF-14 — re-entry: a second `register()` does not repeat the refusal.
@@ -399,56 +274,8 @@ final class BootstrapResolvesOnlyLoadedClassesTest extends TestCase
         );
     }
 
-    // ========================================================================
-    // helpers
-    // ========================================================================
-
-    /**
-     * Write a PHP file that records its own execution and then declares a
-     * service, and register it for cleanup.
-     *
-     * The recorder is the FIRST statement of the file body, so the file counts
-     * as read however core reached it — including a route that would then fail
-     * to declare the class.
-     */
-    private function plant(string $dir, string $file, string $namespace, string $class): void
-    {
-        $path = $this->root . $dir;
-
-        if (!is_dir($path)) {
-            mkdir($path, 0777, true);
-        }
-
-        file_put_contents(
-            $path . '/' . $file,
-            "<?php namespace {$namespace};\n"
-                . "\$GLOBALS['_ntdst_t01_included'][] = __FILE__;\n"
-                . "class {$class} {\n"
-                . "    public function __construct() {\n"
-                . "        \$GLOBALS['_ntdst_t01_constructed'][] = static::class;\n"
-                . "        \$GLOBALS['_ntdst_t01_instances'][] = \$this;\n"
-                . "    }\n"
-                . "    public static function metadata(): array { return []; }\n"
-                . "}\n",
-        );
-
-        // The file, and every directory this call may have created back up to
-        // $this->root. tearDown() removes them deepest-first.
-        $this->litter[] = $path . '/' . $file;
-        for ($walk = $path; str_starts_with($walk, $this->root); $walk = dirname($walk)) {
-            $this->litter[] = $walk;
-        }
-    }
-
-    /** The refusals that fired, as one readable line. */
-    private function wrongsText(): string
-    {
-        if ($this->wrongs === []) {
-            return '(no _doing_it_wrong call)';
-        }
-
-        return implode(' | ', array_map(static fn(array $w) => $w[0] . ': ' . $w[1], $this->wrongs));
-    }
+    // The refusal recorder and the planted-file harness live in
+    // tests/Support/BootstrapHarness.php — four suites carried the same copy.
 }
 
 /**

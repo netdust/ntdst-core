@@ -88,3 +88,4 @@ require_once __DIR__ . '/../api/Data.php';
 require_once __DIR__ . '/../admin/MetaboxGenerator.php';
 require_once __DIR__ . '/../services/Scheduler.php';
 require_once __DIR__ . '/Support/RestApiInitHarness.php';
+require_once __DIR__ . '/Support/BootstrapHarness.php';

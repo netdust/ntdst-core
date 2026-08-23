@@ -52,44 +52,21 @@ final class BootstrapServiceSlugTest extends TestCase
 {
     use MockeryPHPUnitIntegration;
 
-    /** @var list<string> Every filter hook applied during the flow. */
-    private array $hooks = [];
-
-    /** @var list<string> Every option name read during the flow. */
-    private array $options = [];
-
     protected function setUp(): void
     {
         parent::setUp();
         Monkey\setUp();
-        $this->hooks = [];
-        $this->options = [];
 
-        // The full registration flow runs in the config-filter case below, so
-        // the WordPress functions it touches answer here. `add_filter()`,
-        // `ntdst_log()`, `ntdst_set()` and `ntdst_get()` are the suite's REAL
-        // implementations (tests/bootstrap.php) and are never stubbed.
+        // This file asks the slug question directly now — the end-to-end mount
+        // proof it used to carry is the composite feature test's. What is left
+        // to answer for is the WordPress surface `getServiceMetadata()` and
+        // `getServiceSlug()` touch on the way. `ntdst_log()` is the suite's REAL
+        // implementation (tests/bootstrap.php) and is never stubbed.
         Functions\when('is_admin')->justReturn(false);
         Functions\when('do_action')->justReturn(null);
         Functions\when('_doing_it_wrong')->justReturn(null);
-        Functions\when('apply_filters')->alias(function ($hook, $value = null) {
-            $this->hooks[] = (string) $hook;
-            return $value;
-        });
-        Functions\when('get_option')->alias(function ($name, $default = false) {
-            $this->options[] = (string) $name;
-            return $default;
-        });
-
-        // An earlier file's mount is still on the real add_filter bus; "the
-        // declared name pinned THIS hook" is a claim about this run.
-        foreach (['_ntdst_test_filters', '_ntdst_test_filters_at'] as $bag) {
-            foreach (array_keys($GLOBALS[$bag] ?? []) as $hook) {
-                if (str_starts_with((string) $hook, 'ntdst/service/') || str_starts_with((string) $hook, 'ntdst_service_')) {
-                    unset($GLOBALS[$bag][$hook]);
-                }
-            }
-        }
+        Functions\when('apply_filters')->alias(static fn($hook, $value = null) => $value);
+        Functions\when('get_option')->alias(static fn($name, $default = false) => $default);
     }
 
     protected function tearDown(): void
@@ -136,50 +113,46 @@ final class BootstrapServiceSlugTest extends TestCase
         return (string) $this->call($boot, 'getServiceSlug', [$class]);
     }
 
-    public function testADeclaredNamePinsTheSlug(): void
+    /**
+     * @return array<string, array{0: class-string, 1: string}>
+     */
+    public static function serviceSlugProvider(): array
     {
-        $this->assertSame('todai_ping', $this->slugAfterRegistrationFlow(SlugPinnedService::class));
+        return [
+            // A DECLARED name pins the slug, and pins it to something the
+            // class-name derivation would never produce. todai's services/Ping.php
+            // is the real one.
+            'declares a name' => [SlugPinnedService::class, 'todai_ping'],
+
+            // No declared name, so the derivation rules — consecutive capitals
+            // held together as one token. getServiceMetadata() defaults `name`
+            // to the human-readable "Slug Silent U I", and honouring THAT as a
+            // slug would re-mangle every service on the fleet back to the retired
+            // `slug_silent_u_i` spelling.
+            'declares metadata but no name' => [SlugSilentUIService::class, 'slug_silent_ui'],
+            'declares no metadata at all' => [SlugPlainUIService::class, 'slug_plain_ui'],
+        ];
     }
 
-    public function testADeclaredNamePinsTheConfigFilterName(): void
-    {
-        // The whole point of the slug, and after core-trim T02 the ONLY thing
-        // it names: the hook a consumer's override travels on. Declaring a name
-        // the hook never hears is a promise the framework does not keep — and
-        // it is now a LOUD one, because an override key that matches no
-        // registered slug is refused at register().
-        //
-        // Asserted through the public flow rather than the private helpers the
-        // cases above use: the mount is what a consumer can observe, and this
-        // one case is about the NAME the site writes its add_filter against.
-        $boot = new NTDST_Bootstrap([
-            'services' => [
-                'core' => [SlugPinnedService::class],
-                'overrides' => ['todai_ping' => ['pinged' => true]],
-            ],
-        ]);
-        $boot->register()->bootFeatures();
-
-        $this->assertArrayHasKey(
-            'ntdst/service/todai_ping/config',
-            $GLOBALS['_ntdst_test_filters_at'] ?? [],
-            'A declared name pins the config filter: the override must mount on the name the service chose.',
-        );
-        $this->assertArrayNotHasKey(
-            'ntdst_service_todai_ping_config',
-            $GLOBALS['_ntdst_test_filters_at'] ?? [],
-            'And the retired spelling is not mounted beside it — 5.0.0 ships one name, no shim.',
-        );
-        $this->assertNotContains(
-            'ntdst_service_todai_ping_enabled',
-            $this->hooks,
-            'The enable filter is gone (FR-2): a declared name no longer buys a DENY hook that fails open.',
-        );
-        $this->assertSame(
-            [],
-            $this->options,
-            'and no option is read for it either: ' . implode(', ', $this->options),
-        );
+    /**
+     * The slug a class answers to, declared or derived.
+     *
+     * One provider, asserted against `getServiceSlug()` itself. Three cases used
+     * to prove the same claim end to end — declared name mounts its hook, silent
+     * service mounts the derived hook, and the composite feature test's whole
+     * boot — and three round trips through `register()->bootFeatures()` to read
+     * back one string is three ways for the same regression to be reported. The
+     * ONE end-to-end mount proof stays where it means most: the composite
+     * (BootstrapLoadsNothingByGuessingTest), where a consumer's declared slugs
+     * carry real overrides to real services on a realistic config.
+     *
+     * @dataProvider serviceSlugProvider
+     */
+    public function testTheSlugIsTheNameDeclaredOrTheOneDerivedFromTheClass(
+        string $class,
+        string $expected,
+    ): void {
+        $this->assertSame($expected, $this->slugAfterRegistrationFlow($class));
     }
 
     public function testTheSlugIsTheSameWhicheverQuestionIsAskedFirst(): void
@@ -192,30 +165,5 @@ final class BootstrapServiceSlugTest extends TestCase
             $this->slugAfterRegistrationFlow(SlugPinnedService::class),
             (string) $this->call($cold, 'getServiceSlug', [SlugPinnedService::class]),
         );
-    }
-
-    /**
-     * @return array<string, array{0: class-string, 1: string}>
-     */
-    public static function derivedSlugProvider(): array
-    {
-        return [
-            'declares metadata but no name' => [SlugSilentUIService::class, 'slug_silent_ui'],
-            'declares no metadata at all' => [SlugPlainUIService::class, 'slug_plain_ui'],
-        ];
-    }
-
-    /**
-     * A service that declares no name keeps the derivation it has today —
-     * consecutive capitals held together as one token. getServiceMetadata()
-     * defaults `name` to the human-readable "Slug Silent U I", and honouring
-     * that as a slug would re-mangle every service on the fleet back to the
-     * retired `slug_silent_u_i` spelling.
-     *
-     * @dataProvider derivedSlugProvider
-     */
-    public function testAServiceThatDeclaresNoNameKeepsItsDerivedSlug(string $class, string $expected): void
-    {
-        $this->assertSame($expected, $this->slugAfterRegistrationFlow($class));
     }
 }

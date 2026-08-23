@@ -53,25 +53,14 @@ require_once __DIR__ . '/../../core/Bootstrap.php';
 final class BootstrapOverridesTest extends TestCase
 {
     use MockeryPHPUnitIntegration;
-
-    /**
-     * Every `_doing_it_wrong()` this test provoked: [function, message, version].
-     *
-     * Recorded rather than counted by a Mockery `->times(1)`, the way
-     * BootstrapResolvesOnlyLoadedClassesTest does it: a refusal is judged on
-     * WHAT IT SAYS, and a count failure has to be able to print the refusals
-     * that did fire.
-     *
-     * @var list<array{0: string, 1: string, 2: string}>
-     */
-    private array $wrongs = [];
+    use NtdstRecordsRefusals;
 
     protected function setUp(): void
     {
         parent::setUp();
         Monkey\setUp();
 
-        $this->wrongs = [];
+        $this->recordRefusals();
 
         $GLOBALS['_ntdst_t02_constructed'] = [];   // services core booted, in order
         $GLOBALS['_ntdst_t02_config'] = [];        // slug => the config the service read back
@@ -94,9 +83,6 @@ final class BootstrapOverridesTest extends TestCase
         // Patchwork, so they cannot be stubbed). See the note there.
         Functions\when('is_admin')->justReturn(false);
         Functions\when('do_action')->justReturn(null);
-        Functions\when('_doing_it_wrong')->alias(function ($function = '', $message = '', $version = '') {
-            $this->wrongs[] = [(string) $function, (string) $message, (string) $version];
-        });
     }
 
     protected function tearDown(): void
@@ -109,87 +95,14 @@ final class BootstrapOverridesTest extends TestCase
     // DENIAL — an overrides key that matches no registered service
     // ========================================================================
 
-    /**
-     * FR-2 / AF-5b — a typo'd `services.overrides` key is refused ONCE at
-     * `register()`, and the notice names the key.
-     *
-     * The consumer's half of threat row #3. `overrides.typo` reached no service
-     * and said nothing; the site owner edited a config, reloaded, saw no
-     * change, and had nothing to grep for. The refusal has to carry the FULL
-     * dotted key, because that is the string they will search their config for
-     * — a notice saying "unknown service override" sends them hunting.
-     *
-     * Three further promises ride along, and each is a way this could be
-     * implemented wrong: the typo must register NOTHING (no filter under its
-     * name, no phantom service), the correctly-keyed override in the same array
-     * must still reach its service, and the good key must draw no notice of its
-     * own.
-     */
-    public function testAnOverrideKeyMatchingNoRegisteredServiceIsRefusedAndTheGoodOneStillApplies(): void
-    {
-        $this->wordPressDispatchesItsFilters();
-        $this->wordPressAnswersOptionReads();
-
-        $boot = new NTDST_Bootstrap([
-            'services' => [
-                'core' => [T02SecurityService::class],
-                'overrides' => [
-                    'security' => ['hide_wp_version' => true],
-                    'typo' => [],
-                ],
-            ],
-        ]);
-
-        $boot->register();
-
-        $this->assertCount(
-            1,
-            $this->wrongs,
-            'An overrides key matching no registered service must produce exactly one _doing_it_wrong() at '
-                . 'register(); got: ' . $this->wrongsText(),
-        );
-
-        [$function, $message, $version] = $this->wrongs[0];
-
-        $this->assertStringContainsString(
-            'services.overrides.typo',
-            $message,
-            'The notice must name the full dotted key — that is the string the site owner greps their config for.',
-        );
-        $this->assertStringContainsString(
-            'matches no registered service',
-            $message,
-            'And it must say WHY: the key is not a service slug. A bare key with no reason is a riddle.',
-        );
-        $this->assertStringContainsString(
-            'NTDST_Bootstrap',
-            $function,
-            '_doing_it_wrong()\'s first argument is the function at fault — WordPress prints it, so it must say core.',
-        );
-        $this->assertSame('5.0.0', $version, 'The @since marker for the refusal: it arrived in 5.0.0.');
-
-        $boot->bootFeatures();
-
-        $this->assertArrayNotHasKey(
-            'ntdst/service/typo/config',
-            $GLOBALS['_ntdst_test_filters_at'] ?? [],
-            'A refused key must mount nothing — refusing loudly and wiring it up anyway is the worst of both.',
-        );
-        $this->assertNotContains(
-            'ntdst/service/typo/config',
-            $GLOBALS['_ntdst_t02_applied'],
-            'and nothing may ask for it either.',
-        );
-        $this->assertSame(
-            [T02SecurityService::class],
-            $GLOBALS['_ntdst_t02_constructed'],
-            'The typo invents no service; the listed one still boots.',
-        );
-        $this->assertTrue(
-            ($GLOBALS['_ntdst_t02_config']['security'] ?? [])['hide_wp_version'] ?? null,
-            'One bad key must not take the good one down with it: overrides.security still reaches its service.',
-        );
-    }
+    // The dead-key-beside-a-good-key case that stood here is the composite
+    // feature test's now: BootstrapLoadsNothingByGuessingTest boots one config
+    // carrying `overrides.securty` beside two live overrides and asserts the
+    // same four promises (the full dotted key in the notice, nothing mounted
+    // under it, no phantom service, the good keys still delivered) on a boot
+    // that also has an unresolvable class in it. What stays below is what the
+    // composite does not ask: the re-entry count, the orphaned-service key, and
+    // the LISTED-not-REGISTERED boundary.
 
     /**
      * FR-2 / AF-14 — re-entry: a second `register()` does not repeat the refusal.
@@ -370,40 +283,13 @@ final class BootstrapOverridesTest extends TestCase
         );
     }
 
-    /**
-     * FR-2 — a `conditional` entry whose condition returns false stays off, and
-     * its sibling whose condition returns true boots.
-     *
-     * The second surviving switch, asserted in the same run as a live one. A
-     * test that only proves the false case passes just as well against a
-     * `conditional` block that stopped working altogether — which would be the
-     * same outage as a wrong refusal, arriving quietly.
-     */
-    public function testAConditionalWhoseConditionIsFalseIsNotRegisteredAndOneThatHoldsIs(): void
-    {
-        $this->wordPressAnswersOptionReads();
-
-        $boot = new NTDST_Bootstrap([
-            'services' => [
-                'conditional' => [
-                    'never' => ['condition' => static fn(): bool => false, 'service' => T02ConditionalOffService::class],
-                    'always' => ['condition' => static fn(): bool => true, 'service' => T02ConditionalOnService::class],
-                ],
-            ],
-        ]);
-        $boot->register()->bootFeatures();
-
-        $this->assertSame(
-            [T02ConditionalOnService::class],
-            $GLOBALS['_ntdst_t02_constructed'],
-            'A false condition keeps its service off; a true one must still boot.',
-        );
-        $this->assertSame(
-            [],
-            $this->wrongs,
-            'A conditional that simply does not apply is not a misconfiguration: ' . $this->wrongsText(),
-        );
-    }
+    // The conditional false/true pair that stood here is the composite feature
+    // test's now: BootstrapLoadsNothingByGuessingTest's config carries three
+    // conditionals — one that holds, one that does not, and one naming a class
+    // already listed — and asserts exactly which of them constructed, silently.
+    // The `enabled => false` switch above stays here: the two ways off are
+    // asserted in one file, and deleting a third switch is worth nothing if it
+    // takes one of the survivors with it.
 
     // ========================================================================
     // THERE IS NO THIRD SWITCH
@@ -523,39 +409,14 @@ final class BootstrapOverridesTest extends TestCase
         );
     }
 
-    /**
-     * FR-2 — a service that declares no `name` keys its override on the slug
-     * DERIVED from its class.
-     *
-     * `getServiceSlug()` / `declaredServiceName()` survive this task for exactly
-     * one reader: this filter. stride's PerformanceService declares no name, so
-     * its override is keyed by the derivation — and a rename that quietly
-     * dropped the derivation would leave that site's override matching nothing,
-     * which is now a refusal (see the typo case) rather than silence.
-     */
-    public function testAServiceThatDeclaresNoNameKeysItsOverrideOnTheDerivedSlug(): void
-    {
-        $this->wordPressDispatchesItsFilters();
-        $this->wordPressAnswersOptionReads();
-
-        $boot = new NTDST_Bootstrap([
-            'services' => [
-                'core' => [T02PerformanceService::class],
-                'overrides' => ['t02_performance' => ['lazy_load' => true]],
-            ],
-        ]);
-        $boot->register()->bootFeatures();
-
-        $this->assertSame(
-            [],
-            $this->wrongs,
-            'The derived slug IS a registered service slug — refusing it would be a false alarm: ' . $this->wrongsText(),
-        );
-        $this->assertTrue(
-            ($GLOBALS['_ntdst_t02_config']['t02_performance'] ?? [])['lazy_load'] ?? null,
-            'An override keyed on the derived slug must reach the service.',
-        );
-    }
+    // The "a declared-nothing service keys its override on the DERIVED slug"
+    // case that stood here was the third end-to-end proof of the same claim.
+    // The derivation is now one provider in BootstrapServiceSlugTest (declared
+    // and derived rows, asserted against getServiceSlug() itself), and the one
+    // end-to-end mount is the composite feature test's. That a derived slug is
+    // never mistaken for a dead key is still asserted in two places: the
+    // listed-but-unbooted provider below, and the lazy-resolution case in
+    // BootstrapWalksItsServiceListOnceTest.
 
     /**
      * FR-2 — the empty state: a service with no override declared gets its own
@@ -667,15 +528,6 @@ final class BootstrapOverridesTest extends TestCase
         Functions\when('get_option')->justReturn('1');
     }
 
-    /** The refusals that fired, as one readable line. */
-    private function wrongsText(): string
-    {
-        if ($this->wrongs === []) {
-            return '(no _doing_it_wrong call)';
-        }
-
-        return implode(' | ', array_map(static fn(array $w) => $w[0] . ': ' . $w[1], $this->wrongs));
-    }
 }
 
 /**
@@ -728,15 +580,6 @@ final class T02DisabledService
 
 /** Listed under a `conditional` whose condition is false. */
 final class T02ConditionalOffService
-{
-    public function __construct()
-    {
-        $GLOBALS['_ntdst_t02_constructed'][] = static::class;
-    }
-}
-
-/** Listed under a `conditional` whose condition holds. */
-final class T02ConditionalOnService
 {
     public function __construct()
     {

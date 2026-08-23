@@ -47,32 +47,16 @@ require_once __DIR__ . '/../../core/Bootstrap.php';
 final class BootstrapLoadsNothingByGuessingTest extends TestCase
 {
     use MockeryPHPUnitIntegration;
-
-    /**
-     * Every `_doing_it_wrong()` the boot provoked: [function, message, version].
-     *
-     * Recorded, not counted by a Mockery `->times()`, because a notice is judged
-     * on WHAT IT SAYS — the site owner has to learn which key to fix — and a
-     * count failure must be able to print the notices that did fire.
-     *
-     * @var list<array{0: string, 1: string, 2: string}>
-     */
-    private array $wrongs = [];
-
-    /** Throwaway tree for the planted files. */
-    private string $root = '';
-
-    /** Deepest-first cleanup list. */
-    private array $litter = [];
+    use NtdstRecordsRefusals;
+    use NtdstPlantsServiceFiles;
 
     protected function setUp(): void
     {
         parent::setUp();
         Monkey\setUp();
 
-        $this->wrongs = [];
-        $this->litter = [];
-        $this->root = sys_get_temp_dir() . '/ntdst-ca-' . getmypid() . '-' . uniqid();
+        $this->recordRefusals();
+        $this->plantingRoot('ca', '_ntdst_ca_included', '_ntdst_ca_constructed');
 
         $GLOBALS['_ntdst_ca_included'] = [];      // files core executed
         $GLOBALS['_ntdst_ca_constructed'] = [];   // services core booted, in order
@@ -97,9 +81,6 @@ final class BootstrapLoadsNothingByGuessingTest extends TestCase
         Functions\when('is_admin')->alias(static fn() => (bool) $GLOBALS['_ntdst_ca_is_admin']);
         Functions\when('do_action')->justReturn(null);
         Functions\when('get_option')->justReturn('1');
-        Functions\when('_doing_it_wrong')->alias(function ($function = '', $message = '', $version = '') {
-            $this->wrongs[] = [(string) $function, (string) $message, (string) $version];
-        });
 
         // WordPress's own filter dispatch for the one shape core uses. Brain
         // Monkey's apply_filters() only TRACKS a call — it never runs what was
@@ -120,14 +101,7 @@ final class BootstrapLoadsNothingByGuessingTest extends TestCase
 
     protected function tearDown(): void
     {
-        // Deepest path first, so a directory is empty when rmdir() sees it.
-        // Every entry lives under $this->root, so a longer string is deeper.
-        $litter = array_unique($this->litter);
-        usort($litter, static fn(string $a, string $b) => strlen($b) <=> strlen($a));
-
-        foreach ($litter as $path) {
-            is_dir($path) ? rmdir($path) : unlink($path);
-        }
+        $this->sweepLitter();
 
         Monkey\tearDown();
         parent::tearDown();
@@ -233,6 +207,13 @@ final class BootstrapLoadsNothingByGuessingTest extends TestCase
             $this->refusalNaming('securty'),
             'The typo\'d override key must be refused with the FULL dotted key, because that is the string '
                 . 'the site owner greps their config for: ' . $this->wrongsText(),
+        );
+        $this->assertArrayNotHasKey(
+            'ntdst/service/securty/config',
+            $GLOBALS['_ntdst_test_filters_at'] ?? [],
+            'and it must mount NOTHING. Refusing loudly and wiring the key up anyway is the worst of both: a '
+                . 'callback left on the hook of a service that does not exist fires the day someone else '
+                . 'applies that name.',
         );
 
         $this->assertSame(
@@ -671,40 +652,6 @@ final class BootstrapLoadsNothingByGuessingTest extends TestCase
         $this->plant('/plugin/Musician', 'GhostService.php', 'Daan\\Musician', 'GhostService');
     }
 
-    /**
-     * Write a PHP file that records its own execution and then declares a
-     * service, and register it for cleanup.
-     *
-     * The recorder is the FIRST statement of the body, so the file counts as
-     * read however core reached it — including a route that would then fail to
-     * declare the class.
-     */
-    private function plant(string $dir, string $file, string $namespace, string $class): void
-    {
-        $path = $this->root . $dir;
-
-        if (!is_dir($path)) {
-            mkdir($path, 0777, true);
-        }
-
-        file_put_contents(
-            $path . '/' . $file,
-            "<?php namespace {$namespace};\n"
-                . "\$GLOBALS['_ntdst_ca_included'][] = __FILE__;\n"
-                . "class {$class} {\n"
-                . "    public function __construct() {\n"
-                . "        \$GLOBALS['_ntdst_ca_constructed'][] = static::class;\n"
-                . "    }\n"
-                . "    public static function metadata(): array { return []; }\n"
-                . "}\n",
-        );
-
-        $this->litter[] = $path . '/' . $file;
-        for ($walk = $path; str_starts_with($walk, $this->root); $walk = dirname($walk)) {
-            $this->litter[] = $walk;
-        }
-    }
-
     /** The message of the one refusal that names $needle, or '' when none does. */
     private function refusalNaming(string $needle): string
     {
@@ -722,15 +669,6 @@ final class BootstrapLoadsNothingByGuessingTest extends TestCase
         return $matching[0][1];
     }
 
-    /** The refusals that fired, as one readable line. */
-    private function wrongsText(): string
-    {
-        if ($this->wrongs === []) {
-            return '(no _doing_it_wrong call)';
-        }
-
-        return implode(' | ', array_map(static fn(array $w) => $w[0] . ': ' . $w[1], $this->wrongs));
-    }
 }
 
 // ===========================================================================
