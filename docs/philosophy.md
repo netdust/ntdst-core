@@ -205,6 +205,19 @@ no `cors` policy is exactly as exposed as any other WordPress REST route. Core
 does not make it worse and does not fix it unless asked. The fix is one option
 key, and `README.md` says so where a consumer will meet it.
 
+### Parked, admitted in principle
+
+A candidate that passes §6.2–§6.6 but not §6.1 is written down, not built: the
+design, the trigger that would name a consumer, and the rules a spec must carry.
+`docs/parked/` holds them. Read it before proposing an addition to core — the
+next person should not re-derive the design, and nobody should build the wrong
+neighbour of it.
+
+- `docs/parked/rest-query.md` — a declared field becomes a filter on WordPress's
+  own collection (`?venue_city=Ghent`), the same shape as `show_in_rest`. Parked
+  2026-08-23: no consumer yet. The thing it rules out is a "queryable collection"
+  class inside core — WordPress's collection already is one (§3, core-shape D1).
+
 ## 7. Deletion is a feature
 
 The strongest v4 changes removed things. The sector system — 527 lines, a
