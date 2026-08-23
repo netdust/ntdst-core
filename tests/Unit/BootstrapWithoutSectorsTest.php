@@ -34,11 +34,22 @@ final class BootstrapWithoutSectorsTest extends TestCase
         parent::setUp();
         Monkey\setUp();
 
+        // WHAT REGISTERED, observed from outside. core-trim FR-2 removes
+        // `getServices()` and `hasService()` — a second, read-only copy of the
+        // registry with no reader on the fleet — so these cases ask the
+        // question a consumer can actually ask: did the service get
+        // CONSTRUCTED, and is the object the container hands back the one
+        // Bootstrap booted. That is a stronger claim than the old accessor
+        // made: a name in an internal array is not a service that ran.
+        $GLOBALS['_ntdst_sectors_constructed'] = [];
+        $GLOBALS['_ntdst_sectors_instances'] = [];
+
         // ntdst_log() is the suite's real null logger (tests/bootstrap.php) —
         // stubbing it here would define it process-wide through Patchwork and
         // break every later test file. See the note there.
         Functions\when('is_admin')->justReturn(false);
         Functions\when('do_action')->justReturn(null);
+        Functions\when('_doing_it_wrong')->justReturn(null);
         Functions\when('apply_filters')->alias(static fn($hook, $value = null) => $value);
     }
 
@@ -63,9 +74,13 @@ final class BootstrapWithoutSectorsTest extends TestCase
         Functions\expect('ntdst_sectors')->never();
 
         $boot = new NTDST_Bootstrap(['services' => ['core' => []]]);
-        $boot->register();
+        $boot->register()->bootFeatures();
 
-        $this->assertSame([], $boot->getServices());
+        $this->assertSame(
+            [],
+            $GLOBALS['_ntdst_sectors_constructed'],
+            'An empty list is an empty boot: no sector registry, and nothing invented to fill it.',
+        );
     }
 
     public function testNoDirectoryIsScannedWhateverTheConfigSays(): void
@@ -101,7 +116,7 @@ final class BootstrapWithoutSectorsTest extends TestCase
             $boot = new NTDST_Bootstrap([
                 'services' => ['auto_discover' => true, 'discovery_paths' => [$dir]],
             ]);
-            $boot->register();
+            $boot->register()->bootFeatures();
 
             $this->assertSame(
                 [],
@@ -109,7 +124,15 @@ final class BootstrapWithoutSectorsTest extends TestCase
                 'Core executed a file out of a configured directory: '
                     . implode(', ', $GLOBALS['_ntdst_sectors_probe_included']),
             );
-            $this->assertSame([], $boot->getServices(), 'A directory is not a service list.');
+            $this->assertSame(
+                [],
+                $GLOBALS['_ntdst_sectors_constructed'],
+                'A directory is not a service list — nothing in it may run.',
+            );
+            $this->assertFalse(
+                class_exists('NtdstT01Sectors\\ProbeService', false),
+                'and the class in it must still be unresolvable afterwards: core loads nothing.',
+            );
         } finally {
             unlink($dir . '/ProbeService.php');
             rmdir($dir);
@@ -125,17 +148,27 @@ final class BootstrapWithoutSectorsTest extends TestCase
         // checkSectorRequirements() would have declined this one, because a
         // registry that no longer exists cannot report the sector as enabled.
         Functions\expect('ntdst_sectors')->never();
+        // The retired enable switch still reads this option on the way to
+        // registering a service; core-trim FR-2 deletes that read, and this
+        // case must fail on ITS subject rather than on an undefined function
+        // while both worlds exist.
         Functions\when('get_option')->justReturn('1');
-        // ntdst_set() is the REAL container helper (core/Container.php loads in
-        // tests/bootstrap.php, before Patchwork, so it cannot be stubbed).
-        // Binding a lazy service into the container is harmless here.
+        // ntdst_set() and ntdst_get() are the REAL container helpers
+        // (core/Container.php loads in tests/bootstrap.php, before Patchwork,
+        // so they cannot be stubbed).
 
         $boot = new NTDST_Bootstrap(['services' => ['core' => [SectorlessLegacyService::class]]]);
-        $boot->register();
+        $boot->register()->bootFeatures();
 
-        $this->assertTrue(
-            $boot->hasService(SectorlessLegacyService::class),
+        $this->assertSame(
+            [SectorlessLegacyService::class],
+            $GLOBALS['_ntdst_sectors_constructed'],
             'A leftover `sectors` metadata key must not keep a service from loading.',
+        );
+        $this->assertSame(
+            $GLOBALS['_ntdst_sectors_instances'][0],
+            ntdst_get(SectorlessLegacyService::class),
+            'and the object Bootstrap booted IS the container singleton — otherwise this test autowired it, not core.',
         );
     }
 }
@@ -146,5 +179,11 @@ final class SectorlessLegacyService
     public static function metadata(): array
     {
         return ['sectors' => ['gallery' => 'premium'], 'priority' => 10];
+    }
+
+    public function __construct()
+    {
+        $GLOBALS['_ntdst_sectors_constructed'][] = static::class;
+        $GLOBALS['_ntdst_sectors_instances'][] = $this;
     }
 }

@@ -220,6 +220,120 @@ final class BootstrapOverridesTest extends TestCase
         );
     }
 
+    /**
+     * FR-2 — a key naming a service that LEFT the list is refused, the same as
+     * a typo.
+     *
+     * The upgrade path, and the reason the refusal is worth having at all: a
+     * consumer deletes a service from `services.core` and forgets its override
+     * three screens further down in the same config file. Nothing about
+     * `overrides.security` looks wrong — the slug is real, it was right last
+     * week — so silence here is a config that lies to its reader. Same notice,
+     * same key in it.
+     */
+    public function testAnOverrideKeyForAServiceNoLongerListedIsRefused(): void
+    {
+        $this->wordPressAnswersOptionReads();
+
+        $boot = new NTDST_Bootstrap([
+            'services' => [
+                'core' => [T02PerformanceService::class],
+                'overrides' => ['security' => ['hide_wp_version' => true]],
+            ],
+        ]);
+        $boot->register();
+
+        $this->assertCount(
+            1,
+            $this->wrongs,
+            'A slug no listed service answers to is a dead override, whether it was mistyped or dropped: '
+                . $this->wrongsText(),
+        );
+        $this->assertStringContainsString(
+            'services.overrides.security',
+            $this->wrongs[0][1],
+            'The notice names the orphaned key, not the service that is still there.',
+        );
+    }
+
+    /**
+     * @return array<string, array{0: array<string, mixed>, 1: string}>
+     */
+    public static function listedButUnbootedProvider(): array
+    {
+        return [
+            'declared enabled => false' => [
+                [
+                    'core' => [T02DisabledService::class],
+                    'overrides' => ['disabled_one' => ['x' => true]],
+                ],
+                'disabled_one',
+            ],
+            'a conditional that does not hold' => [
+                [
+                    'conditional' => [
+                        'off' => ['condition' => static fn(): bool => false, 'service' => T02ConditionalOffService::class],
+                    ],
+                    'overrides' => ['t02_conditional_off' => ['x' => true]],
+                ],
+                't02_conditional_off',
+            ],
+            'an admin service on a front-end request' => [
+                [
+                    'admin' => [T02PerformanceService::class],
+                    'overrides' => ['t02_performance' => ['lazy_load' => true]],
+                ],
+                't02_performance',
+            ],
+        ];
+    }
+
+    /**
+     * FR-2, boundary — an override for a service that IS listed but did not
+     * register is INERT AND SILENT.
+     *
+     * The line between the two halves of the refusal, and it is drawn at
+     * LISTED, not at REGISTERED. All three rows are ordinary, correct configs:
+     * a service switched off for this site, a conditional that does not apply
+     * to this request, an admin service on a front-end hit — the last one is
+     * true of every admin service on every anonymous page view. Refusing there
+     * would print a notice on almost every request of a correctly configured
+     * site, which trains the reader to ignore the one notice that matters. The
+     * override simply has nothing to reach, and it says so by doing nothing.
+     *
+     * The mount is asserted as well as the silence: inert has to mean inert. A
+     * callback left on a hook for a service that never booted is a filter that
+     * fires the day someone else applies that name.
+     *
+     * @dataProvider listedButUnbootedProvider
+     * @param array<string, mixed> $services
+     */
+    public function testAnOverrideForAListedServiceThatDidNotRegisterIsSilent(array $services, string $slug): void
+    {
+        $this->wordPressDispatchesItsFilters();
+        $this->wordPressAnswersOptionReads();
+
+        $boot = new NTDST_Bootstrap(['services' => $services]);
+        $boot->register()->bootFeatures();
+
+        $this->assertSame(
+            [],
+            $this->wrongs,
+            "services.overrides.{$slug} names a service the consumer listed; a config that is merely not in "
+                . 'effect this request is not a misconfiguration: ' . $this->wrongsText(),
+        );
+        $this->assertSame(
+            [],
+            $GLOBALS['_ntdst_t02_constructed'],
+            'The override must not drag an unregistered service into booting.',
+        );
+        $this->assertArrayNotHasKey(
+            "ntdst/service/{$slug}/config",
+            $GLOBALS['_ntdst_test_filters_at'] ?? [],
+            'Inert means inert: no callback is left on the hook of a service that never booted.',
+        );
+    }
+
     // ========================================================================
     // DENIAL — the two ways a service is OFF, which must both stay alive
     // ========================================================================
