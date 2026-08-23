@@ -87,13 +87,14 @@ v3. If anything of yours read the version, it was reading the wrong one.
 
 `NTDST_Rest` is rewritten, and `api/FieldTypes.php` is the one field-type
 registry. The route option surface changed, so `^4.4` does not resolve to this.
-Five things to check:
+Six things to check:
 
 - **Route options** — `'permission' => 'public'`, `cors`, `before_dispatch` and the `surface()` family all moved.
 - **Field exposure** — a model's REST shape is declared per field with `'show_in_rest' => true`; the `public_fields` argument and the `publicRows()` family are gone.
 - **Field types** — thirteen type names are retired, and a retired name is a fatal at `register()`.
 - **Silent breaks** — the `ntdst/metabox_saved/{model}` payload, the model constructor's arity, and `int`'s sign.
 - **Require order** — `api/FieldTypes.php` loads before `api/Data.php`.
+- **Theme JavaScript** — a hand-rolled client for the old admin-ajax endpoints (the nonce fetch and the action dispatcher) 404s at runtime on both, and reads a `success`/`data` envelope a REST route does not send. daan's `themes/daan/src/main.js:103` is one. The response-shape paragraph under **Core-trim — what left the package** says what to read instead.
 
 **CORS is site-wide, and declared apart from any route.**
 
@@ -508,7 +509,7 @@ caller in the package or in the swept consumer roots. That is what a published
 extension point IS: the reader is somebody else's code. It may be written after
 this release, and it may already exist in a consumer at a commit the sweep is
 not looking at — the sweep reads each root's working tree, and nothing else.
-Each row says who, so the exemption is a statement and not a shrug. An
+Each row says who, so the exemption is a statement and not a shrug. TWO KINDS OF ROW live here and they are not the same claim: a symbol the sweep finds NO reader for, which this table is the exemption for; and a hook whose reader IS inside a swept root (the daan rows below), which needs no exemption and is listed anyway so one table answers who reads what. An
 INTERFACE the script cannot enumerate at all: for `NTDST_Service_Meta` this
 table is the only check there is. INV-9 in `ARCHITECTURE-INVARIANTS.md` points
 here, and the sweep refuses to exempt a name this table does not carry.
@@ -673,7 +674,7 @@ did not.
 | `Theme::script($handle, $src, $deps, $ver, $in_footer, $priority)` | `$theme->on('wp_enqueue_scripts', static fn() => wp_enqueue_script($handle, $src, $deps, $ver, $in_footer), $priority)` |
 | `Theme::single()`, `Theme::page()`, `Theme::archive()` | `ntdst_pages()->single()` / `->page()` / `->archive()`, same arguments. These were one-line forwarders; the owner is `NTDST_Pages` and it is named at the call site now. **17 call sites on the fleet, every one in ludoluykx** (7 `single`, 7 `archive`, 3 `page`) — each is a fatal until it is renamed |
 | the `the_generator` filter core mounted for you | nothing. Hiding the WordPress version is a site-wide head decision, not theme wiring: mount `add_filter('the_generator', '__return_empty_string')` in the site's own cleanup if you want it |
-| the `excerpt` defaults (`length => 55`, `more => ''`) | not applied. `excerpt_length` and `excerpt_more` mount ONLY for the key your config actually sets. **A theme that never mentioned excerpts was silently overriding WordPress's own excerpt length with 55** — if you want that number, set `excerpt.length` yourself |
+| the `excerpt` defaults (`length => 55`, `more => ''`) | not applied. `excerpt_length` and `excerpt_more` mount ONLY for the key your config actually sets. The length default was a no-op — WordPress's own excerpt length IS 55, so mounting the filter changed nothing. **The real change is `more`**: core mounted `''` where WordPress appends ` [&hellip;]`, so a theme that never mentioned excerpts loses that hard-coded empty string and gets WordPress's ellipsis back. No fleet theme is affected — every one of them passes both keys. If you want either default, set it yourself |
 
 **Mail (FR-9).** The class moved into stride's `netdust-mail` plugin as
 `Netdust\Mail\Mailer`, trimmed to what `MailService` uses.
@@ -783,7 +784,7 @@ all — at the top of the rewrite list they would match every one-segment URL, a
 the front page, on the whole site. Second, the rules live in an option, so a new
 or edited route is invisible until that option is rewritten. A rewrite rule is only
 heard while WordPress is still building its rule set, so `ntdst_pages()->path()`
-belongs on `init` (any priority). Declare every route UNCONDITIONALLY: a route's
+belongs on or before `init` (any priority). Earlier is fine and is the common case: a service that declares its routes straight from `register()` runs before `init` and needs no hook of its own — `path()` calls `add_rewrite_rule()` there and then. Declare every route UNCONDITIONALLY: a route's
 identity is its POSITION in the list — the rule writes the index — so a
 registration behind an `if` shifts every later route's index on the requests
 where it is absent, and the rule-set hash flip-flops between two values, which
