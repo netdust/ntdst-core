@@ -572,8 +572,15 @@ final class BootstrapLoadsNothingByGuessingTest extends TestCase
             }
         }
 
+        // The floor tracks the tree, and it moves DOWN only when a caller is
+        // deleted outright — never to make a red test green. T10 (FR-9) deleted
+        // services/Mailer.php, which held two of the five (`Mailer.php:175,365`),
+        // so four core files call ntdst_log() now: api/Data.php, api/Rest.php,
+        // admin/MetaboxGenerator.php and core/Theme.php. The clause still bites
+        // — a regex that stopped matching would report 0, not 4 — and the real
+        // property below (every caller requires after Logger) is untouched.
         $this->assertGreaterThanOrEqual(
-            5,
+            4,
             count($callers),
             'This property is only worth asserting while core really does call ntdst_log() from its own '
                 . 'files; finding almost none means the grep stopped matching, not that the callers left.',

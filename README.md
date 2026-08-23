@@ -11,7 +11,7 @@ Stride) instead of a per-project vendored copy that drifts.
 - `support/` — Primitives with no dependencies (ClientIp, Cidr, RateLimiter)
 - `api/` — Request flow (Actions, Rest, Data, Response)
 - `admin/` — Admin UI (MetaboxGenerator, RelationField)
-- `services/` — Built-in services (Logger, Mailer, Scheduler)
+- `services/` — Built-in services (Logger)
 - `ntdst-core.php` — package-root loader; adopters require it via an explicit
   one-line shim, not a directory scan
 
@@ -432,6 +432,15 @@ widen with a type whose sanitizer is a no-op.
 **`callback` is a render directive, not a type.** A field declared
 `'type' => 'callback'` draws itself, and your own code owns what it stores. It
 has no entry, and both the render side and the save side step past it.
+
+#### Core-trim — what left the package
+
+Core keeps what only a framework can own. A primitive WordPress already ships,
+or a service with one consumer on the fleet, belongs to that consumer.
+
+| Was | Now |
+| --- | --- |
+| `ntdst_mail()` | `new \Netdust\Mail\Mailer()` — the class moved into stride's `netdust-mail` plugin (netdust-mail ≥ the T11 commit). `queue()`, `toArray()`, `header()`, `ntdst_send_mail()`, `ntdst_notify()`, `ntdst_wrap_email_in_layout()` and the `ntdst_mail_*` / `ntdst_email_*` / `ntdst_wrap_all_emails` hooks are not carried; call `wp_mail()` for a plain send. |
 
 ### 4.4.2
 

@@ -189,7 +189,15 @@ fi
 #         WordPress lines directly (T11) instead of going through a copy. All
 #         four are pinned bare — none is a substring of another, none is in
 #         README — and mirror PackageBootIntegrityTest's rows exactly.
-REMOVED=$(grep -rnE "NTDST_Scheduler|ntdst_scheduler|ntdst_schedule_recurring|ntdst_clear_recurring|ntdst_model_create_before|ntdst_model_create_after|ntdst_model_update_before|ntdst_model_update_after|ntdst_model_delete_before|ntdst_model_delete_after|log_entry|ntdst_log_database_enabled|addHandler|removeHandler|setMinLevel|setBatchingEnabled|ntdst_log_debug|ntdst_log_info|ntdst_log_error|getFormattedPosts|ntdst_get_formatted_posts|ntdst_make|callableReflections|getPostMeta|getPostTerms|attachTerms|syncTerms|detachTerms|whereDate|orWhere|discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
+#
+# v5.0.0 core-trim: the Mailer leaves the package too (FR-9). WordPress has
+#         wp_mail(); stride's netdust-mail owns the builder now as
+#         `Netdust\Mail\Mailer` (T11). Nine stems stand for the thirteen rows
+#         in PackageBootIntegrityTest: `ntdst_mail` is a PREFIX and swallows
+#         `ntdst_mail_before_send`, `_sent`, `_template_paths` and
+#         `_attachment_bases`. README is not swept by this line (*.php only),
+#         so the migration table needs no exemption here.
+REMOVED=$(grep -rnE "NTDST_Mailer|ntdst_mail|ntdst_send_mail|ntdst_send_queued_mail|ntdst_notify|ntdst_notification|ntdst_wrap_email_in_layout|ntdst_wrap_all_emails|ntdst_email_layout_paths|NTDST_Scheduler|ntdst_scheduler|ntdst_schedule_recurring|ntdst_clear_recurring|ntdst_model_create_before|ntdst_model_create_after|ntdst_model_update_before|ntdst_model_update_after|ntdst_model_delete_before|ntdst_model_delete_after|log_entry|ntdst_log_database_enabled|addHandler|removeHandler|setMinLevel|setBatchingEnabled|ntdst_log_debug|ntdst_log_info|ntdst_log_error|getFormattedPosts|ntdst_get_formatted_posts|ntdst_make|callableReflections|getPostMeta|getPostTerms|attachTerms|syncTerms|detachTerms|whereDate|orWhere|discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
     --include='*.php' . \
     | grep -v /vendor/ \
     | grep -vE "^(\./)?tests/|^(\./)?specs/" \
@@ -263,9 +271,10 @@ fi
 # row for cannot arrive misspelled. A consumer reads the hook name off the
 # source; two conventions in one package means every listener is a guess.
 #
-# SCOPE. SC-4 also names `services`, which T10 adds to this line when it deletes
-# services/Mailer.php and the eight `ntdst_` hooks that file still carries.
-HOOKSPELLING=$(grep -rn "do_action('ntdst_\|apply_filters('ntdst_\|do_action(\"ntdst_\|apply_filters(\"ntdst_" api core admin || true)
+# SCOPE. All four shipped directories, `services` included: T10 deleted
+# services/Mailer.php and the eight `ntdst_` hooks it carried, which were the
+# last of that spelling in the package — so SC-4 closes and the scope is whole.
+HOOKSPELLING=$(grep -rn "do_action('ntdst_\|apply_filters('ntdst_\|do_action(\"ntdst_\|apply_filters(\"ntdst_" api core admin services || true)
 if [ -n "$HOOKSPELLING" ]; then
     echo "Hook spelled ntdst_ instead of ntdst/ (FR-11: core's convention is ntdst/...):"
     echo "$HOOKSPELLING"

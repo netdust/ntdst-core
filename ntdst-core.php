@@ -10,7 +10,7 @@
  * - support/  → Shared primitives with no dependencies (ClientIp, Cidr, RateLimiter)
  * - api/      → Request flow (Actions, Rest, Data, Response)
  * - admin/    → Admin UI (MetaboxGenerator, RelationField)
- * - services/ → Built-in services (Logger, Mailer)
+ * - services/ → Built-in services (Logger)
  *
  * Loading is this explicit require_once list, NOT a directory scan — a file
  * that is not named here does not exist, and a stale path is an immediate
@@ -94,9 +94,6 @@ require_once NTDST_PATH . '/admin/RelationField.php';
 require_once NTDST_PATH . '/api/Rest.php';
 require_once NTDST_PATH . '/api/Actions.php';
 ntdst_actions(); // Initialise the command service to register its REST routes
-
-// Load services (Logger is required above, before api/)
-require_once NTDST_PATH . '/services/Mailer.php';
 
 /**
  * Enqueue the shared NTDST admin toolkit CSS.

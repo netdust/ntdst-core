@@ -377,6 +377,45 @@ final class PackageBootIntegrityTest extends TestCase
             // ThemeTrimTest's reflection assertion.
             'wireMixins' => ['wireMixins', '5.0.0'],
             'templatePath' => ['templatePath', '5.0.0'],
+            // v5.0.0 core-trim (FR-9) - the Mailer leaves the package. Core
+            // sends no mail: WordPress has wp_mail(), and the one consumer on
+            // the fleet (stride's netdust-mail) now owns the class outright as
+            // `Netdust\\Mail\\Mailer` (T11). A mail builder inside the framework
+            // was a second, core-flavoured spelling of a WordPress primitive,
+            // and it dragged eight `ntdst_` underscore hooks along with it -
+            // the last ones in the package, which is why SC-4 closes here.
+            //
+            // Thirteen rows, and the split is deliberate. The four helper
+            // FUNCTIONS and the class are the names a consumer CALLS; the eight
+            // hook and option names are the names a consumer LISTENS on, and a
+            // listener that outlives its hook fails silently (plan threat row
+            // #4) rather than fatally, so it needs its own pin.
+            //
+            // `ntdst_mail` is deliberately a PREFIX row: it covers the helper
+            // and every `ntdst_mail_*` hook in one sweep. The four `ntdst_mail_*`
+            // rows below are kept beside it anyway, because FR-9 enumerates them
+            // and a future edit that narrows the prefix row must not silently
+            // un-pin four hook names with it.
+            //
+            // All thirteen carry README's MIGRATION-ROW exemption, the same
+            // shape the `ntdst_service_` and `ntdst_model_*` rows use: the
+            // migration table may SPELL a retired name (that is the table's
+            // whole job), while a live INSTRUCTION anywhere else in README that
+            // still uses one fails. `## Versions` is section-exempt already;
+            // the row exemption is what holds if the table ever moves out.
+            'NTDST_Mailer' => ['NTDST_Mailer', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst_mail' => ['ntdst_mail', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst_send_mail' => ['ntdst_send_mail', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst_notify' => ['ntdst_notify', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst_wrap_email_in_layout' => ['ntdst_wrap_email_in_layout', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst_send_queued_mail' => ['ntdst_send_queued_mail', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst_notification' => ['ntdst_notification', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst_mail_before_send' => ['ntdst_mail_before_send', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst_mail_sent' => ['ntdst_mail_sent', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst_mail_template_paths' => ['ntdst_mail_template_paths', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst_mail_attachment_bases' => ['ntdst_mail_attachment_bases', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst_email_layout_paths' => ['ntdst_email_layout_paths', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst_wrap_all_emails' => ['ntdst_wrap_all_emails', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
         ];
     }
 
