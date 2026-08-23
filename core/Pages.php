@@ -281,7 +281,11 @@ class NTDST_Pages
 
             _doing_it_wrong(
                 __CLASS__ . '::path',
-                'the route for "' . esc_html($route['pattern']) . '" returned "' . esc_html($result)
+                // Raw: _doing_it_wrong() runs wp_kses_post() on the message
+                // itself, and every other call site in this package hands it
+                // the raw string. Escaping first double-escapes the one path
+                // the developer has to recognise (A3).
+                'the route for "' . $route['pattern'] . '" returned "' . $result
                     . '", which is not a file that exists. Build the path with '
                     . 'NTDST_Template_Loader::page() / ::locate(), which return null when the template is missing.',
                 '5.0.0',

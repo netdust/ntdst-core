@@ -82,9 +82,9 @@ final class NtdstPagesTest extends TestCase
             $this->statuses[] = $status;
         });
         Functions\when('nocache_headers')->justReturn(null);
-        // Not returnArg(): the escape is the assertion in
-        // testABadTemplatePathIsEscapedIntoTheWarning, so the stub has to be
-        // WordPress's own algorithm rather than a pass-through.
+        // Not returnArg(): a case that asserts on escaping needs WordPress's
+        // own algorithm rather than a pass-through, so a stub that lied could
+        // not hide a double-escape (A3 — Pages.php passes its message raw).
         Functions\when('esc_html')->alias(
             static fn ($text): string => htmlspecialchars((string) $text, ENT_QUOTES, 'UTF-8'),
         );
@@ -372,10 +372,13 @@ final class NtdstPagesTest extends TestCase
         $this->assertNull($this->templateIncludeFilter());
     }
 
-    public function testABadTemplatePathIsEscapedIntoTheWarning(): void
+    public function testABadTemplatePathIsNamedRawInTheWarning(): void
     {
-        // S-4. The path in the message is a value the CALLBACK produced, and
-        // _doing_it_wrong() output is HTML.
+        // A3. The path in the message is a value the CALLBACK produced — and
+        // it is handed over RAW. _doing_it_wrong() runs wp_kses_post() on the
+        // message itself before it prints, so escaping first double-escapes
+        // the one string the developer has to recognise. Every other
+        // _doing_it_wrong() in this package passes its raw string too.
         $GLOBALS['wp_query'] = new class {
             public function set_404(): void {}
         };
@@ -386,8 +389,12 @@ final class NtdstPagesTest extends TestCase
         $this->dispatch($pages, 0, 'GET', ['slug' => 'ace-of-cups']);
 
         $this->assertNotSame([], $this->wrong);
-        $this->assertStringContainsString('&lt;script&gt;', $this->wrong[0][1]);
-        $this->assertStringNotContainsString('<script>', $this->wrong[0][1]);
+        $this->assertStringContainsString(
+            '/no/such/<script>x</script>.php',
+            $this->wrong[0][1],
+            'the message names the path the callback returned; WordPress escapes it.',
+        );
+        $this->assertStringNotContainsString('&lt;script&gt;', $this->wrong[0][1]);
     }
 
     /** What templateFrom() says for the same fault, read back from the template filter. */
