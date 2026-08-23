@@ -1580,6 +1580,70 @@ final class PackageBootIntegrityTest extends TestCase
         return $spans;
     }
 
+    public function testEveryTableRowInTheFiveZeroZeroSectionRendersAsATable(): void
+    {
+        // R-3 / D1. A `|` row is only a TABLE ROW when a `|---|` delimiter row
+        // sits above it with nothing but `|` rows in between. Move a block of
+        // rows away from its header — 50 lines of prose is enough — and
+        // markdown renders them as literal pipes: the migration rows an
+        // adopter reads to port a 5.0.0 break become a wall of text. This is
+        // the one section where that already happened, so it is pinned here.
+        $orphans = [];
+        $inSection = false;
+        $inTable = false;
+
+        foreach (explode("\n", $this->readmeText()) as $number => $line) {
+            if (preg_match('/^#{1,3} /', $line) === 1) {
+                $inSection = str_starts_with($line, '### 5.0.0');
+                $inTable = false;
+
+                continue;
+            }
+            if (!$inSection) {
+                continue;
+            }
+
+            $isRow = str_starts_with(ltrim($line), '|');
+
+            if (!$isRow) {
+                $inTable = false;
+
+                continue;
+            }
+            if (preg_match('/^\s*\|[\s:-]*-[\s|:-]*$/', $line) === 1) {
+                $inTable = true;
+
+                continue;
+            }
+            if ($inTable) {
+                continue;
+            }
+
+            // Not yet in a table: this row is a header only if the NEXT line
+            // is the delimiter. Anything else is an orphan.
+            $orphans[] = ($number + 1) . ': ' . substr($line, 0, 60);
+        }
+
+        // A header row is reported by the loop above and then acquitted by the
+        // delimiter that follows it, so drop each row immediately before one.
+        $lines = explode("\n", $this->readmeText());
+        $orphans = array_values(array_filter(
+            $orphans,
+            static function (string $entry) use ($lines): bool {
+                $number = (int) strtok($entry, ':');
+
+                return preg_match('/^\s*\|[\s:-]*-[\s|:-]*$/', $lines[$number] ?? '') !== 1;
+            },
+        ));
+
+        $this->assertSame(
+            [],
+            $orphans,
+            "Every `|` row under `### 5.0.0` needs a `|---|` delimiter above it, through `|` lines only. "
+                . "These rows render as literal pipes:\n" . implode("\n", $orphans),
+        );
+    }
+
     /**
      * Every backticked span anywhere under the `### 5.0.0` heading, table row
      * or prose alike — bounded by the next heading of level 1 to 3.

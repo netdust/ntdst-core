@@ -229,6 +229,10 @@ class NTDST_Response
 
     /**
      * Send file response.
+     *
+     * A download is always 200 (R-S7): `$this->status` is not sent here, so a
+     * status set earlier in the chain has no effect on the bytes that leave.
+     * A response that has to refuse refuses before it reaches this method.
      */
     protected function sendFile(
         string $content,

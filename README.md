@@ -665,16 +665,44 @@ it with `wp.apiFetch`, which sends the `wp_rest` nonce for you (INV-2, INV-4).
 | a page callback signature of `function ($params, $template)` | `function (array $params)`. There is no template argument at `template_redirect` — WordPress has not chosen one yet |
 | a page callback returning `ntdst_response()->with(...)->template(...)` | `return NTDST_Template_Loader::page('project/single', ['project' => $project]);`. The same for `single()`, `page()`, `archive()`, `template()` and `when()`: a callback returns a path, and the data it stashes is read with `ntdst_page_data()` |
 | a page pattern that opens with a placeholder (`path('/:slug', …)`) or the site root (`path('/', …)`) | give the route a literal first segment (`path('/card/:slug', …)`). Both are REFUSED with a `_doing_it_wrong()` and register no rule: at the top of the rewrite list they match every one-segment URL, and the front page, on the whole site |
+| `NTDST_Response::json()` / `jsonPayload()` | `wp_send_json_success($data)` / `wp_send_json_error(['error' => $msg], $status)`, or a REST route through `ntdst_rest()`. WordPress owns the JSON envelope, the header and the exit |
+| `NTDST_Response::render($template, $data)` | from a page route, `return NTDST_Template_Loader::page($template, $data);` — WordPress includes the file, so `wp_head()`/`wp_footer()` still fire. Anywhere else, `echo ntdst_response()->html($template, $data);`. Nothing in core renders-and-exits any more |
+| `NTDST_Response::renderError()` / `getErrorHtml()` | `wp_die($message, '', ['response' => $status])`, which is themed, status-aware and filterable (`wp_die_handler`). The red `<div>` core used to echo was markup no theme could reach |
+| `NTDST_Response::commitRenderStatus()` | nothing. It cleared the `is_404` WordPress had just set; since 5.0.0 a page URL is a rewrite rule, so there is no not-found state to undo. For a refusal, `ntdst_response()->notFound()` — it calls WordPress's own `$wp_query->set_404()`, `status_header(404)` and `nocache_headers()`, the same three lines `core/Pages.php`'s own not-found path writes |
+| `NTDST_Response::getMimeType($filename)` | `wp_check_filetype($filename, wp_get_mime_types())['type']` — pass the table EXPLICITLY. The default is `get_allowed_mime_types()`, the capability-filtered UPLOAD list, which answers differently per user |
+| `NTDST_Response::registerMimeType($ext, $type)` | `add_filter('mime_types', fn ($t) => $t + ['ext' => 'your/type']);`. Core adds the four WordPress lacks that way itself (`NTDST_Response::mimeTypes()` on `mime_types`: `json`, `xml`, `vcf`, `svg`) |
+| `NTDST_Response::$mimeTypes` | `wp_get_mime_types()`. Core's copy had 19 rows and three of them disagreed with WordPress — `.csv`, `.txt` and `.ics` carried a `; charset=utf-8` WordPress does not. `downloadHeaders()` still sends that charset on any `text/*` download, so the wire is unchanged; `.gz` now types as WordPress's `application/x-gzip` instead of `application/gzip` |
+| `ntdst_redirect($url)` | `wp_safe_redirect($url); exit;`, or `ntdst_response()->redirect($url)` when you want the `?error=` message carried across |
+| `NTDST_Template_Loader::getCustomPaths()` | nothing — it was a read-only copy of the registry with no readers. `NTDST_Template_Loader::addPath($dir)` registers; `locate($name)` resolves |
+| a template rendered through the response helper, reading a loose `$title` | read `$args['title']`. `html()` hands the data to WordPress's `load_template($file, false, $data)`, which puts it in scope as `$args` — core no longer `extract()`s a caller array into the template |
 
 **Page routes: declare them on `init`, and flush once.** A rewrite rule is only
 heard while WordPress is still building its rule set, so `ntdst_pages()->path()`
-belongs on `init` (any priority). The rules themselves live in an option, so a
-new or edited route is invisible until that option is rewritten: core hashes its
-own rule set at the end of `init` and calls `flush_rewrite_rules(false)` only
-when the hash moved, in the option `ntdst_pages_rules_hash`. That covers a
-normal deploy. On a plugin or theme ACTIVATION, flush once yourself — the
-activation hook runs before your routes are declared — or run
-`wp rewrite flush` after the deploy.
+belongs on `init` (any priority). Declare every route UNCONDITIONALLY: a route's
+identity is its POSITION in the list — the rule writes the index — so a
+registration behind an `if` shifts every later route's index on the requests
+where it is absent, and the rule-set hash flip-flops between two values, which
+is a flush on every alternation. Branch inside the callback instead. The rules
+themselves live in an option, so a new or edited route is invisible until that
+option is rewritten: core hashes its own rule set at the end of `init` and calls
+`flush_rewrite_rules(false)` when the hash moved — the option is
+`ntdst_pages_rules_hash` — OR when the rules WordPress actually has no longer
+carry this router's first rule. That second check is what catches an outside
+flush (a Permalinks save, another plugin's flush on a request where your routes
+had not registered yet), which rewrites the option without our rules and leaves
+the hash matching. Page routes need PRETTY PERMALINKS: a site on plain
+permalinks keeps no rewrite rules, so there is nothing to check and nothing is
+flushed. That covers a normal deploy. On a plugin or theme ACTIVATION, flush
+once yourself — the activation hook runs before your routes are declared — or
+run `wp rewrite flush` after the deploy.
+
+**A route answers only at its own URL.** `ntdst_page` is a public query var, so
+`/?ntdst_page=0` reaches the dispatcher on any URL of the site. Core compares
+the rule WordPress matched to the route's own rule and passes the request
+straight back when they differ — WordPress answers as it would have, and no
+route of yours is reachable from a URL it does not own. A `HEAD` is served by
+the route registered for `GET` (RFC 9110); any other verb the route does not
+declare is WordPress's own 404.
 
 **A page route answers at the site's canonical trailing-slash form.** The rule
 `add_rewrite_rule()` gets ends in `/?$`, and WordPress's own
@@ -713,16 +741,6 @@ There are exactly two helpers a callback may call that end the request
 themselves, and both are `never`-typed so the reading is local: `ntdst_download()`
 (sends the headers and the body) and `ntdst_response()->redirect()`. Everything
 else returns.
-| `NTDST_Response::json()` / `jsonPayload()` | `wp_send_json_success($data)` / `wp_send_json_error(['error' => $msg], $status)`, or a REST route through `ntdst_rest()`. WordPress owns the JSON envelope, the header and the exit |
-| `NTDST_Response::render($template, $data)` | from a page route, `return NTDST_Template_Loader::page($template, $data);` — WordPress includes the file, so `wp_head()`/`wp_footer()` still fire. Anywhere else, `echo ntdst_response()->html($template, $data);`. Nothing in core renders-and-exits any more |
-| `NTDST_Response::renderError()` / `getErrorHtml()` | `wp_die($message, '', ['response' => $status])`, which is themed, status-aware and filterable (`wp_die_handler`). The red `<div>` core used to echo was markup no theme could reach |
-| `NTDST_Response::commitRenderStatus()` | nothing. It cleared the `is_404` WordPress had just set; since 5.0.0 a page URL is a rewrite rule, so there is no not-found state to undo. For a refusal, `ntdst_response()->notFound()` — it calls WordPress's own `$wp_query->set_404()`, `status_header(404)` and `nocache_headers()`, the same three lines `core/Pages.php`'s own not-found path writes |
-| `NTDST_Response::getMimeType($filename)` | `wp_check_filetype($filename, wp_get_mime_types())['type']` — pass the table EXPLICITLY. The default is `get_allowed_mime_types()`, the capability-filtered UPLOAD list, which answers differently per user |
-| `NTDST_Response::registerMimeType($ext, $type)` | `add_filter('mime_types', fn ($t) => $t + ['ext' => 'your/type']);`. Core adds the four WordPress lacks that way itself (`NTDST_Response::mimeTypes()` on `mime_types`: `json`, `xml`, `vcf`, `svg`) |
-| `NTDST_Response::$mimeTypes` | `wp_get_mime_types()`. Core's copy had 19 rows and three of them disagreed with WordPress — `.csv`, `.txt` and `.ics` carried a `; charset=utf-8` WordPress does not. `downloadHeaders()` still sends that charset on any `text/*` download, so the wire is unchanged; `.gz` now types as WordPress's `application/x-gzip` instead of `application/gzip` |
-| `ntdst_redirect($url)` | `wp_safe_redirect($url); exit;`, or `ntdst_response()->redirect($url)` when you want the `?error=` message carried across |
-| `NTDST_Template_Loader::getCustomPaths()` | nothing — it was a read-only copy of the registry with no readers. `NTDST_Template_Loader::addPath($dir)` registers; `locate($name)` resolves |
-| a template rendered by `html()` reading `$title` | read `$args['title']`. `html()` hands the data to WordPress's `load_template($file, false, $data)`, which puts it in scope as `$args` — core no longer `extract()`s a caller array into the template |
 
 **`html()` fails closed now.** A name that resolves to no file returns an empty
 string and logs `html(): no template resolved`, where it used to return a red
