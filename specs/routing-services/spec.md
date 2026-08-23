@@ -4,8 +4,18 @@ ntdst-core routes three different things and only names two of them. This gives
 each its own service and its own vocabulary, and adds the resource-routing
 capability whose absence forced every adopter to hand-roll `register_rest_route`.
 
-**Status:** spec — awaiting approval at the seam. No code written.
+**Status:** superseded by `specs/core-shape` (2026-08-23). Shipped at v3.0.0;
+the clauses v5.0.0 overturned are marked *(Superseded)* where they stand. This
+document is kept as the record of what was decided on 2026-08-18 and why —
+nothing below is rewritten to agree with the package as it is today.
 **Target release:** v3.0.0 (breaking).
+
+> **What v5.0.0 changed.** `ntdst_actions()` and its whole dispatcher are
+> DELETED, so there are two routed services and not three: `ntdst_pages()` for
+> pages and `ntdst_rest()` for everything reached over HTTP. A route that names
+> no permission registers as `is_user_logged_in` instead of being refused, and
+> the refusal moved to the write verbs. Read `specs/core-shape/spec.md` and
+> README's `### 5.0.0 — BREAKING` for the shape that ships.
 
 ---
 
@@ -74,7 +84,10 @@ three are small; Stride is the large one and migrates in the same run.
 
 ## Functional requirements
 
-**FR-1 — Three services, three vocabularies.**
+**FR-1 — Three services, three vocabularies.** *(Superseded by core-shape FR-1:
+`ntdst_actions()` is deleted at v5.0.0 and a command is a `->post()` route. TWO
+services — `ntdst_pages()` and `ntdst_rest()`. The RULE this FR states, one
+concept one name, is what deleted the third.)*
 `ntdst_pages()` (front-end), `ntdst_actions()` (commands), `ntdst_rest()`
 (resources). Each owns one concern, and no concept is reachable through two
 names.
@@ -94,7 +107,10 @@ the delta, each item a documented WP behaviour:
   `_doing_it_wrong()` and registers the route anyway; `rest-api.php:890` then
   skips the check when the callback is absent, leaving the route public. Here
   `permission` is REQUIRED with no default and a route without a callable one is
-  **never registered**.
+  **never registered**. *(Superseded by core-shape FR-4: v5.0.0 registers an
+  unnamed route as `is_user_logged_in` — WordPress's own floor, never anonymous
+  — and REFUSES only a write verb whose gate nobody named. Refusing every
+  unnamed read taught authors to write a permission that means nothing.)*
 - **WP invokes `permission_callback` twice per served request** (Allow-header
   computation) → memoized per request, per wrapper.
 - *(A body-size / JSON-depth cap bullet was WITHDRAWN 2026-08-18. WP reads the
@@ -103,7 +119,10 @@ the delta, each item a documented WP behaviour:
   bypassable outright via multipart, where php://input is empty. Body size is a
   web-server control; depth is bounded by WP's own 512.)*
 - **Handler returns are ad-hoc** → normalized through `NTDST_Response`, the
-  package's one emission path.
+  package's one emission path. *(Superseded by core-shape FR-8: a REST route
+  returns its payload or a `WP_Error` and WordPress builds the body. The
+  `{success, data}` envelope and the `apiSuccess()` / `apiError()` family went
+  with the dispatcher.)*
 *Source:* User D5; parked `NTDST_Rest_Registrar` docblock §"Required-permission / public-route pattern (mitigation 6)"
 
 **FR-4 — `ntdst_rest()` delegates to the package's existing limiter and IP resolver.**
@@ -117,7 +136,10 @@ throttled.
 
 *(The fifth requirement — "CORS declared where the route is declared" — was
 WITHDRAWN 2026-08-18 per the revised D3: WP core's `rest_send_cors_headers()`
-already does it and there are zero consumers. Its number is left unused rather
+already does it and there are zero consumers. **Superseded 2026-08-20**: the
+admission test was re-run with evidence — two consumers, three incidents — and
+CORS entered core, declared per NAMESPACE rather than per route and added to
+WordPress's own `allowed_http_origins`. See `docs/philosophy.md` §6. Its number is left unused rather
 than renumbering, so the Satisfies: references in tasks.md stay stable.)*
 
 **FR-6 — Clean break at v3.0.0.**
@@ -136,7 +158,10 @@ Its 6 routes register through `ntdst_rest()`. URLs, auth model, company scoping
 and JSON shape are unchanged.
 *Source:* User approval of the Section 3 boundary; chosen as proving consumer because it is deferred (`memory/project_production_priorities.md`) and has no live traffic
 
-**FR-9 — The rule is written down.**
+**FR-9 — The rule is written down.** *(Superseded by core-shape INV-2, which is
+where the rule lives now: there is ONE HTTP surface, `ntdst_rest()`, and a page
+is `ntdst_pages()`. File bytes are a `->get()` route whose callback ends in
+`ntdst_download()`.)*
 An invariant states which service a new surface belongs to: command →
 `ntdst_actions()`, resource → `ntdst_rest()`, file bytes →
 `ntdst_actions()->download()`, page → `ntdst_pages()`. INV-11's "vacancy
@@ -147,7 +172,7 @@ window" language is retired now that its convergence point exists.
 
 ## Success criteria
 
-- **SC-1**: `ntdst_rest('x/v1')->get('/thing', $cb)` with no `permission` leaves `/x/v1/thing` ABSENT from `rest_get_server()->get_routes()`. Proven by asserting absence, not by asserting a 403.
+- **SC-1**: `ntdst_rest('x/v1')->get('/thing', $cb)` with no `permission` leaves `/x/v1/thing` ABSENT from `rest_get_server()->get_routes()`. Proven by asserting absence, not by asserting a 403. *(Superseded by core-shape SC-2: at v5.0.0 that GET registers with `permission_callback === 'is_user_logged_in'`. The absence assertion moved to `->post('/t', $h)` with no capability, which is the case worth proving by absence.)*
 - **SC-2**: A permission callable with a side effect is invoked exactly 1 time per served request (WP core calls it 2 times).
 - **SC-3**: `grep -rn "ntdst_api_action\|ntdst_router\|ntdst_route("` over the package returns zero hits outside the changelog at the v3.0.0 tag.
 - **SC-4**: `composer gate` in the package exits 0 at the release commit, with 0 failures.
