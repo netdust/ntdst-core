@@ -188,9 +188,6 @@ final class NTDST_FieldTypes
      * live on the fleet, so the gate accepts it; what a MODEL then does with one
      * is the model's own question, asked later.
      *
-     * A repeater INSIDE a repeater is legal — `cell = false` is a RENDERING
-     * verdict — and its own sub-fields are walked the same way.
-     *
      * @param array<array-key, mixed> $fields
      * @param string $where names the declaring model or metabox: on a site this
      *        fatal is the whole bug report, and a message with no subject in it
@@ -217,7 +214,6 @@ final class NTDST_FieldTypes
                 self::assertRow(
                     $field,
                     is_array($declaration) ? ($declaration['sub_fields'] ?? null) : null,
-                    '',
                     $prefix,
                 );
             }
@@ -225,12 +221,20 @@ final class NTDST_FieldTypes
     }
 
     /**
-     * Every sub-field of a repeater, at every depth, against this same table.
+     * Every sub-field of a repeater, against this same table.
      *
-     * @param mixed  $subFields the repeater's declared `sub_fields`, whatever shape it arrived in
-     * @param string $path      the dotted trail to this row, so a depth-two fault names where it is
+     * ONE walk, and no recursion: a `repeater` sub-field is refused here like
+     * the other three cell-less names, so there is no depth two for the walk to
+     * reach. It read as a special case while the sanitizer's defensive
+     * recursion was taken for a licence to DECLARE one — but a table row cannot
+     * render a repeater control, so `render_repeater_row()` threw on a
+     * declaration `register()` had just accepted: a model that booted cleanly
+     * and white-screened its own edit screen. FR-4 says a `cell = false` type
+     * inside `sub_fields` throws at register(), and `repeater` is one (FR-2).
+     *
+     * @param mixed $subFields the repeater's declared `sub_fields`, whatever shape it arrived in
      */
-    private static function assertRow(string $field, mixed $subFields, string $path, string $prefix): void
+    private static function assertRow(string $field, mixed $subFields, string $prefix): void
     {
         if (!is_array($subFields)) {
             return;
@@ -241,8 +245,7 @@ final class NTDST_FieldTypes
         foreach ($subFields as $name => $declaration) {
             $name = (string) $name;
             $key = self::rowKey($name);
-            $at = $path === '' ? $name : $path . '.' . $name;
-            $where = "{$prefix}Field '{$field}' sub-field '{$at}'";
+            $where = "{$prefix}Field '{$field}' sub-field '{$name}'";
 
             if (is_array($declaration) && array_key_exists('sanitizer', $declaration)) {
                 throw new InvalidArgumentException(
@@ -261,17 +264,6 @@ final class NTDST_FieldTypes
 
             $type = self::declaredType($declaration);
             $entry = self::entry($type, $where);
-
-            if ($entry->name === 'repeater') {
-                self::assertRow(
-                    $field,
-                    is_array($declaration) ? ($declaration['sub_fields'] ?? null) : null,
-                    $at,
-                    $prefix,
-                );
-
-                continue;
-            }
 
             if (!$entry->cell) {
                 throw new InvalidArgumentException(
