@@ -343,6 +343,16 @@ final class PackageBootIntegrityTest extends TestCase
             // pin beside it.
             'ntdst_make' => ['ntdst_make', '5.0.0'],
             'callableReflections' => ['callableReflections', '5.0.0'],
+            // v5.0.0 core-trim (FR-7) — the Scheduler leaves the package.
+            // WordPress already has a recurring-task primitive (wp_schedule_event /
+            // wp_next_scheduled), so a second one inside core was a copy that could
+            // disagree with it. stride's GateReminderService is the one consumer;
+            // it writes the two WordPress lines directly (T11). All four are pinned
+            // bare — none is a substring of another, and none appears in README.
+            'NTDST_Scheduler' => ['NTDST_Scheduler', '5.0.0'],
+            'ntdst_scheduler' => ['ntdst_scheduler', '5.0.0'],
+            'ntdst_schedule_recurring' => ['ntdst_schedule_recurring', '5.0.0'],
+            'ntdst_clear_recurring' => ['ntdst_clear_recurring', '5.0.0'],
         ];
     }
 
