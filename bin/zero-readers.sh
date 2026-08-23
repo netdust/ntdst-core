@@ -105,28 +105,26 @@ EXCEPTIONS=(
     'ntdst/model/deleted|published model lifecycle (FR-11) — README extension-point table'
     'ntdst/model/registering|published registration hook — README extension-point table'
     'ntdst/metabox_saved/|published metabox hook (raw payload) — README extension-point table'
-    'ntdst/api/allowed_origins|published CORS extension point — README extension-point table'
     'ntdst/service_before_boot/|published per-class service lifecycle — README extension-point table'
     'ntdst/service_after_boot/|published per-class service lifecycle — README extension-point table'
     'ntdst/service/|the ONE per-service config filter; stride SecurityService and PerformanceService read it — README extension-point table'
     'ntdst/trusted_proxies|published security knob; a site config sets it, no fleet reader today — README extension-point table'
-    'ntdst/api/rate_window/|published security knob (the window beside the limit); a site config sets it, no fleet reader today — README extension-point table'
     'NTDST_Service_Meta|optional service-shape interface; six implementers in bavi and dozens in netdust-legacy, all outside the swept roots. An INTERFACE cannot be enumerated by this script at all — README is its only check — README extension-point table'
     'ntdst_container|kept by FR-6 as the container accessor. INERT since ludoluykx joined the roots: FluentCRMIntegrationService calls it. Its other readers are the fleet test tearDowns (22 files) and consumer bootstraps, and tests/ is excluded from this sweep by design — README extension-point table'
     'ntdst_inline|kept by core-shape as the other half of the terminal response pair; ntdst_download() is read and ntdst_inline() is not. Documented as a pair — README extension-point table. A deletion candidate for core-shape, recorded there rather than exempted silently'
-    'ntdst_api_floor_cap|the capability floor for a public API action; it leaves with api/Actions.php at core-shape T08, so it is recorded there rather than deleted here — README extension-point table'
     'NTDST_Bootstrap::config()|reads the merged config a consumer passed to register(); kept by FR-2 as the one read-back of that array — README extension-point table'
 )
 
-# SEVEN of these names are INERT: drop the row and the sweep still says
-# nothing, because the symbol has a reader the script can see, or is a shape it
-# cannot judge at all. They are `ntdst/model/created`, `ntdst/model/updated`,
-# `ntdst/model/registering`, `ntdst/service/`, `ntdst_container`,
-# `NTDST_Bootstrap::config()` and `NTDST_Service_Meta`. They stay so the list
-# reads as the WHOLE published set — a reader of this array should not have to
-# ask which published extension point was left out because it happened to be
-# called somewhere. The other twelve are load-bearing: drop one and a finding
-# appears. See ARCHITECTURE-INVARIANTS.md `## Deliberate exceptions`.
+# SEVEN of these sixteen rows are REDUNDANT: drop the row and the sweep still
+# says nothing, because the symbol has a reader the script can see, or is a
+# shape it cannot judge at all. They are `ntdst/model/created`,
+# `ntdst/model/updated`, `ntdst/model/registering`, `ntdst/service/`,
+# `ntdst_container`, `NTDST_Bootstrap::config()` and `NTDST_Service_Meta`. They
+# stay so the list reads as the WHOLE published set — a reader of this array
+# should not have to ask which published extension point was left out because
+# it happened to be called somewhere. The other nine are load-bearing: drop one
+# and a finding appears. See ARCHITECTURE-INVARIANTS.md
+# `## Deliberate exceptions`.
 
 is_exception() {
     local name="$1" row
@@ -241,10 +239,35 @@ awk '/^#### Extension points/ { inside = 1; next }
      inside && /^#+ / { exit }
      inside { print }' "$README_SPAN" > "$TMP/extension-points"
 
+# ── and every exception must still be SHIPPED ────────────────────────────────
+# The mirror image of the check above, and the one four dead rows walked past
+# for a whole release (core-shape cluster 3, D5). An EXCEPTIONS row is a promise
+# that a PUBLISHED symbol is being KEPT. A row for a symbol the package no
+# longer spells keeps nothing: it reads like a decision, it exempts a name from
+# the sweep, and README publishes it as an extension point a consumer may
+# listen for — a listener that can never be called.
+#
+# The needle is the shape a code SITE would spell: a hook by its literal stem,
+# a method by its DECLARATION (`NTDST_Bootstrap::config()` is never written in
+# the file that defines it), anything else by its own name. A comment line does
+# not count, for the same reason it does not count as a reader: a docblock that
+# explains a symbol is not the symbol.
+shipped_site() { # shipped_site <name> → the first non-comment site, or nothing
+    local name="$1" needle="$1"
+    case "$name" in
+        ntdst/*) needle="$name" ;;
+        *::*)    needle="function ${name##*::}"; needle="${needle%()}(" ;;
+    esac
+    grep -rnF -e "$needle" --include='*.php' "${PACKAGE[@]}" 2>/dev/null \
+        | grep -vE ':[0-9]+: *(\*|//|#|/\*)' | head -1
+}
+
 for row in "${EXCEPTIONS[@]}"; do
     name="${row%%|*}"
     grep -qF -e "$name" "$TMP/extension-points" \
         || finding "undocumented-exception: $name — an exemption here must be named in README.md's Extension points table"
+    [ -n "$(shipped_site "$name")" ] \
+        || finding "inert-exception: $name — exempted here and published in README, and the package no longer ships one line that spells it. Move the row to a migration table"
 done
 
 printf 'zero-readers: %s advisory method(s)\n' "$ADVISORY" >&2

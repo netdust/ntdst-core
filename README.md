@@ -434,19 +434,15 @@ here, and the sweep refuses to exempt a name this table does not carry.
 | `ntdst/model/updating`, `ntdst/model/updated` | daan `PressKitService` (`updated`) | action |
 | `ntdst/model/deleting`, `ntdst/model/deleted` | a consumer that cleans up beside a row | action |
 | `ntdst/metabox_saved/{model}` | a consumer that reacts to an editor save. It hands you the POSTED values — unslashed and uncleaned. Read the stored value back with `getMeta()` | action |
-| `ntdst/api/allowed_origins` | a consumer that adds CORS origins outside a `->cors()` declaration | filter |
 | `ntdst/service_before_boot/{class}`, `ntdst/service_after_boot/{class}` | a consumer that wraps one named service's boot | action |
 | `ntdst/service/{slug}/config` | stride `SecurityService`, `PerformanceService` — the ONE per-service extension key | filter |
 | `NTDST_Service_Meta` | the optional service shape. Six implementers in bavi and dozens in netdust-legacy, all outside the swept roots. The script cannot enumerate an interface, so this row is its only check | interface |
 | `NTDST_Bootstrap::config()` | reads back the merged config a consumer passed to `register()`. Kept by FR-2 as the one read-back of that array | method |
 | `ntdst_container()` | the container accessor. ludoluykx's `FluentCRMIntegrationService` calls it twice (`:328`, `:335`); the rest of its callers are the fleet's test tearDowns and consumer bootstraps, and `tests/` is excluded from the sweep by design | function |
 | `ntdst_inline()` | the other half of the terminal response pair; `ntdst_download()` is read and this is not. Documented as a pair, and recorded as a deletion candidate for `core-shape` rather than exempted silently | function |
-| `ntdst_api_floor_cap()` | the capability floor a public API action falls back to. It leaves with `api/Actions.php` at `core-shape` T08, so it is recorded there rather than deleted here | function |
 | `ntdst/core_ready` | stride — `stride-core.php` and `ProfileTypePolicy` hang their own wiring on it | action |
 | `ntdst/services_registered` | `netdust-mail`, which registers its own service once core's list is in | action |
 | `ntdst/model/registered` | josworld — `functions.php` and `YOOthemeSourcesService` | action |
-| `ntdst/api/rate_limit/{action}` | stride's admin controllers, which raise the limit on one action | filter |
-| `ntdst/api/rate_window/{action}` | a site's config, which sets the window beside that limit. No fleet reader today | filter |
 | `ntdst/trusted_proxies` | a site's config, which names the proxies `NTDST_ClientIp::detect()` may believe. No fleet reader today | filter |
 
 #### Core-trim — what left the package
@@ -644,6 +640,10 @@ it with `wp.apiFetch`, which sends the `wp_rest` nonce for you (INV-2, INV-4).
 | `POST /ntdst/v1/get_nonce` | `wp_create_nonce('wp_rest')` — `wp.apiFetch` already sends it |
 | `assets/js/ntdst-api.js`, `window.ntdstAPI` | `wp.apiFetch` (`wp-api-fetch` is a WordPress-provided script handle) |
 | `ntdst_enqueue_api_client()` | nothing — depend on `wp-api-fetch` instead |
+| `add_filter('ntdst/api/allowed_origins', $cb)` | `->cors(['https://example.com'])` on the namespace. CORS is a decision of the route surface now, not a filter beside a dispatcher |
+| `ntdst_api_floor_cap()` | the route's own `['permission' => '<capability>']`. There is no floor to fall back to once every route states its gate |
+| `add_filter('ntdst/api/rate_limit/{action}', $cb)` | `'rate_limit' => N` in the route's options |
+| `add_filter('ntdst/api/rate_window/{action}', $cb)` | `'rate_window' => N` in the route's options, beside the limit |
 | `NTDST_Response::apiSuccess()`, `apiError()` | return the array or a `WP_Error`; WordPress builds the body |
 | `NTDST_Response::apiSuccessResponse()`, `apiErrorResponse()` | `new WP_REST_Response($data, $status)`, or `WP_Error` |
 

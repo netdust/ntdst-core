@@ -208,31 +208,6 @@ final class CoreTrimClusterDFeatureTest extends TestCase
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
-     * A documented extension point that no longer fires is worse than an
-     * undocumented one: it invites a consumer to write a listener that is never
-     * called, and nothing says so.
-     */
-    public function testEveryDocumentedExtensionPointHookIsFiredByShippedCode(): void
-    {
-        $fired   = $this->fired_hooks();
-        $missing = [];
-
-        foreach ($this->documented_extension_point_hooks() as $documented) {
-            $stem  = $this->stem($documented);
-            $found = false;
-            foreach ($fired as $hook) {
-                if (str_starts_with($this->stem($hook), $stem) || str_starts_with($stem, $this->stem($hook))) {
-                    $found = true;
-                    break;
-                }
-            }
-            $found || $missing[] = $documented;
-        }
-
-        $this->assertSame([], $missing, "README documents extension points nothing fires: " . implode(', ', $missing));
-    }
-
-    /**
      * The independent half of INV-9's hook question, asked without trusting the
      * script's own EXCEPTIONS array: a hook core fires either has a reader in
      * the package or on the fleet, or README's table names who will read it.
@@ -307,7 +282,9 @@ final class CoreTrimClusterDFeatureTest extends TestCase
      * decide what it may exempt, so a dead row silences the sweep as well.
      *
      * It asks EVERY kind, not only the hooks. The hook-only sibling above is
-     * blind twice over: it skips the `function`, `method` and `interface` rows
+     * blind twice over (it was DELETED with this case, cluster-3 fix wave F5 —
+     * a green case that asserts nothing is worse than no case): it skipped the
+     * `function`, `method` and `interface` rows
      * by their Kind cell, and its stem match is vacuous — the package fires
      * `ntdst/{$name}/fields`, whose stem is `ntdst/`, and `ntdst/` is a prefix
      * of every documented hook there could ever be. So it answers "fired" for
