@@ -153,7 +153,19 @@ fi
 #         and `clearOld` get no term on purpose: they are ordinary words a bare
 #         sweep would find in prose, and LoggerSurfaceTest's exact
 #         public-method list pins them harder than a grep could.
-REMOVED=$(grep -rnE "log_entry|ntdst_log_database_enabled|addHandler|removeHandler|setMinLevel|setBatchingEnabled|ntdst_log_debug|ntdst_log_info|ntdst_log_error|getFormattedPosts|ntdst_get_formatted_posts|getPostTerms|attachTerms|syncTerms|detachTerms|whereDate|orWhere|discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
+# v5.0.0 core-trim: the six model lifecycle hooks, retired spellings (FR-11).
+#         They were RENAMED, not deleted — ntdst/model/{creating,created,
+#         updating,updated,deleting,deleted} fire in their place with the same
+#         arguments — and a rename is the one removal that leaves no fatal
+#         behind. A shipped `add_action('ntdst_model_create_after', ...)` simply
+#         stops running: php -l passes, the suite stays green, and a listener
+#         has gone quiet. daan's PressKitService is the live instance (T12
+#         renames it); this sweep is what makes the next one fail loudly.
+#         All six are pinned bare — each is a full, distinctive hook name, none
+#         is a substring of another — and mirror PackageBootIntegrityTest's rows
+#         exactly. That sweep also reads README.md and exempts its migration
+#         ROWS; this one greps *.php only, so it needs no exemption.
+REMOVED=$(grep -rnE "ntdst_model_create_before|ntdst_model_create_after|ntdst_model_update_before|ntdst_model_update_after|ntdst_model_delete_before|ntdst_model_delete_after|log_entry|ntdst_log_database_enabled|addHandler|removeHandler|setMinLevel|setBatchingEnabled|ntdst_log_debug|ntdst_log_info|ntdst_log_error|getFormattedPosts|ntdst_get_formatted_posts|getPostTerms|attachTerms|syncTerms|detachTerms|whereDate|orWhere|discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getServices|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|ntdst_endpoints|NTDST_SectorRegistry|ntdst_sectors|MARKER_ONLY_REQUIRED_TYPES|render_repeater_media_cell\(|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
     --include='*.php' . \
     | grep -v /vendor/ \
     | grep -vE "^(\./)?tests/|^(\./)?specs/" \
@@ -162,6 +174,30 @@ REMOVED=$(grep -rnE "log_entry|ntdst_log_database_enabled|addHandler|removeHandl
 if [ -n "$REMOVED" ]; then
     echo "Shipped code still references a symbol removed in v3.0.0 or v5.0.0:"
     echo "$REMOVED"
+    exit 1
+fi
+
+# v5.0.0 core-trim (FR-11 / SC-4): core spells every hook `ntdst/...`, never
+# `ntdst_...`. The convention is declared once, in Bootstrap's header, and the
+# underscore spelling is the OTHER one — the sweep above pins six names that
+# are gone, and this line pins the SHAPE, so the seventh hook nobody wrote a
+# row for cannot arrive misspelled. A consumer reads the hook name off the
+# source; two conventions in one package means every listener is a guess.
+#
+# SCOPE. SC-4 names `api core admin services`. `services` is NOT swept yet, and
+# that is deliberate rather than an oversight: services/Mailer.php carries
+# eight `ntdst_`-underscore hooks (ntdst_mail_attachment_bases,
+# ntdst_mail_before_send, ntdst_mail_sent, ntdst_mail_template_paths,
+# ntdst_notification, ntdst_notification_<event>, ntdst_email_layout_paths,
+# ntdst_wrap_all_emails) and FR-10/T10 DELETES that file with the rest of the
+# Mailer trim. Renaming hooks in a file that is about to go would be work
+# thrown away, and sweeping `services` today would fail this gate on a file
+# this cluster does not own. T10 adds `services` to this line when Mailer.php
+# is gone; SC-4 is not met until it does.
+HOOKSPELLING=$(grep -rn "do_action('ntdst_\|apply_filters('ntdst_\|do_action(\"ntdst_\|apply_filters(\"ntdst_" api core admin || true)
+if [ -n "$HOOKSPELLING" ]; then
+    echo "Hook spelled ntdst_ instead of ntdst/ (FR-11: core's convention is ntdst/...):"
+    echo "$HOOKSPELLING"
     exit 1
 fi
 

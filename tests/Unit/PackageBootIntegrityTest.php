@@ -280,6 +280,35 @@ final class PackageBootIntegrityTest extends TestCase
             'ntdst_log_debug' => ['ntdst_log_debug', '5.0.0'],
             'ntdst_log_info' => ['ntdst_log_info', '5.0.0'],
             'ntdst_log_error' => ['ntdst_log_error', '5.0.0'],
+            // v5.0.0 core-trim (FR-11) — the six model lifecycle hooks, retired
+            // spellings. They are renamed, not deleted: `ntdst/model/creating`,
+            // `created`, `updating`, `updated`, `deleting`, `deleted` fire in
+            // their place with the same arguments, and that is exactly why the
+            // old names need a sweep rather than a test alone. A rename leaves
+            // no fatal behind — a shipped `add_action('ntdst_model_create_after')`
+            // simply never runs again, and nothing in a green suite or a php -l
+            // pass can see a listener that stopped listening. This is the
+            // silent-inert failure the plan's threat row #4 names, and daan's
+            // PressKitService is a live instance of it (renamed by T12).
+            //
+            // All six are pinned BARE. Each is a full, distinctive hook name; no
+            // other word contains one, and none is a substring of another
+            // (`ntdst_model_create_before` and `..._after` differ in their tail).
+            // A prefix sweep on `ntdst_model_` would work equally well today,
+            // but the six names are what FR-11 enumerates and what README's
+            // migration table will spell, so the rows mirror the requirement.
+            //
+            // README.md's MIGRATION ROWS may spell them — naming what changed is
+            // the entire job of that table (T13) — and the exemption is by ROW
+            // (a table line whose first cell is a code span), never by file, so a
+            // README that grows a live INSTRUCTION using a retired name still
+            // fails. Same shape the `ntdst_service_` rows above use.
+            'ntdst_model_create_before' => ['ntdst_model_create_before', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst_model_create_after' => ['ntdst_model_create_after', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst_model_update_before' => ['ntdst_model_update_before', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst_model_update_after' => ['ntdst_model_update_after', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst_model_delete_before' => ['ntdst_model_delete_before', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'ntdst_model_delete_after' => ['ntdst_model_delete_after', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
         ];
     }
 

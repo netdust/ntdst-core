@@ -632,7 +632,7 @@ class NTDST_Data_Model
         $data = $this->sanitizeData($data);
 
         // Fire before hook
-        do_action('ntdst_model_create_before', $this->post_type, $data);
+        do_action('ntdst/model/creating', $this->post_type, $data);
 
         $post_id = wp_insert_post(array_merge(
             $this->extractPostData($data),
@@ -652,7 +652,7 @@ class NTDST_Data_Model
         }
 
         // Fire after hook
-        do_action('ntdst_model_create_after', $this->post_type, $post_id, $data);
+        do_action('ntdst/model/created', $this->post_type, $post_id, $data);
 
         // Return the newly created post with meta/fields
         // 'any': create() must return the row it just wrote, whatever status
@@ -690,7 +690,7 @@ class NTDST_Data_Model
         $data = $this->sanitizeData($data);
 
         // Fire before hook
-        do_action('ntdst_model_update_before', $this->post_type, $id, $data);
+        do_action('ntdst/model/updating', $this->post_type, $id, $data);
 
         $post_data = $this->extractPostData($data);
         $previous_post_data = [];
@@ -722,7 +722,7 @@ class NTDST_Data_Model
         }
 
         // Fire after hook
-        do_action('ntdst_model_update_after', $this->post_type, $id, $data);
+        do_action('ntdst/model/updated', $this->post_type, $id, $data);
 
         // Return fresh data. `wp_update_post()` / `update_post_meta()` already
         // cleaned core's post and post_meta caches, so this re-read is the
@@ -1021,7 +1021,7 @@ class NTDST_Data_Model
         }
 
         // Fire before hook
-        do_action('ntdst_model_delete_before', $this->post_type, $id);
+        do_action('ntdst/model/deleting', $this->post_type, $id);
 
         $result = $force ? wp_delete_post($id, true) : wp_trash_post($id);
 
@@ -1030,7 +1030,7 @@ class NTDST_Data_Model
         }
 
         // Fire after hook
-        do_action('ntdst_model_delete_after', $this->post_type, $id);
+        do_action('ntdst/model/deleted', $this->post_type, $id);
 
         return true;
     }
