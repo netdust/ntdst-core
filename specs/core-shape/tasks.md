@@ -160,13 +160,13 @@ Observable: `git -C ~/Sites/ntdst-core tag --points-at HEAD` prints `5.0.0` (Ste
 RED until: tests/Unit/ThemeTrimTest.php
 > Freshness review 2026-08-23: the file EXISTS (core-trim T09, 6 cases incl. `testTheRemovedProxyIsAnUndefinedMethod` `:196`); T12 EXTENDS it and the RED sentinel is the new case `testThemeWiresOnlyWhatWordPressThemeSetupDoes`
 
-- [ ] T12 — Theme trims: no style()/script(), no Pages forwarders, no the_generator, excerpt filters only when configured [Tier A]  (files: core/Theme.php, tests/Unit/ThemeTrimTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
+- [x] T12 — Theme trims: no style()/script(), no Pages forwarders, no the_generator, excerpt filters only when configured [Tier A]  (files: core/Theme.php, tests/Unit/ThemeTrimTest.php, bin/guard.sh, tests/Unit/PackageBootIntegrityTest.php)
   Satisfies: FR-12
   Test-author: solo — cluster stakes standard; hook wiring, no authorization semantics
   Proven by: new test
   Unit test: `NTDST_Theme` has no methods `style` (`:242`), `script` (`:261`), `single`, `page`, `archive` (`:292,310,333` — since core-trim T09 these are one-line `ntdst_pages()->…` forwarders, so deletion relocates no logic); constructing it with an empty config and firing `setup_theme()` records 0 `the_generator` filters and 0 `excerpt_length`/`excerpt_more` filters; with `['excerpt' => ['length' => 20]]` it records exactly one `excerpt_length` filter; `$theme->pages()` throws `Error` — core-trim FR-8 deleted the mixin proxy; the existing case `ThemeTrimTest::testTheRemovedProxyIsAnUndefinedMethod` stands unmodified (freshness-review ruling 2026-08-23); the other five existing cases survive; the docblock's `apiAction`/`ntdst_actions` mentions (`core/Theme.php:23,25`) are T08's; the five removed method names extend `METHOD_PINS["core/Theme.php"]` in bin/guard.sh from `"__call mixin when"` to `"__call mixin when style script single page archive"` and join `removedSymbolProvider()` (README rows as `Theme::style` etc., T13).
 
-- [ ] T13 — README 5.0.0 upgrade guide for every break; philosophy and routing-services reconciled; invariants say "holds" [Tier B]  (files: README.md, docs/philosophy.md, specs/routing-services/spec.md, ARCHITECTURE-INVARIANTS.md)
+- [x] T13 — README 5.0.0 upgrade guide for every break; philosophy and routing-services reconciled; invariants say "holds" [Tier B]  (files: README.md, docs/philosophy.md, specs/routing-services/spec.md, ARCHITECTURE-INVARIANTS.md)
   Satisfies: FR-13, FR-16, SC-8
   Test-author: solo
   Proven by: machine gate — the SC-8 grep + PackageBootIntegrityTest (README is scanned outside its `## Versions` section)
