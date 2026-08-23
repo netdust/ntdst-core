@@ -239,4 +239,106 @@ final class ThemeTrimTest extends TestCase
             );
         }
     }
+
+    /**
+     * core-shape FR-12 — the sentinel. NTDST_Theme wires ONLY what WordPress's
+     * own theme setup wires, and nothing that answers another layer's question
+     * or overrides a site-wide default the theme never asked about.
+     *
+     * Four retirements, read the way each one can actually come back:
+     *
+     *   style()/script() — two `wp_enqueue_scripts` closures with no decision
+     *       in them. `$theme->on('wp_enqueue_scripts', fn() => wp_enqueue_style(...))`
+     *       is the same line with the owner named at the call site, and it is
+     *       the shape that survives WordPress changing enqueue's signature.
+     *   single()/page()/archive() — one-line forwarders onto NTDST_Pages since
+     *       core-trim T09. A forwarder is a second public surface that must
+     *       track its owner's signature; the fleet writes `ntdst_pages()->…`.
+     *       Asserted by REFLECTION and by the FILE, because a forwarder can
+     *       come back as a private call inside setup_theme() too.
+     *   the_generator — a site-wide head cleanup, not theme wiring. It ran on
+     *       every site that constructed a theme, whether or not the site asked.
+     *   excerpt_length/excerpt_more — the same defect, one layer quieter: the
+     *       old defaults (55 / '') mounted BOTH filters unconditionally, so a
+     *       theme that never mentioned excerpts still overrode WordPress's own
+     *       excerpt length with a number core invented. They mount only when
+     *       the config sets a value now, and ONLY the value it set.
+     *
+     * Read through the filter RECORDER, not through has_filter(): tests/
+     * bootstrap.php declares a real add_filter before Patchwork, so Brain
+     * Monkey never sees a filter this class mounts (the file header's harness
+     * fact 2).
+     */
+    public function testThemeWiresOnlyWhatWordPressThemeSetupDoes(): void
+    {
+        $class = new ReflectionClass(NTDST_Theme::class);
+
+        foreach (['style', 'script', 'single', 'page', 'archive'] as $method) {
+            $this->assertFalse(
+                $class->hasMethod($method),
+                "NTDST_Theme still declares {$method}() — FR-12 removed it in 5.0.0",
+            );
+        }
+
+        // The three forwarders leave the FILE, not just the public surface:
+        // ntdst_pages() was exempted from the mixin sweep above only because
+        // they called it by name. Nothing shipped in this class may now.
+        $this->assertStringNotContainsString(
+            'ntdst_pages(',
+            $this->themeCode(),
+            'core/Theme.php still calls ntdst_pages() — FR-12 deleted the three forwarders that did',
+        );
+
+        Monkey\Functions\when('load_theme_textdomain')->justReturn(true);
+        Monkey\Functions\when('get_template_directory')->justReturn('/srv/theme');
+        Monkey\Functions\when('register_nav_menus')->justReturn(null);
+
+        // A theme that asks for nothing gets nothing mounted on its behalf.
+        (new NTDST_Theme([]))->setup_theme();
+
+        foreach (['the_generator', 'excerpt_length', 'excerpt_more'] as $hook) {
+            $this->assertArrayNotHasKey(
+                $hook,
+                $GLOBALS['_ntdst_test_filters_at'],
+                "setup_theme() mounted `{$hook}` for a theme whose config never mentions it",
+            );
+        }
+
+        // A theme that DOES ask gets exactly what it asked for, at the late
+        // priority that makes the answer win, and nothing beside it.
+        $GLOBALS['_ntdst_test_filters'] = [];
+        $GLOBALS['_ntdst_test_filters_at'] = [];
+
+        (new NTDST_Theme(['excerpt' => ['length' => 20]]))->setup_theme();
+
+        $this->assertCount(
+            1,
+            $GLOBALS['_ntdst_test_filters_at']['excerpt_length'] ?? [],
+            'a configured excerpt length must mount exactly one excerpt_length filter',
+        );
+
+        $mounted = $GLOBALS['_ntdst_test_filters_at']['excerpt_length'][999] ?? null;
+        $this->assertIsCallable($mounted, 'excerpt_length must stay at priority 999, late enough to win');
+        $this->assertSame(20, $mounted(), 'the filter must answer the configured length');
+
+        foreach (['excerpt_more', 'the_generator'] as $hook) {
+            $this->assertArrayNotHasKey(
+                $hook,
+                $GLOBALS['_ntdst_test_filters_at'],
+                "configuring an excerpt LENGTH also mounted `{$hook}`",
+            );
+        }
+    }
+
+    /** core/Theme.php with its comment lines dropped — the shape the mixin sweep uses. */
+    private function themeCode(): string
+    {
+        $source = file_get_contents(__DIR__ . '/../../core/Theme.php');
+        $this->assertIsString($source);
+
+        return implode("\n", array_filter(
+            explode("\n", $source),
+            static fn(string $line) => preg_match('#^\s*(\*|//|\#|/\*)#', $line) !== 1,
+        ));
+    }
 }

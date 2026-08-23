@@ -158,18 +158,21 @@ final class CoreTrimClusterCFeatureTest extends TestCase
     }
 
     /**
-     * single() still resolves through ntdst_pages() after the __call proxy
-     * that used to carry it was deleted (FR-8) — asserted END TO END: the
-     * theme registers, NTDST_Pages mounts the `single_template` filter, and
+     * single() resolves END TO END through the layer that owns it: a theme
+     * registers, NTDST_Pages mounts the `single_template` filter, and
      * WordPress running that filter reaches the theme's own callback.
+     *
+     * Written as `ntdst_pages()->single(...)` since core-shape FR-12 deleted
+     * NTDST_Theme's one-line forwarder — the CHAIN this case pins is unchanged
+     * and one hop shorter, and the deleted hop has its own absence test in
+     * ThemeTrimTest::testThemeWiresOnlyWhatWordPressThemeSetupDoes().
      */
-    public function testTheThemesSingleForwarderRendersTheGigTemplateThroughTheRealFilter(): void
+    public function testASingleGigRendersTheGigTemplateThroughTheRealFilter(): void
     {
-        $theme = new NTDST_Theme([]);
-        $theme->single('gig', static fn($post, $template) => '/theme/single-gig.php');
+        ntdst_pages()->single('gig', static fn($post, $template) => '/theme/single-gig.php');
 
         $mounted = $GLOBALS['_ntdst_test_filters_at']['single_template'][10] ?? null;
-        $this->assertIsCallable($mounted, 'single() must reach NTDST_Pages and mount the single_template filter.');
+        $this->assertIsCallable($mounted, 'single() must mount the single_template filter.');
 
         Functions\when('get_post_type')->justReturn('gig');
 
@@ -183,14 +186,13 @@ final class CoreTrimClusterCFeatureTest extends TestCase
     /**
      * THE DENIAL PATH of the same registration: a single view of ANOTHER post
      * type must not reach the gig handler, and must keep the template
-     * WordPress chose. A forwarder that dropped the post-type argument passes
-     * the test above and fails this one.
+     * WordPress chose. A registration that dropped the post-type argument
+     * passes the test above and fails this one.
      */
     public function testASingleViewOfAnotherPostTypeNeverReachesTheGigHandler(): void
     {
         $ran = false;
-        $theme = new NTDST_Theme([]);
-        $theme->single('gig', static function ($post, $template) use (&$ran) {
+        ntdst_pages()->single('gig', static function ($post, $template) use (&$ran) {
             $ran = true;
             return '/theme/single-gig.php';
         });
@@ -209,17 +211,16 @@ final class CoreTrimClusterCFeatureTest extends TestCase
     }
 
     /**
-     * page() carries the SLUG through the forwarder — and the non-matching
-     * page is the edge that a slug-blind rewrite would break: it must fall
-     * through to the template WordPress picked.
+     * page() carries the SLUG — and the non-matching page is the edge that a
+     * slug-blind rewrite would break: it must fall through to the template
+     * WordPress picked.
      */
-    public function testThePageForwarderRunsOnTheMatchingSlugOnlyAndFallsThroughOtherwise(): void
+    public function testThePageHandlerRunsOnTheMatchingSlugOnlyAndFallsThroughOtherwise(): void
     {
-        $theme = new NTDST_Theme([]);
-        $theme->page('about', static fn($post) => '/theme/page-about.php');
+        ntdst_pages()->page('about', static fn($post) => '/theme/page-about.php');
 
         $mounted = $GLOBALS['_ntdst_test_filters_at']['page_template'][10] ?? null;
-        $this->assertIsCallable($mounted, 'page() must reach NTDST_Pages and mount the page_template filter.');
+        $this->assertIsCallable($mounted, 'page() must mount the page_template filter.');
 
         $GLOBALS['post'] = (object) ['post_name' => 'about'];
         $this->assertSame('/theme/page-about.php', $mounted('/wp/page.php'), 'The about page uses the theme\'s handler.');
@@ -228,14 +229,13 @@ final class CoreTrimClusterCFeatureTest extends TestCase
         $this->assertSame('/wp/page.php', $mounted('/wp/page.php'), 'Another page keeps WordPress\'s template.');
     }
 
-    /** archive() forwards the same way — the third of the three kept forwarders. */
-    public function testTheArchiveForwarderMountsTheGigArchiveHandler(): void
+    /** archive() registers the same way — the third of the three template hooks. */
+    public function testTheArchiveRegistrationMountsTheGigArchiveHandler(): void
     {
-        $theme = new NTDST_Theme([]);
-        $theme->archive('gig', static fn($post, $template) => '/theme/archive-gig.php');
+        ntdst_pages()->archive('gig', static fn($post, $template) => '/theme/archive-gig.php');
 
         $mounted = $GLOBALS['_ntdst_test_filters_at']['archive_template'][10] ?? null;
-        $this->assertIsCallable($mounted, 'archive() must reach NTDST_Pages and mount the archive_template filter.');
+        $this->assertIsCallable($mounted, 'archive() must mount the archive_template filter.');
 
         Functions\when('get_post_type')->justReturn('gig');
         $this->assertSame('/theme/archive-gig.php', $mounted('/wp/archive.php'));

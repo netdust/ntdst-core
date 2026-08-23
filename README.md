@@ -572,8 +572,10 @@ on two of the renamed ones.
 | `ntdst_schedule_recurring($hook, $recurrence)` | `if (!wp_next_scheduled($hook)) { wp_schedule_event(time(), $recurrence, $hook); }` |
 | `ntdst_clear_recurring($hook)` | `wp_clear_scheduled_hook($hook)` |
 
-**Theme (FR-8).** `on()` and `filter()` stay — they are the chainable
-configuration case philosophy §5 names.
+**Theme (FR-8, FR-12).** `on()` and `filter()` stay — they are the chainable
+configuration case philosophy §5 names. Everything else on this class had to
+answer one question: does its subject die when you switch themes? What follows
+did not.
 
 | Was | Now |
 |---|---|
@@ -581,6 +583,11 @@ configuration case philosophy §5 names.
 | `$theme->mail()` | gone with `Mailer` — see below |
 | `Theme::when()` | run the condition yourself. `Pages::when()` is a different thing (a `template_include` filter) and stays |
 | `templatePath()` | `ntdst_response()->locate()` |
+| `Theme::style($handle, $src, $deps, $ver, $media, $priority)` | `$theme->on('wp_enqueue_scripts', static fn() => wp_enqueue_style($handle, $src, $deps, $ver, $media), $priority)` — the same enqueue, written in WordPress's own signature |
+| `Theme::script($handle, $src, $deps, $ver, $in_footer, $priority)` | `$theme->on('wp_enqueue_scripts', static fn() => wp_enqueue_script($handle, $src, $deps, $ver, $in_footer), $priority)` |
+| `Theme::single()`, `Theme::page()`, `Theme::archive()` | `ntdst_pages()->single()` / `->page()` / `->archive()`, same arguments. These were one-line forwarders; the owner is `NTDST_Pages` and it is named at the call site now. **17 call sites on the fleet, every one in ludoluykx** (7 `single`, 7 `archive`, 3 `page`) — each is a fatal until it is renamed |
+| the `the_generator` filter core mounted for you | nothing. Hiding the WordPress version is a site-wide head decision, not theme wiring: mount `add_filter('the_generator', '__return_empty_string')` in the site's own cleanup if you want it |
+| the `excerpt` defaults (`length => 55`, `more => ''`) | not applied. `excerpt_length` and `excerpt_more` mount ONLY for the key your config actually sets. **A theme that never mentioned excerpts was silently overriding WordPress's own excerpt length with 55** — if you want that number, set `excerpt.length` yourself |
 
 **Mail (FR-9).** The class moved into stride's `netdust-mail` plugin as
 `Netdust\Mail\Mailer`, trimmed to what `MailService` uses.

@@ -312,7 +312,21 @@ declare -A METHOD_PINS=(
     # because nothing in the file said which names resolved. `when()` was an
     # `if` with a fluent return. Both go; a theme names the owner at the call
     # site now (`ntdst_data()`).
-    ["core/Theme.php"]="__call mixin when"
+    #
+    # FR-12 / INV-5 (core-shape T12): the five OTHER retirements from this file.
+    # style() and script() were `wp_enqueue_scripts` closures with no decision
+    # in them, and single()/page()/archive() were one-line forwarders onto
+    # NTDST_Pages — a second public surface that had to track its owner's
+    # signature. `$theme->on('wp_enqueue_scripts', ...)` and `ntdst_pages()->…`
+    # are the call sites now.
+    #
+    # Pinned HERE and only here, for the reason `json`/`render`/`addPath` are:
+    # every one of the five is an ordinary word this package writes constantly,
+    # and three of them name LIVE methods of NTDST_Pages (single, page,
+    # archive), so a bare REMOVED row would fire on the survivors. A method can
+    # only come back where it is DECLARED. PackageBootIntegrityTest carries the
+    # `Theme::style`-shaped rows instead — the sweep that answers for README.
+    ["core/Theme.php"]="__call mixin when style script single page archive"
 
     # FR-7 / SC-3: NTDST_Response has ONE wire shape, and no api* envelope
     # beside it. apiSuccess()/apiError() built a {success,data:{message,code}}

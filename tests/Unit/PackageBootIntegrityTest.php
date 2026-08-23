@@ -215,6 +215,30 @@ final class PackageBootIntegrityTest extends TestCase
             'ntdst_redirect' => ['ntdst_redirect', '5.0.0'],
             'Response $mimeTypes' => ['$mimeTypes', '5.0.0'],
             'getCustomPaths' => ['getCustomPaths', '5.0.0'],
+            // v5.0.0 core-shape (FR-12 / INV-5) — NTDST_Theme wires only what
+            // WordPress's own theme setup wires. style() and script() were
+            // `wp_enqueue_scripts` closures with no decision in them, and
+            // single()/page()/archive() were one-line forwarders onto
+            // NTDST_Pages: a second public surface that had to track its
+            // owner's signature, and 17 call sites on the fleet (ludoluykx)
+            // that meet the removal as a fatal.
+            //
+            // Pinned as `Theme::<name>` and NOT bare, and the qualification is
+            // load-bearing in BOTH directions. Bare, every one of the five
+            // would fire on ordinary English and on the SURVIVORS — NTDST_Pages
+            // still declares single(), page() and archive(), which is where
+            // those callers are told to go. Qualified, the row does the one job
+            // this list owes an adopter: README must name the removal, and
+            // `testEveryRemovedFiveOhSymbolHasAMigrationRow` reads these keys
+            // back off the migration table. The place a method can come BACK is
+            // its declaration, and that is pinned per-file in bin/guard.sh's
+            // METHOD_PINS["core/Theme.php"] — the check that also runs on a
+            // fresh checkout with no vendor/.
+            'Theme::style' => ['Theme::style', '5.0.0'],
+            'Theme::script' => ['Theme::script', '5.0.0'],
+            'Theme::single' => ['Theme::single', '5.0.0'],
+            'Theme::page' => ['Theme::page', '5.0.0'],
+            'Theme::archive' => ['Theme::archive', '5.0.0'],
             // v5.0.0 core-trim (FR-1, INV-10) — Bootstrap's service scanner and
             // the two config keys that armed it. The scanner globbed
             // `*Service.php` under `services.discovery_paths`, `require_once`d

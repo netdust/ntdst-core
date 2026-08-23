@@ -25,9 +25,19 @@ defined('ABSPATH') || exit;
  * `ntdst_pages()`, `ntdst_rest()`, `NTDST_Template_Loader::addPath()`
  * (FR-8, 5.0.0; the reasoning lives in the core-shape spec).
  *
- * Accepted cost: single(), page() and archive() forward onto NTDST_Pages, a
- * second surface that must track its owner's signature — check them when
- * NTDST_Pages changes shape. FR-12 deletes all three.
+ * 5.0.0 applies the same rule twice more (FR-12). single(), page() and
+ * archive() forwarded onto NTDST_Pages — a second public surface that had to
+ * track its owner's signature — and a theme writes `ntdst_pages()->single(...)`
+ * instead. style() and script() were two `wp_enqueue_scripts` closures with no
+ * decision in them; `$theme->on('wp_enqueue_scripts', fn() => wp_enqueue_style(...))`
+ * says the same thing in WordPress's own words.
+ *
+ * setup_theme() wires what the CONFIG asks for and nothing else. The
+ * `the_generator` filter left with the same rule — hiding the WordPress
+ * version is a site-wide head decision, not theme wiring — and the excerpt
+ * filters mount only when the config sets a length or a more-string. They used
+ * to mount unconditionally off core's own defaults, so every site that
+ * constructed a theme silently overrode WordPress's excerpt length with 55.
  *
  * Hooks: `ntdst_*` actions for new code; Theme registers no `netdust_*` hook.
  *
@@ -110,19 +120,20 @@ class NTDST_Theme
             ]);
         }
 
-        // Excerpt settings
-        $this->filter('excerpt_length', function () {
-            return (int) $this->config['excerpt']['length'];
-        }, 999);
+        // Excerpt settings — mounted only for the value the config actually
+        // set. A theme that never mentions excerpts leaves WordPress's own
+        // length and more-string alone (FR-12).
+        if (isset($this->config['excerpt']['length'])) {
+            $this->filter('excerpt_length', function () {
+                return (int) $this->config['excerpt']['length'];
+            }, 999);
+        }
 
-        $this->filter('excerpt_more', function () {
-            return sprintf($this->config['excerpt']['more'], esc_url(get_permalink()));
-        });
-
-        // Remove WordPress version
-        $this->filter('the_generator', function () {
-            return '';
-        });
+        if (isset($this->config['excerpt']['more'])) {
+            $this->filter('excerpt_more', function () {
+                return sprintf($this->config['excerpt']['more'], esc_url(get_permalink()));
+            });
+        }
     }
 
     /**
@@ -140,7 +151,6 @@ class NTDST_Theme
             'image_sizes' => [],
             'menus' => [],
             'sidebars' => [],
-            'excerpt' => ['length' => 55, 'more' => ''],
         ];
 
         // Force expected shapes for keys we iterate later — fail upfront
@@ -217,122 +227,6 @@ class NTDST_Theme
     public function filter(string $filter, callable $callback, int $priority = 10, int $args = 1): self
     {
         add_filter($filter, $callback, $priority, $args);
-        return $this;
-    }
-
-    /**
-     * Enqueue a stylesheet on `wp_enqueue_scripts` — a thin, explicit
-     * pass-through to wp_enqueue_style(), deferred to the hook. Arguments
-     * reach WordPress verbatim; compute versions and conditions at the call
-     * site. Call at theme load, before `wp_enqueue_scripts` fires.
-     *
-     * These two helpers replaced the config-driven asset loader (the
-     * `assets` config key, its `ntdst_theme_assets` filter and the attrs →
-     * loader-tag rewriting): ~120 lines of machinery with zero consumers
-     * across the fleet, running on every request to iterate empty arrays.
-     * An asset is one explicit line here instead.
-     *
-     * `$priority` orders this enqueue among `wp_enqueue_scripts` listeners —
-     * a child theme overriding its parent's CSS needs a late one (YOOtheme
-     * children use 20 to land after the parent's own enqueues).
-     *
-     * @param string[]         $deps
-     * @param string|bool|null $ver  false = WP version, null = no version
-     */
-    public function style(
-        string $handle,
-        string $src,
-        array $deps = [],
-        string|bool|null $ver = false,
-        string $media = 'all',
-        int $priority = 10,
-    ): self {
-        return $this->on('wp_enqueue_scripts', static function () use ($handle, $src, $deps, $ver, $media): void {
-            wp_enqueue_style($handle, $src, $deps, $ver, $media);
-        }, $priority);
-    }
-
-    /**
-     * Enqueue a script on `wp_enqueue_scripts` — same contract as style().
-     *
-     * @param string[]         $deps
-     * @param string|bool|null $ver  false = WP version, null = no version
-     */
-    public function script(
-        string $handle,
-        string $src,
-        array $deps = [],
-        string|bool|null $ver = false,
-        bool $in_footer = true,
-        int $priority = 10,
-    ): self {
-        return $this->on('wp_enqueue_scripts', static function () use ($handle, $src, $deps, $ver, $in_footer): void {
-            wp_enqueue_script($handle, $src, $deps, $ver, $in_footer);
-        }, $priority);
-    }
-
-
-    /**
-     * Register single template handler
-     *
-     * The post type is `?string` — NOT `string|callable`. This signature tracks
-     * its owner NTDST_Pages::single() exactly; a wider one here would advertise
-     * a callable-first form the owner refuses under strict_types, raising a
-     * TypeError from a class the caller never named (Cluster B review, F1).
-     *
-     * @param string|null   $post_type Post type, or null for every single view
-     * @param callable|null $callback  Handler function
-     * @return $this
-     *
-     * Example:
-     *   $theme->single('project', function($post) {
-     *       return ntdst_response()->with('project', $post)->template('project/detail');
-     *   });
-     */
-    public function single(?string $post_type = null, ?callable $callback = null): self
-    {
-        ntdst_pages()->single($post_type, $callback);
-        return $this;
-    }
-
-    /**
-     * Register page template handler
-     *
-     * @param string|callable $slug Page slug or callback
-     * @param callable|null $callback Handler function
-     * @return $this
-     *
-     * Example:
-     *   $theme->page('about', function($post) {
-     *       return get_template_directory() . '/templates/about.php';
-     *   });
-     */
-    public function page(string|callable $slug, ?callable $callback = null): self
-    {
-        ntdst_pages()->page($slug, $callback);
-        return $this;
-    }
-
-    /**
-     * Register archive template handler
-     *
-     * The post type is `?string` — NOT `string|callable`, for the same reason
-     * `single()` above is not: this signature tracks its owner
-     * NTDST_Pages::archive() exactly (Cluster B review, F1).
-     *
-     * @param string|null   $post_type Post type, or null for every archive view
-     * @param callable|null $callback  Handler function
-     * @return $this
-     *
-     * Example:
-     *   $theme->archive('project', function() {
-     *       $projects = ntdst_data()->get('project')->all();
-     *       return ntdst_response()->with('projects', $projects)->template('project/archive');
-     *   });
-     */
-    public function archive(?string $post_type = null, ?callable $callback = null): self
-    {
-        ntdst_pages()->archive($post_type, $callback);
         return $this;
     }
 }
