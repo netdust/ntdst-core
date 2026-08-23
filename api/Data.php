@@ -140,6 +140,15 @@ class NTDST_Data_Model
         $fields = [];
 
         foreach ($this->schema as $field => $config) {
+            // A `callback` field draws itself and the consumer's own code owns
+            // what it stores, so this model has no shape to publish for it —
+            // whatever it declared. Skipped here rather than refused later:
+            // schemaFor() would ask the vocabulary for an entry that does not
+            // exist, which is the same fatal one layer down.
+            if (NTDST_FieldTypes::declaredType($config) === 'callback') {
+                continue;
+            }
+
             if ($this->declaresRest($config)) {
                 $fields[] = (string) $field;
             }
@@ -368,6 +377,18 @@ class NTDST_Data_Model
             $field = (string) $field;
             $type = NTDST_FieldTypes::declaredType($config);
 
+            // `callback` is a RENDER DIRECTIVE, not a vocabulary entry — the
+            // declaration gate accepts one (it is live on the fleet) and the
+            // registry has no entry to bind, so asking for one threw an
+            // uncaught fatal at `init` on every model declaring one. The model
+            // SKIPS it, the way the metabox save path already does: nothing
+            // bound here, nothing published by restFields(), nothing decoded on
+            // the read side. A stray write is still cleaned — sanitizeField()
+            // falls back to sanitize_text_field() for a field with no binding.
+            if ($type === 'callback') {
+                continue;
+            }
+
             $this->sanitizers[$field] = $this->sanitizerFor($field, $config, $type);
 
             if (!is_array($config)) {
@@ -440,9 +461,11 @@ class NTDST_Data_Model
             return sanitize_text_field($value);
         }
 
-        // Always a Closure: bindFields() binds every declared field through
-        // sanitizerFor() at construction, so there is no "not callable" case to
-        // fall back from any more.
+        // Always a Closure: bindFields() binds every declared field it can name
+        // through sanitizerFor() at construction, so there is no "not callable"
+        // case to fall back from any more. The fallback above is reached by an
+        // UNDECLARED key and by a `callback` field — the one declared shape the
+        // vocabulary does not name — and it is why neither is ever stored raw.
         return ($this->sanitizers[$field])($value);
     }
 
@@ -1585,6 +1608,17 @@ class NTDST_Data_Model
             // Look up the prefixed key in meta, return unprefixed field name
             $metaKey = $this->meta_prefix . $field;
             $value = $meta[$metaKey] ?? $meta[$field] ?? null;
+
+            // Nothing was bound for a `callback` field, so there is nothing to
+            // decode it WITH: readValue() would ask the registry for the entry
+            // bindFields() already declined to look up. Handed back as stored —
+            // the consumer's own code wrote it and owns how it reads.
+            if (NTDST_FieldTypes::declaredType($type_config) === 'callback') {
+                $formatted[$field] = $value;
+
+                continue;
+            }
+
             $formatted[$field] = $this->readValue($type_config, $value);
         }
 

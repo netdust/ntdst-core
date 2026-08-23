@@ -916,4 +916,65 @@ final class DataReadsTheVocabularyTest extends TestCase
 
         $this->assertSame('text:x', $this->storedValue('headline'), 'No type declared means text.');
     }
+
+    // ------------------------------------------- 9. `callback` is not a type
+
+    /**
+     * `callback` is a RENDER DIRECTIVE, and the two callers of the declaration
+     * gate must agree about it. NTDST_FieldTypes::assertDeclarations() accepts
+     * one — it is live on the fleet — so the MODEL, which calls that same gate
+     * from its constructor, may not then fatal on the declaration the gate just
+     * passed. It did: bindFields() asked the registry for an entry named
+     * `callback`, there is none, and the uncaught InvalidArgumentException took
+     * down `init` on every site declaring a callback field on a data model.
+     *
+     * The model SKIPS it, the way the metabox save path already does: no
+     * sanitizer bound, no REST registration, no decode on the read side. The
+     * field draws itself and the consumer's own code owns what it stores.
+     * A stray write through a model path is still cleaned — sanitizeField()
+     * falls back to sanitize_text_field() for a field it bound nothing for, so
+     * "not in the vocabulary" never means "stored raw".
+     */
+    public function testAModelDeclaringACallbackFieldAgreesWithTheDeclarationGate(): void
+    {
+        $schema = [
+            'bio'      => ['type' => 'callback', 'callback' => 'strval', 'show_in_rest' => true],
+            'headline' => ['type' => 'text', 'show_in_rest' => true],
+        ];
+
+        // The gate says yes. Both callers must say the same thing.
+        NTDST_FieldTypes::assertDeclarations($schema, 'Model artist');
+
+        // The harness's own model: post type 'p', prefix '_p_' — the stubs'
+        // stored row is that post type, so find() reads it back.
+        $model = $this->model($schema);
+
+        $sanitizers = (new ReflectionProperty(NTDST_Data_Model::class, 'sanitizers'));
+        $sanitizers->setAccessible(true);
+        $bound = $sanitizers->getValue($model);
+        $this->assertArrayNotHasKey('bio', $bound, 'No sanitizer is bound for a render directive.');
+        $this->assertArrayHasKey('headline', $bound, 'The declared text field still binds one.');
+
+        $model->registerRestMeta('p');
+
+        $keys = array_map(static fn(array $call): string => $call[1], $this->registrations);
+        $this->assertSame(
+            ['_p_headline'],
+            $keys,
+            'A callback field registers no meta, even declaring show_in_rest.',
+        );
+
+        // The read side asks the same vocabulary, so it must skip it too — a
+        // decode here would be the identical uncaught throw, one find() later.
+        $this->stored['_p_bio'] = 'whatever the consumer stored';
+        $this->assertSame(
+            'whatever the consumer stored',
+            $this->readBack($model, 'bio'),
+            'The model decodes nothing it never bound.',
+        );
+
+        // A stray write still gets WordPress's baseline clean.
+        $model->update(1, ['bio' => '  <b>x</b>  ']);
+        $this->assertSame('text:x', $this->storedValue('bio'), 'The fallback covers a stray write.');
+    }
 }

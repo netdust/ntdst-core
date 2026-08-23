@@ -186,7 +186,8 @@ final class NTDST_FieldTypes
      * `callback` is legal here and has no entry: it is a RENDER DIRECTIVE — the
      * field draws itself and the consumer's own code owns what it stores. It is
      * live on the fleet, so the gate accepts it; what a MODEL then does with one
-     * is the model's own question, asked later.
+     * is the model's own question, asked later — and its answer is that the
+     * model SKIPS it (no sanitizer bound, nothing published, nothing decoded).
      *
      * @param array<array-key, mixed> $fields
      * @param string $where names the declaring model or metabox: on a site this
