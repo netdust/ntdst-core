@@ -169,6 +169,36 @@ final class PackageBootIntegrityTest extends TestCase
             'getClassNameFromFile' => ['getClassNameFromFile', '5.0.0'],
             'auto_discover' => ['auto_discover', '5.0.0'],
             'discovery_paths' => ['discovery_paths', '5.0.0'],
+            // v5.0.0 core-trim (FR-2) — the per-service enable switch and the
+            // read-only copies of the service registry.
+            //
+            // `ntdst_service_` is swept as a PREFIX, and that is deliberate: it
+            // is the shared stem of the retired option `ntdst_service_{slug}`,
+            // the retired DENY filter `ntdst_service_{slug}_enabled` and the
+            // retired config filter `ntdst_service_{slug}_config`, and every
+            // one of them is interpolated (`"ntdst_service_{$slug}_enabled"`),
+            // so a row per full name would match nothing. The stem is the only
+            // shape a sweep can see. The enable switch failed OPEN — a filter
+            // nobody answers returns true — so a half-removal that leaves one
+            // interpolation behind is a service a site believes is off and is
+            // not, which is the exact wart philosophy §4 records.
+            //
+            // The four accessors had zero readers across daan, josworld,
+            // stride, todai and netdust: a second, read-only copy of the
+            // registry that could disagree with the original.
+            //
+            // README.md is the one file whose MIGRATION ROWS may spell them —
+            // naming what was removed is the entire job of that table, and the
+            // exemption is by ROW (a table line whose first cell is a code
+            // span), not by file, so a README that grows a live INSTRUCTION
+            // using a retired name still fails. The `## Versions` section is
+            // already exempt wholesale; this keeps the rows honest wherever the
+            // table ends up.
+            'ntdst_service_' => ['ntdst_service_', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'getServiceConfig' => ['getServiceConfig', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'getBootedServices' => ['getBootedServices', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'hasService' => ['hasService', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
+            'isBooted' => ['isBooted', '5.0.0', 'README.md', '/^\\s*\\|\\s*`[^`]+`.*\\|/'],
         ];
     }
 

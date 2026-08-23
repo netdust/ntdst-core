@@ -1,14 +1,15 @@
 <?php // tests/Unit/BootstrapServiceSlugTest.php
 // F7 — a declared `metadata()['name']` cannot pin a service slug.
 //
-// The slug is the user-facing extension key: it names the
-// `ntdst_service_{slug}_enabled` filter, the `ntdst_service_{slug}_config`
-// filter and the `ntdst_service_{slug}` option. Bootstrap's own header says a
+// The slug is the user-facing extension key. It named three things when this
+// file was written; core-trim T02 leaves it naming exactly ONE — the
+// config-override filter `ntdst/service/{slug}/config`, which is the single
+// reader that kept the derivation alive (FR-2). Bootstrap's own header said a
 // declared name "takes precedence over the derivation entirely" — and then
-// concedes that in the real registration flow it does not, because
-// isServiceEnabled() derives and CACHES the slug from the class name before
-// anything metadata-aware runs. A consumer (todai's services/Ping.php) wrote a
-// five-line comment about this surprise instead of a `name`.
+// conceded that in the real registration flow it did not, because the retired
+// enable check derived and CACHED the slug from the class name before anything
+// metadata-aware ran. A consumer (todai's services/Ping.php) wrote a five-line
+// comment about this surprise instead of a `name`.
 //
 // What must NOT move while fixing it: getServiceMetadata() defaults `name` to
 // a human-readable label derived from the class ("AdminUIService" -> "Admin U
@@ -64,6 +65,13 @@ final class BootstrapServiceSlugTest extends TestCase
         $this->hooks = [];
         $this->options = [];
 
+        // The full registration flow runs in the config-filter case below, so
+        // the WordPress functions it touches answer here. `add_filter()`,
+        // `ntdst_log()`, `ntdst_set()` and `ntdst_get()` are the suite's REAL
+        // implementations (tests/bootstrap.php) and are never stubbed.
+        Functions\when('is_admin')->justReturn(false);
+        Functions\when('do_action')->justReturn(null);
+        Functions\when('_doing_it_wrong')->justReturn(null);
         Functions\when('apply_filters')->alias(function ($hook, $value = null) {
             $this->hooks[] = (string) $hook;
             return $value;
@@ -72,6 +80,16 @@ final class BootstrapServiceSlugTest extends TestCase
             $this->options[] = (string) $name;
             return $default;
         });
+
+        // An earlier file's mount is still on the real add_filter bus; "the
+        // declared name pinned THIS hook" is a claim about this run.
+        foreach (['_ntdst_test_filters', '_ntdst_test_filters_at'] as $bag) {
+            foreach (array_keys($GLOBALS[$bag] ?? []) as $hook) {
+                if (str_starts_with((string) $hook, 'ntdst/service/') || str_starts_with((string) $hook, 'ntdst_service_')) {
+                    unset($GLOBALS[$bag][$hook]);
+                }
+            }
+        }
     }
 
     protected function tearDown(): void
@@ -100,15 +118,20 @@ final class BootstrapServiceSlugTest extends TestCase
 
     /**
      * The real registration order, as registerService() runs it: read the
-     * metadata, ask whether the service is enabled (which resolves the slug
-     * for the filter and the option), then resolve the slug for the config
-     * override. A slug that depends on WHICH of those ran first is the defect.
+     * metadata, then resolve the slug for the config override. A slug that
+     * depends on WHICH of those ran first is the defect.
+     *
+     * The middle step used to be the enable check, and it was the whole defect:
+     * it resolved the slug with no metadata in hand and CACHED that answer, so
+     * every later metadata-aware call was served the class-name derivation.
+     * core-trim T02 deletes that check (FR-2), which removes the collision —
+     * but not the property, because getServiceMetadata() still runs first and
+     * `getServiceSlug()` still caches. So the order stays reproduced here.
      */
     private function slugAfterRegistrationFlow(string $class): string
     {
         $boot = $this->bootstrap();
-        $metadata = $this->call($boot, 'getServiceMetadata', [$class]);
-        $this->call($boot, 'isServiceEnabled', [$class, $metadata]);
+        $this->call($boot, 'getServiceMetadata', [$class]);
 
         return (string) $this->call($boot, 'getServiceSlug', [$class]);
     }
@@ -118,15 +141,45 @@ final class BootstrapServiceSlugTest extends TestCase
         $this->assertSame('todai_ping', $this->slugAfterRegistrationFlow(SlugPinnedService::class));
     }
 
-    public function testADeclaredNamePinsTheEnabledFilterAndItsOption(): void
+    public function testADeclaredNamePinsTheConfigFilterName(): void
     {
-        // The whole point of the slug: these two names are the site's control
-        // surface over the service. Declaring a name that the filter never
-        // hears is a promise the framework does not keep.
-        $this->slugAfterRegistrationFlow(SlugPinnedService::class);
+        // The whole point of the slug, and after core-trim T02 the ONLY thing
+        // it names: the hook a consumer's override travels on. Declaring a name
+        // the hook never hears is a promise the framework does not keep — and
+        // it is now a LOUD one, because an override key that matches no
+        // registered slug is refused at register().
+        //
+        // Asserted through the public flow rather than the private helpers the
+        // cases above use: the mount is what a consumer can observe, and this
+        // one case is about the NAME the site writes its add_filter against.
+        $boot = new NTDST_Bootstrap([
+            'services' => [
+                'core' => [SlugPinnedService::class],
+                'overrides' => ['todai_ping' => ['pinged' => true]],
+            ],
+        ]);
+        $boot->register()->bootFeatures();
 
-        $this->assertContains('ntdst_service_todai_ping_enabled', $this->hooks);
-        $this->assertContains('ntdst_service_todai_ping', $this->options);
+        $this->assertArrayHasKey(
+            'ntdst/service/todai_ping/config',
+            $GLOBALS['_ntdst_test_filters_at'] ?? [],
+            'A declared name pins the config filter: the override must mount on the name the service chose.',
+        );
+        $this->assertArrayNotHasKey(
+            'ntdst_service_todai_ping_config',
+            $GLOBALS['_ntdst_test_filters_at'] ?? [],
+            'And the retired spelling is not mounted beside it — 5.0.0 ships one name, no shim.',
+        );
+        $this->assertNotContains(
+            'ntdst_service_todai_ping_enabled',
+            $this->hooks,
+            'The enable filter is gone (FR-2): a declared name no longer buys a DENY hook that fails open.',
+        );
+        $this->assertSame(
+            [],
+            $this->options,
+            'and no option is read for it either: ' . implode(', ', $this->options),
+        );
     }
 
     public function testTheSlugIsTheSameWhicheverQuestionIsAskedFirst(): void
