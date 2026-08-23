@@ -246,7 +246,11 @@ final class MetaboxGeneratorRenderTest extends TestCase
         $close = strpos($html, '</script>', $open);
         $this->assertNotFalse($close, 'The row template must be closed.');
 
-        $template = substr($html, $open, $close - $open);
+        // From the END of the opening tag: the slice is the template's CONTENT,
+        // not the tag that opens it. Slicing from $open would put `<script` in
+        // every slice and make the assertion below unprovable.
+        $start = strpos($html, '>', $open) + 1;
+        $template = substr($html, $start, $close - $start);
 
         $this->assertStringNotContainsString(
             '<script',

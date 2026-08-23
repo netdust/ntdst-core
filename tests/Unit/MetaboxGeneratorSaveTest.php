@@ -886,6 +886,48 @@ final class MetaboxGeneratorSaveTest extends TestCase
     }
 
     /**
+     * A DECLARED key is stored exactly as it was declared.
+     *
+     * The allow-list above is what makes the stored key safe: after
+     * array_intersect_key() every key the save writes came from the site's own
+     * `fields` array, so there is nothing left for a key rule to clean. Folding
+     * the key here — sanitize_key(), which lowercases — would rewrite the meta
+     * key of every camelCase declaration on the fleet: `venueCity` stops being
+     * the row that already holds the site's data, the screen reads the new
+     * empty row, and the old value is invisible and un-deletable. A migration
+     * with no migration.
+     *
+     * The repeater ROW key is a different question with a different answer
+     * (NTDST_FieldTypes::rowKey(), the vocabulary's) — that one is a key the
+     * BROWSER echoes back, and it is not this.
+     */
+    public function testADeclaredKeyIsStoredExactlyAsItWasDeclared(): void
+    {
+        $this->modelTable()->setValue(null, []);
+        $this->register('note', ['venueCity' => 'text', '_internal_note' => 'text']);
+        $this->submit('note', ['venueCity' => 'Ghent', '_internal_note' => 'x']);
+
+        $this->save('note');
+
+        $this->assertSame(
+            'text:Ghent',
+            $this->meta['venueCity'] ?? null,
+            'A declared `venueCity` is stored under `venueCity`. Lowercasing it invents a SECOND meta '
+                . 'key beside the one the site already wrote, and orphans the data in the first.',
+        );
+        $this->assertArrayNotHasKey(
+            'venuecity',
+            $this->meta,
+            'And the folded key must not exist at all — two keys for one field is the migration nobody ran.',
+        );
+        $this->assertSame(
+            'text:x',
+            $this->meta['_internal_note'] ?? null,
+            'An underscore-prefixed declaration is the site\'s own too: declared is declared.',
+        );
+    }
+
+    /**
      * Every way a save is REFUSED, in one place: nothing is written, nothing is
      * deleted, and no model is ever reached (simplicity S19).
      *

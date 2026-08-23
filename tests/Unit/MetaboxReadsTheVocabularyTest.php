@@ -866,6 +866,30 @@ final class MetaboxReadsTheVocabularyTest extends TestCase
         );
     }
 
+    /**
+     * The screen READS the key the save WROTE — the declared one, verbatim.
+     *
+     * The two halves are one promise: a key rule applied on the way in and on
+     * the way out still agrees with itself while disagreeing with every value
+     * the site already stored. A declared `venueCity` holds live data on the
+     * fleet under exactly that key, so a screen that reads `venuecity` shows an
+     * empty box over a full row — and the next save writes the empty box back
+     * as a second row.
+     */
+    public function testTheScreenReadsADeclaredKeyExactlyAsItWasDeclared(): void
+    {
+        $this->meta = ['venueCity' => 'Ghent'];
+
+        $html = $this->renderNative('note', ['venueCity' => 'text']);
+
+        $this->assertSame(
+            'Ghent',
+            $this->attributeValue($html, 'ntdst_fields[venueCity]'),
+            'The stored value must reach the screen. Folding the key on the READ side hides every '
+                . 'value the site wrote under the key it declared.',
+        );
+    }
+
     // ========================================================= the harness
 
     /** A generator with no hooks mounted — this file drives the entries directly. */
