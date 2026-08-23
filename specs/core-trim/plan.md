@@ -70,6 +70,8 @@ T13 writes both invariants and runs both checks (SC-7).
 
 ## Spec-premise ground-truth
 
+> Correction (Cluster B T04, 2026-08-23): the reader counts below swept the FLEET only, never core itself — `admin/RelationField.php:133` called `ntdst_get_formatted_posts()` and `services/Logger.php::clearOld()` called `whereDate()`; the provider-row sweep caught both. Treat each "Confirmed" count as fleet-only; grep `api core admin services support` before deleting.
+
 | Premise | Verdict |
 |---|---|
 | "No site uses `auto_discover`" | **Confirmed.** All five `theme-config.php` / `plugin-config.php` set `'auto_discover' => false`; daan-core, josworld-core and netdust-core load services by explicit `require_once` and say so in their headers; stride and todai use Composer PSR-4. |
