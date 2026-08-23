@@ -22,24 +22,47 @@ defined('ABSPATH') || exit;
 /**
  * Hook + filter naming conventions:
  *  - Actions: `ntdst/*` (e.g. `ntdst/core_ready`)
- *  - Database options: `ntdst_service_*`
- *  - Filters: `ntdst_service_{slug}_config` and `ntdst_service_{slug}_enabled` —
- *    the per-service extension API, keyed by service slug, matching the option
- *    prefix above.
+ *  - Filters: `ntdst/service/{slug}/config` — the ONE per-service extension
+ *    point, keyed by service slug.
  *
- * RETIRED NAMES (S9/T02, 2026-08). Before this rename the two filters above were
- * spelled `netdust_{slug}_config` and `netdust_{slug}_enabled`. There is no shim:
- * a listener on either retired name is now silently inert. Note especially that
- * the `_enabled` filter is a DENY filter, so the rename FAILS OPEN — a fork
- * carrying `add_filter` on the retired `_enabled` name to disable a service will
- * find that service booting again. The full mapping lands in
+ * RETIRED NAMES. The config filter was spelled `netdust_{slug}_config` before
+ * S9/T02, and carried the option prefix before 5.0.0 renamed it to the
+ * `ntdst/*` convention above (core-trim FR-11). There is no shim: a listener on
+ * either retired spelling is silently inert. The full mapping lands in
  * `docs/architecture/ntdst-core-migration-S9-S10.md` (S9/T13, not yet written);
  * until it exists, this paragraph is the record.
+ *
+ * THE ENABLE SWITCH IS GONE (5.0.0, core-trim FR-2). The per-service option and
+ * the per-service DENY filter that sat beside this one are removed, and so is
+ * the `isServiceEnabled()` helper that read them. That filter FAILED OPEN — a
+ * filter nobody answers returns true — so a typo in the slug was a service the
+ * site owner believed was off and was not, the wart `docs/philosophy.md` §4
+ * records. A service is off in exactly two ways now: it declares
+ * `metadata()['enabled'] => false`, or its `services.conditional` entry's
+ * condition returns false. A site that kept a service off through the retired
+ * option or the retired filter will find it booting.
  *
  * A service's config override is declared at
  * `config['services']['overrides'][$slug]`. It nests under the existing
  * `services` key rather than replacing it — `services.core`, `services.admin`
  * and `services.conditional` already live there.
+ *
+ * AN OVERRIDE KEY THAT ANSWERS TO NO SERVICE IS REFUSED (5.0.0, core-trim
+ * FR-2) — once, at `register()`, with `_doing_it_wrong()` naming the full
+ * dotted key, because that is the string the site owner greps their config for.
+ * Until 5.0.0 it was silently inert, which is a config that lies to its reader.
+ *
+ * "Answers to no service" is judged over the classes LISTED in `services.core`,
+ * `services.admin` and `services.conditional` — ALL of them, including admin
+ * entries this request skipped because `is_admin()` is false, conditionals
+ * whose condition returned false, and classes their own `metadata()` switched
+ * off. It is NOT judged over the registry. An override for a service the
+ * consumer listed and this request did not register is a correct config that
+ * is merely not in effect: refusing there would print a notice on nearly every
+ * anonymous page view of a site that has admin services, which trains the
+ * reader to ignore the one notice that matters. The cost of drawing the line
+ * at LISTED: a stale override for a still-listed but disabled service stays
+ * silent. The service's own declaration is the switch — the override is not.
  *
  * SLUG DERIVATION — read this before writing an override. `{slug}` above is NOT
  * the class name lowercased. When a service declares no `metadata()['name']`,
@@ -56,7 +79,7 @@ defined('ABSPATH') || exit;
  * and it is stated because the difference only shows on names nobody has
  * written yet: `ServiceRegistryService -> registry`, `MyServiceHandlerService ->
  * my_handler`, and `ServiceService -> ''` — an EMPTY slug, i.e. the filter
- * `ntdst_service__enabled` and the option `ntdst_service_`. Declare
+ * `ntdst/service//config`, which no consumer will ever guess. Declare
  * `metadata()['name']` on any such class rather than relying on the derivation.
  *
  * To pin a slug that the derivation would not produce, declare it —
@@ -67,23 +90,25 @@ defined('ABSPATH') || exit;
  * service meant anything by it.
  *
  * FIXED 2026-08-20 (F7). Until this release that precedence was not real. The
- * slug resolver took an optional metadata argument, and `isServiceEnabled()`
- * ran first WITHOUT it — deriving from the class name and caching that — so a
- * declared name reached the `_enabled` filter, the `_config` filter and the
- * `ntdst_service_{slug}` option only if nothing had warmed the cache before
- * it, which in the real registration flow was never. The slug is now a pure
- * function of the class, so the answer no longer depends on call order.
+ * slug resolver took an optional metadata argument, and the enable check ran
+ * first WITHOUT it — deriving from the class name and caching that — so a
+ * declared name reached the config filter only if nothing had warmed the cache
+ * before it, which in the real registration flow was never. The slug is now a
+ * pure function of the class, so the answer no longer depends on call order.
+ * 5.0.0 deleted the enable check itself, which removes the collision at its
+ * source; the purity stays, because getServiceMetadata() still runs first and
+ * getServiceSlug() still caches.
  *
  * RETIRED DERIVATION (S9/T14, 2026-08). Before this fix a `_` was inserted
  * before EVERY internal capital, so consecutive capitals each got their own
  * separator: `AdminUIService -> admin_u_i`, `APIRouterService -> a_p_i_router`.
  * Every slug that contained no consecutive capitals is UNMOVED. There is no
- * shim: a listener on a mangled key is now inert, and because `_enabled` is a
- * DENY filter that FAILS OPEN — a fork disabling a service via
- * `ntdst_service_admin_u_i_enabled` will find it booting again. This was
- * harmless internal plumbing until T02 promoted the slug into the user-facing
- * extension key, at which point the mangling became a broken public API: nobody
- * guesses `ntdst_service_admin_u_i_config` on the first try.
+ * shim: an override keyed on a mangled slug is inert — and since 5.0.0 it is
+ * also LOUD, because a key no listed service answers to is refused at
+ * register() instead of ignored. This was harmless internal plumbing until T02
+ * promoted the slug into the user-facing extension key, at which point the
+ * mangling became a broken public API: nobody guesses
+ * `ntdst/service/admin_u_i/config` on the first try.
  *
  * Boot order with equal priority is best-effort (PHP's uasort isn't stable).
  * If two services depend on each other, set their priorities — never rely on
@@ -161,6 +186,13 @@ class NTDST_Bootstrap
             }
         }
 
+        // An overrides key that answers to no LISTED service is refused here,
+        // inside the `servicesRegistered` latch, so one typo is one notice
+        // however many times register() is called (AF-14). A notice that
+        // repeats turns a config typo into a log flood, and with
+        // WP_DEBUG_DISPLAY on, into repeated output on the page.
+        $this->refuseOverridesThatNameNoService();
+
         // Always log registration summary
         ntdst_log()->debug('NTDST Bootstrap: Registered ' . count($this->services) . ' services');
 
@@ -215,8 +247,12 @@ class NTDST_Bootstrap
         // Get metadata if available
         $metadata = $this->getServiceMetadata($class);
 
-        // Check if service is enabled (3-level control)
-        if (!$this->isServiceEnabled($class, $metadata)) {
+        // A service is off when it says so. There is no second reader between
+        // the class's own declaration and this decision, and no third switch
+        // at all: 5.0.0 removed the per-service option and the DENY filter
+        // that failed open (FR-2). The other surviving way off is the
+        // `services.conditional` condition, read in register().
+        if (isset($metadata['enabled']) && !$metadata['enabled']) {
             return;
         }
 
@@ -245,6 +281,80 @@ class NTDST_Bootstrap
             'booted' => false,
             'priority' => $metadata['priority'] ?? 10,
         ];
+    }
+
+    /**
+     * Refuse every `services.overrides` key that no LISTED service answers to.
+     *
+     * The consumer's half of the rename risk. `services.overrides.securty` used
+     * to reach nothing and say nothing: the site owner edited a config,
+     * reloaded, saw no change and had nothing to grep for. The notice carries
+     * the FULL dotted key for exactly that reason.
+     *
+     * LISTED, not REGISTERED — see the class docblock. The set below is every
+     * class the consumer named in the three sector keys, whatever this request
+     * did with it. A check written against `$this->services` instead would
+     * refuse an admin service's override on every anonymous page view.
+     *
+     * @return void
+     */
+    private function refuseOverridesThatNameNoService(): void
+    {
+        $overrides = $this->config['services']['overrides'] ?? [];
+
+        if (!is_array($overrides) || $overrides === []) {
+            return;
+        }
+
+        $listed = [];
+        foreach ($this->listedServiceClasses() as $class) {
+            $listed[$this->getServiceSlug($class)] = true;
+        }
+
+        foreach (array_keys($overrides) as $key) {
+            $key = (string) $key;
+
+            if (isset($listed[$key])) {
+                continue;
+            }
+
+            _doing_it_wrong(
+                __CLASS__ . '::register',
+                "Config key services.overrides.{$key} matches no registered service — no class listed in "
+                    . "services.core, services.admin or services.conditional answers to the slug \"{$key}\". "
+                    . 'Fix the key or drop it: an override nothing reads is a setting that lies to its reader.',
+                '5.0.0',
+            );
+        }
+    }
+
+    /**
+     * Every class the consumer LISTED, across all three sector keys.
+     *
+     * Deliberately blind to `is_admin()`, to a conditional's condition and to a
+     * class's own `enabled` declaration: this answers "did the consumer name
+     * this service at all", which is the only question a dead override key is
+     * asking. Non-string entries are dropped rather than refused — a malformed
+     * services list is registerService()'s notice to give, not this one's.
+     *
+     * @return list<string>
+     */
+    private function listedServiceClasses(): array
+    {
+        $services = $this->config['services'] ?? [];
+
+        $classes = array_merge(
+            array_values((array) ($services['core'] ?? [])),
+            array_values((array) ($services['admin'] ?? [])),
+        );
+
+        foreach ((array) ($services['conditional'] ?? []) as $spec) {
+            if (is_array($spec) && isset($spec['service'])) {
+                $classes[] = $spec['service'];
+            }
+        }
+
+        return array_values(array_filter($classes, 'is_string'));
     }
 
     // ========================================
@@ -425,46 +535,18 @@ class NTDST_Bootstrap
     }
 
     /**
-     * Check if service is enabled
-     *
-     * @param string $class Service class name
-     * @param array $metadata Service metadata
-     * @return bool
-     */
-    private function isServiceEnabled(string $class, array $metadata): bool
-    {
-        // Check metadata
-        if (isset($metadata['enabled']) && !$metadata['enabled']) {
-            return false;
-        }
-
-        // Check filter
-        $slug = $this->getServiceSlug($class);
-        $enabled = apply_filters("ntdst_service_{$slug}_enabled", true);
-
-        if (!$enabled) {
-            return false;
-        }
-
-        // Check database option
-        $db_enabled = get_option("ntdst_service_{$slug}", '1');
-
-        return $db_enabled === '1';
-    }
-
-    /**
      * The slug for a service — a PURE FUNCTION OF THE CLASS, cached.
      *
      * It takes no metadata argument, and that is the fix for F7. It used to,
      * and the answer therefore depended on WHICH question a caller asked
-     * first: `isServiceEnabled()` resolved the slug with no metadata, cached
-     * the class-name derivation, and every later metadata-aware call was
-     * served that cached answer. A service could declare `name` and watch the
-     * `ntdst_service_{slug}_enabled` filter, the `_config` filter and the
-     * `ntdst_service_{slug}` option all keep answering to a name it never
-     * chose. A consumer wrote a five-line comment about the surprise rather
-     * than a `name`. A slug that depends on call order cannot be pinned by
-     * anything, so the argument is gone and the declaration is read here.
+     * first: the enable check (deleted in 5.0.0) resolved the slug with no
+     * metadata, cached the class-name derivation, and every later
+     * metadata-aware call was served that cached answer. A service could
+     * declare `name` and watch its config filter, its DENY filter and its
+     * option all keep answering to a name it never chose. A consumer wrote a
+     * five-line comment about the surprise rather than a `name`. A slug that
+     * depends on call order cannot be pinned by anything, so the argument is
+     * gone and the declaration is read here.
      *
      * Only a DECLARED name pins the slug — see declaredServiceName(). The
      * `name` in a metadata ARRAY is not the same thing: getServiceMetadata()
@@ -537,18 +619,6 @@ class NTDST_Bootstrap
     }
 
     /**
-     * Get the declared config override for a service
-     * PERFORMANCE: Direct lookup instead of filter chain
-     *
-     * @param string $slug Service slug
-     * @return array Service configuration override
-     */
-    public function getServiceConfig(string $slug): array
-    {
-        return $this->serviceConfigCache[$slug] ?? [];
-    }
-
-    /**
      * Register config filter for a service (lazy loading)
      * PERFORMANCE: Only registers filter when service actually boots
      *
@@ -567,7 +637,7 @@ class NTDST_Bootstrap
         $serviceConfig = $this->serviceConfigCache[$slug];
 
         // Register the filter with cached config (no closure over $this->config)
-        add_filter("ntdst_service_{$slug}_config", function ($defaults) use ($serviceConfig) {
+        add_filter("ntdst/service/{$slug}/config", function ($defaults) use ($serviceConfig) {
             return array_merge($defaults, $serviceConfig);
         }, 1);
     }
@@ -598,51 +668,5 @@ class NTDST_Bootstrap
         }
 
         return $value;
-    }
-
-    /**
-     * Get all registered services
-     *
-     * @return array
-     */
-    public function getServices(): array
-    {
-        return $this->services;
-    }
-
-    /**
-     * Get all booted services
-     *
-     * @return array
-     */
-    public function getBootedServices(): array
-    {
-        return $this->bootedServices;
-    }
-
-    /**
-     * Check if a service is registered through this Bootstrap.
-     *
-     * Note: this is Bootstrap-scope only. Services registered directly via
-     * ntdst_set() (e.g. repositories in stride-core.php) are not tracked here.
-     * To check the DI container, use ntdst_container()->has($class).
-     *
-     * @param string $class Service class name
-     * @return bool
-     */
-    public function hasService(string $class): bool
-    {
-        return isset($this->services[$class]);
-    }
-
-    /**
-     * Check if a service is booted
-     *
-     * @param string $class Service class name
-     * @return bool
-     */
-    public function isBooted(string $class): bool
-    {
-        return isset($this->services[$class]) && $this->services[$class]['booted'];
     }
 }

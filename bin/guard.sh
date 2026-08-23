@@ -86,7 +86,24 @@ fi
 #         `discoverServicesInPath` needs no term: `discoverServices` is a
 #         substring of it. All four are pinned bare — no other word contains
 #         them — which mirrors PackageBootIntegrityTest's rows exactly.
-REMOVED=$(grep -rnE "discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
+# v5.0.0 core-trim: the per-service enable switch and the four read-only copies
+#         of the service registry (FR-2). `ntdst_service_` is swept as a
+#         PREFIX, and that is the point: it is the shared stem of the retired
+#         option `ntdst_service_{slug}`, the retired DENY filter
+#         `ntdst_service_{slug}_enabled` and the retired config filter
+#         `ntdst_service_{slug}_config`, and every one of them is interpolated
+#         (`"ntdst_service_{$slug}_enabled"`), so a row per full name would
+#         match nothing. The stem is the only shape a sweep can see. The enable
+#         switch failed OPEN — a filter nobody answers returns true — so a
+#         half-removal that leaves one interpolation behind is a service a site
+#         believes is off and is not.
+#         getServiceConfig / getBootedServices / hasService / isBooted had zero
+#         readers across daan, josworld, stride, todai and netdust: a second,
+#         read-only copy of the registry that could disagree with the original.
+#         All five are pinned bare and mirror PackageBootIntegrityTest's rows.
+#         That sweep also reads README.md and exempts its migration ROWS; this
+#         one greps *.php only, so it needs no exemption.
+REMOVED=$(grep -rnE "discoverServices|getClassNameFromFile|auto_discover|discovery_paths|ntdst_service_|getServiceConfig|getBootedServices|hasService|isBooted|ntdst_api_action|ntdst_router|ntdst_route\(|NTDST_Router|NTDST_Endpoints|publicSurface|opaqueSurface|forgetSurface|NtdstRestSurfaceTest|::surface\(|->surface\(|\\\$surface|getDefaultSanitizer|sanitizeRepeater|sanitizeBoolean|sanitizeJson|sanitizeNestedArray|sanitizeDate|sanitizeAttachmentId|sanitize_field\\(|restSubFields|restSchemaFor|signed_int|'type' *=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|=> *'(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'|NTDST_FieldType\('(integer|signed_int|number|double|decimal|boolean|string|longtext|wysiwyg|content|datetime|person|post_relation)'" \
     --include='*.php' . \
     | grep -v /vendor/ \
     | grep -vE "^(\./)?tests/|^(\./)?specs/" \
