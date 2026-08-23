@@ -264,6 +264,56 @@ final class NtdstPagesTest extends TestCase
         }
     }
 
+    /**
+     * @dataProvider malformedParamProvider
+     */
+    public function testAQueryVarSuppliedParamMustLookLikeTheRuleWouldHaveProducedIt(
+        array $params,
+        string $why,
+    ): void {
+        // C-2. `ntdst_page` and `ntdst_p_*` are PUBLIC query vars — the
+        // query_vars filter has to name them for the rewrite rule to survive,
+        // and that also lets anyone hand-write them onto any URL on the site.
+        // `/?ntdst_page=0&ntdst_p_slug[]=x` never went through the rule, so the
+        // value never went through `([^/]+)`. The dispatcher checks the shape
+        // the rule would have produced before it calls anybody.
+        $wp_query = new class {
+            public bool $notFound = false;
+
+            public function set_404(): void
+            {
+                $this->notFound = true;
+            }
+        };
+        $GLOBALS['wp_query'] = $wp_query;
+
+        $ran = 0;
+        $pages = $this->terminatingPages();
+        $pages->path('/card/:slug', function () use (&$ran): string {
+            $ran++;
+
+            return __FILE__;
+        });
+
+        $this->dispatch($pages, 0, 'GET', $params);
+
+        $this->assertSame(0, $ran, "the callback must not run: {$why}.");
+        $this->assertTrue($wp_query->notFound, "a param the rule could not have produced is a 404: {$why}.");
+        $this->assertSame([404], $this->statuses);
+        $this->assertNull($this->templateIncludeFilter());
+    }
+
+    /** @return array<string, array{0: array<string, mixed>, 1: string}> */
+    public static function malformedParamProvider(): array
+    {
+        return [
+            'an array' => [['slug' => ['x']], '`?ntdst_p_slug[]=x` is not a string the regex could match'],
+            'a slash' => [['slug' => 'a/b'], '`([^/]+)` cannot produce a value containing a slash'],
+            'empty' => [['slug' => ''], '`([^/]+)` matches one character or more'],
+            'absent' => [[], 'every declared placeholder is present in a URL the rule matched'],
+        ];
+    }
+
     public function testTheRuleSetFlushesOnceAndNotAgain(): void
     {
         $pages = new NTDST_Pages();

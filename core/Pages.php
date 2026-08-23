@@ -187,12 +187,33 @@ class NTDST_Pages
             return;
         }
 
+        // `ntdst_page` and `ntdst_p_*` are PUBLIC query vars — naming them on
+        // the query_vars filter is what stops WordPress dropping them, and it
+        // also means anyone can hand-write them onto any URL on the site
+        // (`/?ntdst_page=0&ntdst_p_slug[]=x`). Such a request never went
+        // through the rewrite rule, so its params never went through
+        // `([^/]+)`. Each one must look like what the rule WOULD have
+        // produced — present, a non-empty scalar, no slash — or this is not a
+        // request to this route at all.
         $params = [];
         foreach ($route['params'] as $name) {
             $value = get_query_var('ntdst_p_' . $name);
-            if ($value !== '' && $value !== null) {
-                $params[$name] = $value;
+
+            if (!is_scalar($value)) {
+                $this->notFound();
+
+                return;
             }
+
+            $value = (string) $value;
+
+            if ($value === '' || str_contains($value, '/')) {
+                $this->notFound();
+
+                return;
+            }
+
+            $params[$name] = $value;
         }
 
         $result = call_user_func($route['callback'], $params);
