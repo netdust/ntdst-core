@@ -112,6 +112,80 @@ final class ResponseTrimTest extends TestCase
         $this->assertFalse(function_exists('ntdst_redirect'));
     }
 
+    // -----------------------------------------------------------------------
+    // redirect() carries a status — 302 is the default, not the only answer
+    // -----------------------------------------------------------------------
+
+    public function testRedirectStillDefaultsToATemporaryHop(): void
+    {
+        $this->assertRedirectedWith('https://example.test/dashboard', 302, static function (): void {
+            (new NTDST_Response())->redirect('https://example.test/dashboard');
+        });
+    }
+
+    public function testAPermanentStatusGoesStraightToWordPress(): void
+    {
+        // 301 is the case the fleet writes raw wp_redirect() for today.
+        $this->assertRedirectedWith('https://example.test/new-home', 301, static function (): void {
+            (new NTDST_Response())->redirect('https://example.test/new-home', 301);
+        });
+    }
+
+    public function testANonRedirectStatusWarnsAndFallsBackTo302(): void
+    {
+        // Fail-SAFE, not fatal: a 200 handed to a redirect is a caller bug,
+        // and the visitor still gets a working hop while the log names it.
+        $wrong = [];
+        Functions\when('_doing_it_wrong')->alias(
+            static function (string $fn, string $message, $version = '') use (&$wrong): void {
+                $wrong[] = [$fn, $message];
+            }
+        );
+
+        $this->assertRedirectedWith('https://example.test/login', 302, static function (): void {
+            (new NTDST_Response())->redirect('https://example.test/login', 200);
+        });
+
+        $this->assertCount(1, $wrong, 'A non-3xx status must announce itself through _doing_it_wrong().');
+        $this->assertSame('NTDST_Response::redirect', $wrong[0][0]);
+        $this->assertStringContainsString('200', $wrong[0][1], 'The warning must name the status it refused.');
+    }
+
+    public function testTheErrorQueryArgStillRidesAlongOnACustomStatus(): void
+    {
+        Functions\when('add_query_arg')->alias(
+            static fn (string $key, string $value, string $url): string => $url . '?' . $key . '=' . rawurlencode($value)
+        );
+
+        $this->assertRedirectedWith('https://example.test/login?error=Invalid%20token.', 303, static function (): void {
+            (new NTDST_Response())->error('Invalid token.')->redirect('https://example.test/login', 303);
+        });
+    }
+
+    /**
+     * redirect() ends in exit, which would end phpunit with it — so the seam
+     * is wp_safe_redirect() itself: it records what it was handed and throws,
+     * and the throw unwinds before the exit on the next line is reached.
+     */
+    private function assertRedirectedWith(string $url, int $status, callable $call): void
+    {
+        $seen = null;
+        Functions\when('wp_safe_redirect')->alias(static function ($u, $s = 302) use (&$seen): void {
+            $seen = [(string) $u, (int) $s];
+
+            throw new NtdstRedirectReached();
+        });
+
+        try {
+            $call();
+            $this->fail('redirect() returned instead of terminating.');
+        } catch (NtdstRedirectReached) {
+            // Expected: the seam fired, so the exit was never reached.
+        }
+
+        $this->assertSame([$url, $status], $seen, 'wp_safe_redirect() was handed the wrong URL or status.');
+    }
+
     public function testTheSurvivingSurfaceIsStillThere(): void
     {
         // The other half of a trim test: what must NOT go with it.
@@ -429,3 +503,6 @@ final class ResponseTrimTest extends TestCase
         }
     }
 }
+
+/** The exit seam: wp_safe_redirect() throws this so redirect()'s exit is never reached. */
+final class NtdstRedirectReached extends RuntimeException {}

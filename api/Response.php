@@ -139,21 +139,40 @@ class NTDST_Response
     // =========================================================================
 
     /**
-     * Redirect to URL
+     * Redirect to URL, with the status the caller means.
      *
-     * Uses wp_safe_redirect() for internal URLs.
+     * Goes through wp_safe_redirect(), so an EXTERNAL host is allowed only
+     * when WordPress's own `allowed_redirect_hosts` filter says so — that
+     * filter is the sanctioned way to open one, not a raw wp_redirect().
      * If error is set, appends ?error= query param to the URL.
      *
+     * Fails SAFE on a status that is not a redirect: it says so through
+     * _doing_it_wrong() and hops with 302 anyway, because a caller's typo
+     * must not strand the visitor on a blank page.
+     *
+     * @param int $status Any 3xx (300-308). Anything else warns and becomes 302.
+     *
      * @example ntdst_response()->redirect(home_url('/dashboard'));
+     * @example ntdst_response()->redirect(home_url('/new-home'), 301);
      * @example ntdst_response()->error('Invalid token.')->redirect(home_url('/login'));
      */
-    public function redirect(string $url): never
+    public function redirect(string $url, int $status = 302): never
     {
+        if ($status < 300 || $status > 308) {
+            _doing_it_wrong(
+                __METHOD__,
+                sprintf('%d is not a redirect status. Pass a 3xx (300-308); falling back to 302.', $status),
+                '5.0.0'
+            );
+
+            $status = 302;
+        }
+
         if ($this->error) {
             $url = add_query_arg('error', $this->error, $url);
         }
 
-        wp_safe_redirect($url, 302);
+        wp_safe_redirect($url, $status);
         exit;
     }
 
