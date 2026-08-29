@@ -1210,6 +1210,125 @@ class NTDST_Data_Model
     }
 
     /**
+     * Query builder - where NOT IN clause
+     *
+     * whereIn()'s negation, and it keeps whereIn()'s split: 'ID' is a core
+     * argument (post__not_in), everything else a meta clause. A meta key named
+     * 'ID' is not a thing, and a caller excluding posts who got a meta_query
+     * would silently match every row.
+     *
+     * @param string $field Field name ('ID' for post IDs)
+     * @param array $values Array of values
+     *
+     * Example:
+     * $model->whereNotIn('status', ['cancelled', 'refunded'])->get();
+     */
+    public function whereNotIn(string $field, array $values): self
+    {
+        if ($field === 'ID') {
+            $this->query_args['post__not_in'] = array_map('intval', $values);
+        } else {
+            if (!isset($this->query_args['meta_query'])) {
+                $this->query_args['meta_query'] = [];
+            }
+
+            $this->query_args['meta_query'][] = [
+                'key' => $this->prefixMetaKey($field),
+                'value' => $values,
+                'compare' => 'NOT IN',
+            ];
+        }
+
+        return $this;
+    }
+
+    /**
+     * Query builder - the meta key is ABSENT
+     *
+     * NOT EXISTS carries no value: it asks whether the row has the key at all.
+     * whereNot($field, '') is a different question — it matches rows that HAVE
+     * the key holding an empty string, and misses every row that never had it.
+     *
+     * Example:
+     * $model->whereMissing('archived_at')->get();
+     */
+    public function whereMissing(string $field): self
+    {
+        if (!isset($this->query_args['meta_query'])) {
+            $this->query_args['meta_query'] = [];
+        }
+
+        $this->query_args['meta_query'][] = [
+            'key' => $this->prefixMetaKey($field),
+            'compare' => 'NOT EXISTS',
+        ];
+
+        return $this;
+    }
+
+    /**
+     * Query builder - a GROUPED meta clause with its own relation.
+     *
+     * The flat `where*` methods each append one clause, and WP_Query joins the
+     * flat list with AND. A constraint like "not archived, and either confirmed
+     * or still pending" needs a level the flat list cannot express, and 5.0.0's
+     * answer to the removed orWhere() — "write a meta_query with an explicit
+     * relation" — sent the caller OUT of the chain to write the whole argument
+     * bag by hand, prefixing its own meta keys. That is the second query path
+     * FR-4 removed, re-assembled at the call site.
+     *
+     * The callback is handed a CHILD BUILDER of this same model — same type,
+     * schema, prefix and scopes — so a clause added inside the group goes
+     * through the same prefixMetaKey() and the same scope table as one added
+     * outside it. Only the child's meta clauses are taken; nothing else it sets
+     * (limit, orderBy, a core-field where) is read, because a group is a
+     * meta_query clause and nothing else.
+     *
+     * An unknown relation THROWS, like scope()'s unknown name: defaulting to
+     * AND would let a typo'd 'or' quietly NARROW a query the caller wrote to
+     * widen it, with nothing at the call site to see.
+     *
+     * An EMPTY group is a no-op — a relation with no conditions is not a
+     * neutral clause to WP_Query, it is a malformed one — so a callback whose
+     * every branch was skipped leaves the query untouched.
+     *
+     * @param string $relation AND or OR (case-insensitive)
+     * @param callable $build fn(NTDST_Data_Model $group): void
+     *
+     * Example:
+     * $model->whereMissing('archived_at')->whereGroup('OR', function ($g) {
+     *     $g->where('status', 'confirmed')->where('status', 'pending');
+     * })->get();
+     */
+    public function whereGroup(string $relation, callable $build): self
+    {
+        $relation = strtoupper($relation);
+
+        if (!in_array($relation, ['AND', 'OR'], true)) {
+            throw new InvalidArgumentException(
+                "whereGroup() relation must be AND or OR, '{$relation}' given.",
+            );
+        }
+
+        $child = new static($this->post_type, $this->schema, $this->meta_prefix, $this->scopes);
+        $build($child);
+
+        $clauses = $child->query_args['meta_query'] ?? [];
+
+        if ($clauses === []) {
+            return $this;
+        }
+
+        if (!isset($this->query_args['meta_query'])) {
+            $this->query_args['meta_query'] = [];
+        }
+
+        $this->query_args['meta_query'][] = ['relation' => $relation] + $clauses;
+
+        return $this;
+    }
+
+    /**
      * Query builder - limit
      */
     public function limit(int $limit): self

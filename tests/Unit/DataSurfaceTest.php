@@ -191,7 +191,10 @@ final class DataSurfaceTest extends TestCase
             'syncTerms'   => ['syncTerms', 'wp_set_post_terms($id, $terms, $tax, false)'],
             'detachTerms' => ['detachTerms', 'wp_set_post_terms($id, $remaining, $tax, false)'],
             'whereDate'   => ['whereDate', "a date_query on the model's own query args"],
-            'orWhere'     => ['orWhere', 'a meta_query with an explicit relation'],
+            // 5.1.0 gave this advice a destination inside the chain. The name
+            // stays removed: whereGroup() takes the relation as an argument and
+            // validates it, where orWhere() implied one.
+            'orWhere'     => ['orWhere', "whereGroup('OR', fn(\$g) => …)"],
         ];
     }
 
@@ -210,7 +213,8 @@ final class DataSurfaceTest extends TestCase
         $chainAndCrud = [
             '__construct',
             'all', 'count', 'first', 'get', 'paginate',
-            'limit', 'orderBy', 'scope', 'where', 'whereIn', 'whereNot', 'whereTax',
+            'limit', 'orderBy', 'scope', 'where', 'whereGroup', 'whereIn', 'whereMissing',
+            'whereNot', 'whereNotIn', 'whereTax',
             'withMeta', 'withTerms',
             'create', 'delete', 'deleteMeta', 'find', 'getMeta',
             'update', 'updateMeta', 'updateMetaBatch',

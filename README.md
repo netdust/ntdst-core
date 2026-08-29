@@ -44,6 +44,33 @@ own commands — see `### 5.0.0 — BREAKING` for the migration table.
 
 ## Versions
 
+### 5.1.0 — grouped meta clauses
+
+Additive. Nothing is renamed or removed, so `^5.0` consumers upgrade without
+reading further.
+
+Three chain methods, all on `NTDST_Data_Model`:
+
+| Method | Emits |
+|---|---|
+| `whereGroup(string $relation, callable $build)` | one NESTED `meta_query` clause: `['relation' => 'OR', …the child's clauses]`. `$build` is handed a child builder of the SAME model — same type, schema, prefix and scopes — so keys inside the group get the model's prefix and a `scope()` call resolves there too. Groups nest. Only the child's meta clauses are read; a `whereTax`/`limit`/`orderBy`/core-field `where` inside the callback is ignored. A relation other than `AND`/`OR` (case-insensitive) throws `InvalidArgumentException`; an empty group is a no-op |
+| `whereMissing(string $field)` | `['key' => <prefixed>, 'compare' => 'NOT EXISTS']` — the key is ABSENT. Not the same question as `whereNot($field, '')`, which matches rows that HAVE the key holding an empty string |
+| `whereNotIn(string $field, array $values)` | `whereIn()`'s negation, with its split kept: `'ID'` sets `post__not_in`, anything else a `'NOT IN'` meta clause |
+
+```php
+ntdst_data()->get('registration')
+    ->whereMissing('archived_at')
+    ->whereGroup('OR', function ($g) {
+        $g->where('status', 'confirmed')->where('status', 'pending');
+    })
+    ->get();
+```
+
+5.0.0's query-API migration table told the caller to write "a `meta_query` with
+an explicit relation" by hand. That sent them OUT of the chain to assemble the
+argument bag and prefix their own meta keys — FR-4's second read path,
+reassembled at the call site. The row now points here instead.
+
 ### 4.0.0 — adopting it
 
 Read every line before upgrading. Nothing here is shimmed.
@@ -318,6 +345,11 @@ schema `format` would validate stored legacy values and read them back as
 | `publicRows()` | `ntdst_data()->get('gig')->where(...)->withMeta()->get()` and project in the caller, or read WordPress's own collection at `/wp/v2/<rest_base>` |
 | `publicRow()` | `ntdst_data()->get('gig')->getMeta($id, null, null, $status)`, or `/wp/v2/<rest_base>/{id}`. `$status` is the FOURTH parameter (`$key`, `$default`, then `$status`) and defaults to `'publish'` — a caller that passed `'any'` or `['publish']` to `publicRow()` passes it here, or an unpublished row reads back as `$default` and nothing reports it |
 | `getPublicShape()` | `restFields()` — the fields the model declares may leave it. It is a CEILING, not a shape: which of them an exposure actually emits is the exposure's decision |
+
+A scope narrows through the same chain the caller uses, and from 5.1.0 that
+chain can express a GROUPED clause — so a named fragment like "active for the
+admin list" (not archived, and either confirmed or pending) is writable as one
+scope instead of a hand-built `meta_query` at the call site. See `### 5.1.0`.
 
 **Field types — one registry, thirteen names retired.**
 
@@ -634,7 +666,7 @@ the API.
 | `getPostTerms()` | `->withTerms()`, or `wp_get_object_terms()` |
 | `attachTerms()`, `syncTerms()`, `detachTerms()` | `wp_set_object_terms()` — one call, WordPress's own |
 | `whereDate()` | `->where()` with a `date_query`, or `WP_Query` args |
-| `orWhere()` | a `meta_query` with `'relation' => 'OR'` |
+| `orWhere()` | a `meta_query` with `'relation' => 'OR'` — from 5.1.0, `->whereGroup('OR', fn($g) => …)` writes that clause from inside the chain |
 
 **Model lifecycle hooks (FR-11).** Same arguments, `ntdst/*` names. There is no
 shim: a listener on a retired name is silently inert. josworld's integration
