@@ -44,6 +44,30 @@ own commands — see `### 5.0.0 — BREAKING` for the migration table.
 
 ## Versions
 
+### 5.1.1 — FieldTypes fixes
+
+Additive/behaviour-correcting. `^5.1` consumers upgrade without a code change.
+Both changes only affect what a consumer READS BACK from now on — nothing
+already stored is rewritten.
+
+- **`array`/`json` string leaves keep their newlines.** `nested()` sanitized
+  every string leaf with `sanitize_text_field()`, which WordPress collapses
+  `\n`/`\r` out of. A multiline value stored inside a `json` field (an admin
+  note's `content`) came back flattened. It now runs through
+  `sanitize_textarea_field()` — the same tag and percent-encoding stripping,
+  newlines survive. This also means a consumer's own
+  `sanitize_textarea_field()` on the same `register_post_meta()` callback
+  composes on top of the registry's, instead of a stricter rule silently
+  overwriting it.
+- **`repeater()` decodes the stored JSON-string shape.** It refused anything
+  that was not already a PHP array. A legacy/raw write, or the
+  `register_post_meta()` sanitize_callback re-save, can hand it the JSON
+  STRING a metabox textarea posts — the same shape `json`'s `toArray()`
+  already decodes. It now runs that same `decode()` first: a string that
+  decodes to a list of rows sanitizes normally; anything else (garbage, an
+  object, a scalar) still answers `[]`. Converting an existing `json` field to
+  `repeater` no longer empties every row it had stored.
+
 ### 5.1.0 — grouped meta clauses
 
 Additive. Nothing is renamed or removed, so `^5.0` consumers upgrade without

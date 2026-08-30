@@ -4,6 +4,21 @@ The migration tables live in `README.md` under `## Versions` — this file is th
 short answer to "what changed in this tag". Nothing here replaces reading that
 section before a MAJOR bump.
 
+## 5.1.1
+
+Additive/behaviour-correcting. `^5.1` consumers upgrade without a code change.
+
+### Fixed
+
+- `array`/`json` field values kept flattening a stored multiline string on
+  every read — `nested()` ran each string leaf through `sanitize_text_field()`,
+  which collapses `\n`/`\r`, so a `json` field holding free-form content (an
+  admin note's `content`) lost its line breaks on every save.
+- `repeater()` silently emptied a field that stored the JSON-STRING shape a
+  metabox textarea posts (or a raw/legacy write left behind) — it refused
+  anything that was not already a PHP array, so converting an existing `json`
+  field to `repeater` (a `speakers` field) reduced every stored value to `[]`.
+
 ## 5.1.0
 
 Additive. `^5.0` consumers upgrade without a code change.
