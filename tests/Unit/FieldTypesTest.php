@@ -118,6 +118,14 @@ final class FieldTypesTest extends TestCase
         ],
     ];
 
+    /** A repeater with name/role cells — Stride's `speakers` shape (Ruling 106). */
+    private const SPEAKERS = [
+        'sub_fields' => [
+            'name' => ['type' => 'text'],
+            'role' => ['type' => 'text'],
+        ],
+    ];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -1297,5 +1305,39 @@ final class FieldTypesTest extends TestCase
     public function testRepeaterRefusesWhatIsNotRows(): void
     {
         $this->assertSame([], $this->sanitize('repeater', ['not-a-row'], self::REPEATER));
+    }
+
+    /**
+     * repeater() decodes the stored JSON-string shape before its is_array()
+     * check — the same decode() the `json` type runs at toArray() (:569-572).
+     * A legacy/raw write (or update_post_meta() through
+     * register_post_meta()'s sanitize_callback) hands the repeater the JSON
+     * STRING the metabox posts and history stored (Stride Ruling 106:
+     * converting an existing json field to `repeater` silently reduced every
+     * stored `speakers` string to []). A string that decodes to a list of rows
+     * proceeds through the normal per-cell sanitizing; anything else — garbage,
+     * a JSON object, a JSON scalar — still answers [].
+     */
+    public function testRepeaterDecodesTheStoredJsonStringShape(): void
+    {
+        $json = '[{"name":"<b>Ann</b>","role":"host"},{"name":"Bo","role":"guest"}]';
+
+        $this->assertSame(
+            [
+                ['name' => 'text:Ann', 'role' => 'text:host'],
+                ['name' => 'text:Bo', 'role' => 'text:guest'],
+            ],
+            $this->sanitize('repeater', $json, self::SPEAKERS),
+        );
+
+        // Garbage still answers [] — decode() already refuses it.
+        $this->assertSame([], $this->sanitize('repeater', 'not json', self::SPEAKERS));
+        $this->assertSame([], $this->sanitize('repeater', '"just a string"', self::SPEAKERS));
+
+        // An already-array input is unchanged behaviour.
+        $this->assertSame(
+            [['name' => 'text:Ann', 'role' => 'text:host']],
+            $this->sanitize('repeater', [['name' => '<b>Ann</b>', 'role' => 'host']], self::SPEAKERS),
+        );
     }
 }

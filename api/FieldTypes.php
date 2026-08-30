@@ -651,14 +651,26 @@ final class NTDST_FieldTypes
      * the row whose only content was refused: `url 'javascript:x'` is '', and a
      * row kept on pass 1 but dropped on pass 2 is one the REST re-save deletes.
      *
+     * A raw/legacy write (or the register_post_meta() sanitize_callback
+     * re-save) can hand this the JSON STRING a metabox textarea posts and
+     * history stored — the same shape the `json` type accepts at toArray()
+     * (:569-572). decode() answers that one question ("what array do these
+     * stored bytes mean") for reads and writes alike, so a string that decodes
+     * to a list of rows proceeds here exactly as an already-array input would;
+     * anything else — an object, a scalar, garbage — is still the empty answer
+     * (Stride Ruling 106: converting an existing `json` field to `repeater`
+     * silently reduced every stored string value to []).
+     *
      * @param  array<string, mixed> $config the repeater's own declaration
      * @return list<array<array-key, mixed>>
      */
     private static function repeater(mixed $rows, array $config): array
     {
-        if (!is_array($rows)) {
-            return [];
-        }
+        // decode() is already the total function: an array is itself, a
+        // decodable JSON-array/object string becomes its array, anything else
+        // (garbage, a scalar) is []. No separate is_array() guard is needed
+        // after it — an empty decode is a rows list with nothing in it.
+        $rows = self::decode($rows);
 
         $subFields = self::declarations($config['sub_fields'] ?? null);
         $sanitized = [];
