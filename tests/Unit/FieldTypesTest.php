@@ -587,15 +587,15 @@ final class FieldTypesTest extends TestCase
             ]],
             'array' => [[
                 'name' => 'array', 'config' => [],
-                'valid' => ['a' => 'x'], 'validAnswer' => ['a' => 'text:x'],
-                'hostile' => '{"a":"<b>x"}', 'hostileAnswer' => ['a' => 'text:x'],
+                'valid' => ['a' => 'x'], 'validAnswer' => ['a' => 'textarea:x'],
+                'hostile' => '{"a":"<b>x"}', 'hostileAnswer' => ['a' => 'textarea:x'],
                 'empty' => '', 'emptyAnswer' => [],
                 'schema' => null, 'control' => 'json', 'cell' => true,
             ]],
             'json' => [[
                 'name' => 'json', 'config' => [],
-                'valid' => '{"k":"v"}', 'validAnswer' => ['k' => 'text:v'],
-                'hostile' => '{"k":"<b>v"}', 'hostileAnswer' => ['k' => 'text:v'],
+                'valid' => '{"k":"v"}', 'validAnswer' => ['k' => 'textarea:v'],
+                'hostile' => '{"k":"<b>v"}', 'hostileAnswer' => ['k' => 'textarea:v'],
                 'empty' => '', 'emptyAnswer' => [],
                 'schema' => null, 'control' => 'json', 'cell' => true,
             ]],
@@ -1054,17 +1054,22 @@ final class FieldTypesTest extends TestCase
         $this->assertSame('2026-08-22', $this->sanitize('date', '2026-08-22'));
     }
 
-    /** array accepts the JSON string the metabox textarea posts. */
+    /**
+     * array accepts the JSON string the metabox textarea posts. `array` and
+     * `json` sanitize the same (see build()'s docblock) — a string leaf goes
+     * through sanitize_textarea_field(), the same fix and the same reason as
+     * json's (Stride Ruling 56): newlines survive, markup does not.
+     */
     public function testArrayAcceptsAJsonStringAndSanitizesKeysAndLeaves(): void
     {
-        $this->assertSame(['ab' => 'text:v'], $this->sanitize('array', '{"A<b>!":"v"}'));
+        $this->assertSame(['ab' => 'textarea:v'], $this->sanitize('array', '{"A<b>!":"v"}'));
         $this->assertSame([], $this->sanitize('array', 'not json'));
         $this->assertSame(
             ['n' => 5, 'f' => 1.5, 'b' => true, 'z' => null],
             $this->sanitize('array', ['n' => 5, 'f' => 1.5, 'b' => true, 'z' => null]),
         );
         $this->assertSame(
-            ['outer' => ['inner' => 'text:x']],
+            ['outer' => ['inner' => 'textarea:x']],
             $this->sanitize('array', ['outer' => ['inner' => '<i>x</i>']]),
         );
     }
@@ -1074,7 +1079,41 @@ final class FieldTypesTest extends TestCase
     {
         $this->assertSame([], $this->sanitize('json', 'not json'));
         $this->assertSame([], $this->sanitize('json', '"scalar"'));
-        $this->assertSame(['k' => 'text:v'], $this->sanitize('json', ['k' => '<b>v']));
+        $this->assertSame(['k' => 'textarea:v'], $this->sanitize('json', ['k' => '<b>v']));
+    }
+
+    /**
+     * A string leaf is a textarea's answer, not a text input's: WordPress's
+     * sanitize_text_field() COLLAPSES "\n" and "\r" to a single space, so a
+     * multiline note stored as `json` (Stride Ruling 56: an admin note's
+     * `content`) came back flattened on every read. sanitize_textarea_field()
+     * strips the same tags and percent-encoding but keeps the newlines — it is
+     * WordPress's own textarea rule, and it composes on top of a consumer's own
+     * sanitize_textarea_field() instead of overwriting it (api/Data.php
+     * docblock: the registry sanitizer runs after the declared one).
+     *
+     * Keys are still sanitize_key()'d, and typed scalars (bool/int/float/null)
+     * still pass through untouched — this only changes what a STRING leaf goes
+     * through.
+     */
+    public function testJsonStringLeavesKeepNewlinesViaSanitizeTextareaField(): void
+    {
+        $this->assertSame(
+            ['note' => "textarea:regel 1.\n\nregel 3."],
+            $this->sanitize('json', ['note' => "regel 1.\n\nregel 3."]),
+        );
+
+        // Markup is still stripped — sanitize_textarea_field() strips tags too.
+        $this->assertSame(
+            ['note' => "textarea:regel 1.\n\nregel 3."],
+            $this->sanitize('json', ['note' => "<b>regel 1.</b>\n\n<i>regel 3.</i>"]),
+        );
+
+        // Typed scalars are untouched by either sanitizer.
+        $this->assertSame(
+            ['b' => true, 'n' => 3, 'f' => 1.5, 'z' => null],
+            $this->sanitize('json', ['b' => true, 'n' => 3, 'f' => 1.5, 'z' => null]),
+        );
     }
 
     /** relation wraps a single pick; gallery is a multi-pick and refuses one. */

@@ -606,6 +606,17 @@ final class NTDST_FieldTypes
      * scalars (a JSON `false` stays false, not "") and sanitizes the keys,
      * because a key is a meta-ish identifier, not content.
      *
+     * A string leaf is cleaned with sanitize_textarea_field(), not
+     * sanitize_text_field() — WordPress's own textarea rule: same tag and
+     * percent-encoding stripping, but "\n"/"\r" survive instead of collapsing
+     * to a single space. `array`/`json` are the only vocabulary entries whose
+     * leaves are free-form content a consumer may have written multiline (an
+     * admin note's `content`, Stride Ruling 56) rather than a single-line
+     * value, and this also means a consumer's own sanitize_textarea_field()
+     * composes on top of this instead of being overwritten by a stricter rule
+     * (api/Data.php docblock: the registry sanitizer runs after the declared
+     * one).
+     *
      * @param  array<array-key, mixed> $value
      * @return array<array-key, mixed>
      */
@@ -621,7 +632,7 @@ final class NTDST_FieldTypes
             } elseif (is_bool($item) || is_int($item) || is_float($item) || $item === null) {
                 $sanitized[$key] = $item;
             } else {
-                $sanitized[$key] = sanitize_text_field(self::scalar($item));
+                $sanitized[$key] = sanitize_textarea_field(self::scalar($item));
             }
         }
 
