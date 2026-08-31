@@ -19,6 +19,13 @@ Additive/behaviour-correcting. `^5.1` consumers upgrade without a code change.
   anything that was not already a PHP array, so converting an existing `json`
   field to `repeater` (a `speakers` field) reduced every stored value to `[]`.
 
+### Note
+
+- The `5.1.1` tag itself shipped with the plugin header still reading `5.1.0`
+  (the 2.4.1 precedent, again). The header is bumped on `main` right after the
+  tag; nothing reads the header for dependency resolution — composer resolves
+  the tag.
+
 ## 5.1.0
 
 Additive. `^5.0` consumers upgrade without a code change.
