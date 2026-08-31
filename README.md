@@ -576,6 +576,7 @@ here, and the sweep refuses to exempt a name this table does not carry.
 | `ntdst/model/creating`, `ntdst/model/created` | daan `PressKitService` (`created`); a consumer that reacts to a row | action |
 | `ntdst/model/updating`, `ntdst/model/updated` | daan `PressKitService` (`updated`) | action |
 | `ntdst/model/deleting`, `ntdst/model/deleted` | a consumer that cleans up beside a row | action |
+| `ntdst/model/meta_updated`, `ntdst/model/meta_deleted` | stride's audit bridge (ntdst-audit coverage) — the direct meta write paths (`updateMeta()`, `updateMetaBatch()`, `deleteMeta()`) fire these with the written values and their before-state, one event per call | action |
 | `ntdst/metabox_saved/{model}` | a consumer that reacts to an editor save. It hands you the POSTED values — unslashed and uncleaned. Read the stored value back with `getMeta()` | action |
 | `ntdst/service_before_boot/{class}`, `ntdst/service_after_boot/{class}` | a consumer that wraps one named service's boot | action |
 | `ntdst/service/{slug}/config` | stride `SecurityService`, `PerformanceService` — the ONE per-service extension key | filter |

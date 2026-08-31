@@ -257,9 +257,13 @@ final class CoreTrimClusterBFeatureTest extends TestCase
         $this->assertHookArgs(0, ['ntdst/model/creating', self::TYPE], 2);
         $this->assertHookArgs(1, ['ntdst/model/created', self::TYPE, self::POST_ID], 3);
         $this->assertHookArgs(2, ['ntdst/model/updating', self::TYPE, self::POST_ID], 3);
-        $this->assertHookArgs(3, ['ntdst/model/updated', self::TYPE, self::POST_ID], 3);
-        $this->assertHookArgs(4, ['ntdst/model/deleting', self::TYPE, self::POST_ID], 2);
-        $this->assertHookArgs(5, ['ntdst/model/deleted', self::TYPE, self::POST_ID], 2);
+        // `updated` carries a fourth argument (the before-state), `deleting`/
+        // `deleted` a third (the pre-delete snapshot) — the audit payloads
+        // added for ntdst-audit coverage. Appended args, so a listener
+        // registered at the old arity keeps working.
+        $this->assertHookArgs(3, ['ntdst/model/updated', self::TYPE, self::POST_ID], 4);
+        $this->assertHookArgs(4, ['ntdst/model/deleting', self::TYPE, self::POST_ID], 3);
+        $this->assertHookArgs(5, ['ntdst/model/deleted', self::TYPE, self::POST_ID], 3);
 
         // The payload a listener prunes on: the fields the caller wrote.
         $this->assertPayloadCarries($this->fired[0][1][1], ['venue' => 'AB', 'city' => 'Brussels']);
