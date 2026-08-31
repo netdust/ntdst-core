@@ -4,7 +4,7 @@ The migration tables live in `README.md` under `## Versions` — this file is th
 short answer to "what changed in this tag". Nothing here replaces reading that
 section before a MAJOR bump.
 
-## Unreleased
+## 5.2.0
 
 Additive. `^5.1` consumers upgrade without a code change — every changed hook
 gains an APPENDED argument, and WordPress hands a listener only as many
