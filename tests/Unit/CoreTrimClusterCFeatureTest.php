@@ -435,6 +435,11 @@ final class CoreTrimClusterCFeatureTest extends TestCase
             'ntdst/model/updated',
             'ntdst/model/deleting',
             'ntdst/model/deleted',
+            // The direct meta write paths (updateMeta/updateMetaBatch/
+            // deleteMeta) fire these for audit coverage — README's
+            // extension-point table carries both.
+            'ntdst/model/meta_updated',
+            'ntdst/model/meta_deleted',
         ];
         // The two non-model actions of the same file: registration is not a
         // model event, it is what makes the model exist (FR-11's `ntdst/*`).

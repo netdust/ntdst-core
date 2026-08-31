@@ -547,7 +547,7 @@ Three details are load-bearing, and each was got wrong first:
   `"ntdst/service/{$slug}/config"` is searched as `ntdst/service/`, because the
   reader writes the interpolated name.
 
-**Deliberate exceptions:** 16 published symbols, each with its reader named in
+**Deliberate exceptions:** 18 published symbols, each with its reader named in
 README's `#### Extension points` table (the human home) and its reason in
 `bin/zero-readers.sh`'s `EXCEPTIONS` array (the machine home). This document
 kept a third copy and it went stale; the two homes above are the list.
@@ -555,7 +555,7 @@ kept a third copy and it went stale; the two homes above are the list.
 core-trim Clusters B and C, whose reader definition, stem rule and README
 scoping were corrected at the Cluster D gate). Re-run verbatim at `9fdad3d`:
 `bash bin/zero-readers.sh | wc -l` prints **0**, the script exits 0, and every
-consumer root is present. All sixteen `EXCEPTIONS` rows are named in README's
+consumer root is present. All eighteen `EXCEPTIONS` rows are named in README's
 `#### Extension points` table and every one of them still has a shipped site —
 `ntdst_inline()` included, which core-shape decided to KEEP rather than delete.
 Re-run verbatim at `85b54cb` (T14): stdout still empty (0 lines), exit 0, and

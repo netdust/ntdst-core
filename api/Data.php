@@ -744,8 +744,24 @@ class NTDST_Data_Model
             }
         }
 
-        // Fire after hook
-        do_action('ntdst/model/updated', $this->post_type, $id, $data);
+        // Fire after hook. The fourth argument is the before-state this method
+        // already captured for rollback — without it a listener (the audit
+        // log) can only say "row N changed", never FROM what. 'post' maps the
+        // written post_* columns to their previous values; 'meta' maps the
+        // written FIELD names (unprefixed, matching $data) to
+        // ['exists' => bool, 'value' => mixed] snapshots, so "was unset" and
+        // "was empty" stay distinguishable. Appending an argument is safe for
+        // existing listeners: WordPress passes only as many args as each
+        // callback registered for.
+        $previous_fields = [];
+        foreach ($previous_meta as $metaKey => $snapshot) {
+            $previous_fields[$this->stripMetaPrefix($metaKey)] = $snapshot;
+        }
+
+        do_action('ntdst/model/updated', $this->post_type, $id, $data, [
+            'post' => $previous_post_data,
+            'meta' => $previous_fields,
+        ]);
 
         // Return fresh data. `wp_update_post()` / `update_post_meta()` already
         // cleaned core's post and post_meta caches, so this re-read is the
@@ -955,9 +971,19 @@ class NTDST_Data_Model
         $value = $this->sanitizeField($key, $value);
 
         $metaKey = $this->prefixMetaKey($key);
+        $previous = [
+            'exists' => metadata_exists('post', $id, $metaKey),
+            'value' => get_post_meta($id, $metaKey, true),
+        ];
+
         if (!$this->updateMetaValue($id, $metaKey, $value)) {
             return new WP_Error('meta_update_failed', sprintf('Failed to update meta field %s', $metaKey), ['status' => 500]);
         }
+
+        // Success path only — a failed write is not a change and must not be
+        // logged as one. Same one-event-per-call shape as updateMetaBatch():
+        // written values and before-state snapshots, keyed by unprefixed field.
+        do_action('ntdst/model/meta_updated', $this->post_type, $id, [$key => $value], [$key => $previous]);
 
         return true;
     }
@@ -981,6 +1007,8 @@ class NTDST_Data_Model
         }
 
         $previousMeta = [];
+        $written = [];
+        $previousFields = [];
 
         // One warning for the whole batch, naming every key this model does not
         // declare; the values are still stored, cleaned the way updateMeta()
@@ -1001,6 +1029,17 @@ class NTDST_Data_Model
                 $this->restoreMetaData($id, $previousMeta);
                 return false;
             }
+
+            $written[$key] = $value;
+            $previousFields[$key] = $previousMeta[$metaKey];
+        }
+
+        // ONE event for the whole batch — the batch is one caller action, and
+        // a listener rendering it (the audit log) wants one row, not N. Fires
+        // only when every write succeeded (a failed batch rolled back above and
+        // is not a change) and only when something was written at all.
+        if ($written !== []) {
+            do_action('ntdst/model/meta_updated', $this->post_type, $id, $written, $previousFields);
         }
 
         return true;
@@ -1023,7 +1062,18 @@ class NTDST_Data_Model
 
         // Delete meta with prefix
         $metaKey = $this->prefixMetaKey($key);
+        $previous = [
+            'exists' => metadata_exists('post', $id, $metaKey),
+            'value' => get_post_meta($id, $metaKey, true),
+        ];
+
         $result = delete_post_meta($id, $metaKey);
+
+        // Success path only: delete_post_meta() returns false both on failure
+        // and when the key was never set — neither is a change worth a row.
+        if ($result) {
+            do_action('ntdst/model/meta_deleted', $this->post_type, $id, $key, $previous);
+        }
 
         return $result;
     }
@@ -1043,8 +1093,17 @@ class NTDST_Data_Model
             return new WP_Error('not_found', 'Post not found', ['status' => 404]);
         }
 
+        // Snapshot the row before it goes, so a listener (the audit log) can
+        // say WHAT was deleted rather than just which ID. 'post' is the WP_Post
+        // as it stood; 'meta' is the schema-formatted field map (unprefixed
+        // keys), the same shape find() exposes as ->fields.
+        $snapshot = [
+            'post' => $existing,
+            'meta' => $this->formatMeta($this->readPostMeta($id)),
+        ];
+
         // Fire before hook
-        do_action('ntdst/model/deleting', $this->post_type, $id);
+        do_action('ntdst/model/deleting', $this->post_type, $id, $snapshot);
 
         $result = $force ? wp_delete_post($id, true) : wp_trash_post($id);
 
@@ -1052,8 +1111,9 @@ class NTDST_Data_Model
             return new WP_Error('delete_failed', 'Failed to delete post', ['status' => 500]);
         }
 
-        // Fire after hook
-        do_action('ntdst/model/deleted', $this->post_type, $id);
+        // Fire after hook — carries the same pre-delete snapshot: the row is
+        // gone now, so this is the only place its content survives to.
+        do_action('ntdst/model/deleted', $this->post_type, $id, $snapshot);
 
         return true;
     }

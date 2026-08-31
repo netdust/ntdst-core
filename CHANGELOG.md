@@ -4,6 +4,39 @@ The migration tables live in `README.md` under `## Versions` — this file is th
 short answer to "what changed in this tag". Nothing here replaces reading that
 section before a MAJOR bump.
 
+## Unreleased
+
+Additive. `^5.1` consumers upgrade without a code change — every changed hook
+gains an APPENDED argument, and WordPress hands a listener only as many
+arguments as it registered for.
+
+### Added
+
+- `ntdst/model/meta_updated` — `($post_type, $id, array $data, array $previous)`,
+  fired by `updateMeta()` and `updateMetaBatch()` on the success path only.
+  `$data` is the sanitized values actually written (unprefixed field keys);
+  `$previous` maps the same keys to `['exists' => bool, 'value' => mixed]`
+  before-state snapshots. A batch fires ONE event carrying every written key —
+  a batch is one caller action, and a listener rendering it (the audit log)
+  wants one row, not N. The direct meta write paths were invisible to the
+  model hooks before this: an edition status change or a quote lock never
+  passed through `update()` at all.
+- `ntdst/model/meta_deleted` — `($post_type, $id, $key, array $previous)`,
+  fired by `deleteMeta()` only when something was actually deleted
+  (`delete_post_meta()` answers false for a failure AND for a key that was
+  never set; neither is a change).
+
+### Changed
+
+- `ntdst/model/updated` carries a fourth argument: the before-state `update()`
+  already captured for rollback — `['post' => [column => previous], 'meta' =>
+  [field => ['exists' => bool, 'value' => mixed]]]`, covering exactly the
+  fields the caller wrote. This is what lets an audit listener say "changed
+  Status from draft to published" instead of "post 4821 updated".
+- `ntdst/model/deleting` and `ntdst/model/deleted` carry a third argument: the
+  pre-delete snapshot `['post' => WP_Post, 'meta' => formatted fields]` — after
+  the delete it is the only place the row's content survives to.
+
 ## 5.1.1
 
 Additive/behaviour-correcting. `^5.1` consumers upgrade without a code change.

@@ -154,21 +154,218 @@ final class DataModelHooksTest extends TestCase
     public function testUpdateFiresUpdatingThenUpdatedAndNoRetiredName(): void
     {
         Actions\expectDone('ntdst/model/updating')->once()->ordered()->with('p', 7, ['headline' => 'edited']);
-        Actions\expectDone('ntdst/model/updated')->once()->ordered()->with('p', 7, ['headline' => 'edited']);
+        Actions\expectDone('ntdst/model/updated')->once()->ordered()->with(
+            'p',
+            7,
+            ['headline' => 'edited'],
+            ['post' => [], 'meta' => ['headline' => ['exists' => false, 'value' => '']]],
+        );
         $this->expectNoRetiredHook();
 
         $this->model()->update(7, ['headline' => 'edited']);
+    }
+
+    /**
+     * The audit payload: `updated`'s fourth argument carries the before-state
+     * of exactly the fields the caller wrote — post columns under 'post'
+     * (mapped to their post_* names), meta fields under 'meta' (unprefixed,
+     * as ['exists' => bool, 'value' => mixed] snapshots). This is what lets a
+     * listener render "changed Status from draft to published" instead of
+     * "post 7 updated".
+     */
+    public function testUpdatedCarriesThePreviousPostAndMetaState(): void
+    {
+        $this->stored['_p_headline'] = 'old headline';
+
+        Actions\expectDone('ntdst/model/updated')->once()->whenHappen(
+            function (string $type, int $id, array $data, array $previous): void {
+                $this->assertSame('p', $type);
+                $this->assertSame(7, $id);
+                $this->assertSame(
+                    ['post_title' => 'a row'],
+                    $previous['post'],
+                    'The written post column carries its pre-write value.',
+                );
+                $this->assertSame(
+                    ['headline' => ['exists' => true, 'value' => 'old headline']],
+                    $previous['meta'],
+                    'The written meta field carries its pre-write snapshot, unprefixed.',
+                );
+            },
+        );
+
+        $this->model()->update(7, ['title' => 'New title', 'headline' => 'edited']);
+    }
+
+    /** A meta write that fails rolls back and must not report a change. */
+    public function testUpdatedDoesNotFireWhenAMetaWriteFails(): void
+    {
+        Functions\when('update_post_meta')->justReturn(false);
+        Functions\when('get_post_meta')->justReturn('something else entirely');
+
+        Actions\expectDone('ntdst/model/updating')->once();
+        Actions\expectDone('ntdst/model/updated')->never();
+
+        $result = $this->model()->update(7, ['headline' => 'edited']);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
     }
 
     // --------------------------------------------------------------- delete
 
     public function testDeleteFiresDeletingThenDeletedAndNoRetiredName(): void
     {
-        Actions\expectDone('ntdst/model/deleting')->once()->ordered()->with('p', 7);
-        Actions\expectDone('ntdst/model/deleted')->once()->ordered()->with('p', 7);
+        $snapshots = [];
+        $capture = function (string $type, int $id, array $snapshot) use (&$snapshots): void {
+            $snapshots[] = [$type, $id, $snapshot];
+        };
+
+        Actions\expectDone('ntdst/model/deleting')->once()->ordered()->whenHappen($capture);
+        Actions\expectDone('ntdst/model/deleted')->once()->ordered()->whenHappen($capture);
         $this->expectNoRetiredHook();
 
+        $this->stored['_p_headline'] = 'the last headline';
+
         $this->model()->delete(7, true);
+
+        // Both hooks carry the SAME pre-delete snapshot: the row as it stood
+        // ('post') and its schema-formatted fields ('meta', unprefixed) — the
+        // only place the deleted content survives to.
+        $this->assertCount(2, $snapshots);
+        foreach ($snapshots as [$type, $id, $snapshot]) {
+            $this->assertSame('p', $type);
+            $this->assertSame(7, $id);
+            $this->assertSame(7, $snapshot['post']->ID);
+            $this->assertSame('a row', $snapshot['post']->post_title);
+            $this->assertSame(['headline' => 'the last headline'], $snapshot['meta']);
+        }
+    }
+
+    // ----------------------------------------------------- meta write hooks
+
+    /**
+     * updateMeta() is a write path like any other: invisible to the audit log
+     * until it fires. One event, on the success path only, carrying the
+     * written value and the before-state snapshot.
+     */
+    public function testUpdateMetaFiresMetaUpdatedWithThePreviousValue(): void
+    {
+        $this->stored['_p_headline'] = 'old';
+
+        Actions\expectDone('ntdst/model/meta_updated')->once()->with(
+            'p',
+            7,
+            ['headline' => 'new'],
+            ['headline' => ['exists' => true, 'value' => 'old']],
+        );
+
+        $this->assertTrue($this->model()->updateMeta(7, 'headline', 'new'));
+    }
+
+    public function testUpdateMetaDoesNotFireOnAFailedWrite(): void
+    {
+        Functions\when('update_post_meta')->justReturn(false);
+        Functions\when('get_post_meta')->justReturn('not what was asked for');
+
+        Actions\expectDone('ntdst/model/meta_updated')->never();
+
+        $result = $this->model()->updateMeta(7, 'headline', 'new');
+
+        $this->assertInstanceOf(WP_Error::class, $result);
+    }
+
+    /**
+     * A batch is ONE caller action, so it is ONE event — all written keys and
+     * their snapshots in a single firing, not a wall of per-key rows.
+     */
+    public function testUpdateMetaBatchFiresMetaUpdatedOnceForTheWholeBatch(): void
+    {
+        $this->stored['_p_headline'] = 'old headline';
+
+        Actions\expectDone('ntdst/model/meta_updated')->once()->with(
+            'p',
+            7,
+            ['headline' => 'new headline', 'summary' => 'new summary'],
+            [
+                'headline' => ['exists' => true, 'value' => 'old headline'],
+                'summary'  => ['exists' => false, 'value' => ''],
+            ],
+        );
+
+        $model = new NTDST_Data_Model('p', ['headline' => 'text', 'summary' => 'text'], '_p_');
+
+        $this->assertTrue($model->updateMetaBatch(7, [
+            'headline' => 'new headline',
+            'summary'  => 'new summary',
+        ]));
+    }
+
+    /** A batch that fails mid-way rolls back — no change happened, no event. */
+    public function testUpdateMetaBatchDoesNotFireWhenAWriteFails(): void
+    {
+        Functions\when('update_post_meta')->alias(function ($id, $key, $value) {
+            if ($key === '_p_summary') {
+                return false;
+            }
+            $this->stored[$key] = $value;
+
+            return true;
+        });
+        Functions\when('get_post_meta')->alias(
+            fn($id, $key = '', $single = false) => $key === '_p_summary'
+                ? 'not what was written'
+                : ($this->stored[$key] ?? ''),
+        );
+
+        Actions\expectDone('ntdst/model/meta_updated')->never();
+
+        $model = new NTDST_Data_Model('p', ['headline' => 'text', 'summary' => 'text'], '_p_');
+
+        $this->assertFalse($model->updateMetaBatch(7, [
+            'headline' => 'written then rolled back',
+            'summary'  => 'refused',
+        ]));
+    }
+
+    public function testDeleteMetaFiresMetaDeletedWithThePreviousValue(): void
+    {
+        $this->stored['_p_headline'] = 'about to go';
+
+        Actions\expectDone('ntdst/model/meta_deleted')->once()->with(
+            'p',
+            7,
+            'headline',
+            ['exists' => true, 'value' => 'about to go'],
+        );
+
+        $this->assertTrue($this->model()->deleteMeta(7, 'headline'));
+    }
+
+    /**
+     * delete_post_meta() answers false both for a failure and for a key that
+     * was never set — neither is a change, so neither is logged as one.
+     */
+    public function testDeleteMetaDoesNotFireWhenNothingWasDeleted(): void
+    {
+        Functions\when('delete_post_meta')->justReturn(false);
+
+        Actions\expectDone('ntdst/model/meta_deleted')->never();
+
+        $this->assertFalse($this->model()->deleteMeta(7, 'headline'));
+    }
+
+    /** A refused validation stops the write before any hook fires. */
+    public function testNoHookFiresWhenValidationRefusesTheUpdate(): void
+    {
+        Actions\expectDone('ntdst/model/updating')->never();
+        Actions\expectDone('ntdst/model/updated')->never();
+
+        $model = new NTDST_Data_Model('p', ['headline' => ['type' => 'text', 'required' => true]], '_p_');
+
+        // Explicitly blanking a required field is refused on update.
+        $result = $model->update(7, ['headline' => '']);
+
+        $this->assertInstanceOf(WP_Error::class, $result);
     }
 
 }
