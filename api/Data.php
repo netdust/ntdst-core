@@ -1316,17 +1316,7 @@ class NTDST_Data_Model
      */
     public function whereRelated(string $field, int $id): self
     {
-        if (!isset($this->query_args['meta_query'])) {
-            $this->query_args['meta_query'] = [];
-        }
-
-        $this->query_args['meta_query'][] = [
-            'key' => $this->prefixMetaKey($field),
-            'value' => '^a:[0-9]+:\\{(i:[0-9]+;i:[0-9]+;)*i:[0-9]+;i:' . $id . ';',
-            'compare' => 'REGEXP',
-        ];
-
-        return $this;
+        return $this->where($field, ['REGEXP', '^a:[0-9]+:\\{(i:[0-9]+;i:[0-9]+;)*i:[0-9]+;i:' . $id . ';']);
     }
 
     /**

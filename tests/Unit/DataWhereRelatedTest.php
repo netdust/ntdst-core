@@ -110,6 +110,7 @@ final class DataWhereRelatedTest extends TestCase
             'an id equal to index key zero'       => [[12, 34], 0, false],
             'a longer id containing the id'       => [[112], 12, false],
             'the id containing a shorter value'   => [[12], 112, false],
+            'a stored id longer than the id'      => [[123], 12, false],
             'an empty list'                       => [[], 12, false],
         ];
     }

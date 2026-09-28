@@ -16,8 +16,10 @@ Additive. `^5.2` consumers upgrade without a code change.
   keys (`i:1;` is value 1 and slot 1). The clause is an anchored `REGEXP` that
   walks the list as key/value pairs and only ever compares a value. It
   composes inside `whereGroup()`, which is how "credited under any role" is
-  asked. First consumer: atelier's `ProductionRepository::creditedTo()`
-  (laika), proven against MariaDB in its integration tier.
+  asked. First consumer: ntdst-baseline's reverse relation fields in the
+  YOOtheme module (a person's productions), proven against MariaDB in
+  laika's integration tier. It relies on relations being stored as a
+  serialized list of ints (`FieldTypes::ids()`).
 
 ## 5.2.0
 
