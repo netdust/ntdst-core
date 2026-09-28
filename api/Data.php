@@ -1303,6 +1303,33 @@ class NTDST_Data_Model
     }
 
     /**
+     * Query builder - a RELATION field lists this post id
+     *
+     * A relation is one meta row holding a serialized list of ints, so a plain
+     * LIKE on `i:12;` also hits the list's INDEX keys (`i:1;` is both value 1
+     * and slot 1). The pattern is anchored at the start of the list and walks
+     * it as key/value pairs, so the id is only compared with a value.
+     *
+     * Example (a person's credits across several role fields):
+     * $model->whereGroup('OR', fn($q) => $q->whereRelated('credit_direction', 12)
+     *                                      ->whereRelated('credit_music', 12))->get();
+     */
+    public function whereRelated(string $field, int $id): self
+    {
+        if (!isset($this->query_args['meta_query'])) {
+            $this->query_args['meta_query'] = [];
+        }
+
+        $this->query_args['meta_query'][] = [
+            'key' => $this->prefixMetaKey($field),
+            'value' => '^a:[0-9]+:\\{(i:[0-9]+;i:[0-9]+;)*i:[0-9]+;i:' . $id . ';',
+            'compare' => 'REGEXP',
+        ];
+
+        return $this;
+    }
+
+    /**
      * Query builder - the meta key is ABSENT
      *
      * NOT EXISTS carries no value: it asks whether the row has the key at all.

@@ -4,6 +4,21 @@ The migration tables live in `README.md` under `## Versions` — this file is th
 short answer to "what changed in this tag". Nothing here replaces reading that
 section before a MAJOR bump.
 
+## 5.3.0
+
+Additive. `^5.2` consumers upgrade without a code change.
+
+### Added
+
+- `whereRelated(string $field, int $id)` on the chain — "which posts does this
+  relation field point at `$id` from?". A relation is one meta row holding a
+  serialized list of ints, so a LIKE on `i:12;` also matches the list's index
+  keys (`i:1;` is value 1 and slot 1). The clause is an anchored `REGEXP` that
+  walks the list as key/value pairs and only ever compares a value. It
+  composes inside `whereGroup()`, which is how "credited under any role" is
+  asked. First consumer: atelier's `ProductionRepository::creditedTo()`
+  (laika), proven against MariaDB in its integration tier.
+
 ## 5.2.0
 
 Additive. `^5.1` consumers upgrade without a code change — every changed hook

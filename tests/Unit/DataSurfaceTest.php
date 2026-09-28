@@ -213,7 +213,7 @@ final class DataSurfaceTest extends TestCase
         $chainAndCrud = [
             '__construct',
             'all', 'count', 'first', 'get', 'paginate',
-            'limit', 'orderBy', 'scope', 'where', 'whereGroup', 'whereIn', 'whereMissing',
+            'limit', 'orderBy', 'scope', 'where', 'whereGroup', 'whereIn', 'whereMissing', 'whereRelated',
             'whereNot', 'whereNotIn', 'whereTax',
             'withMeta', 'withTerms',
             'create', 'delete', 'deleteMeta', 'find', 'getMeta',
