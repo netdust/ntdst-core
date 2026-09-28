@@ -580,6 +580,7 @@ final class DataRegistersRestMetaTest extends TestCase
         'whereMissing',
         'whereNot',
         'whereNotIn',
+        'whereRelated',
         'whereTax',
         'withMeta',
         'withTerms',

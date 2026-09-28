@@ -496,7 +496,7 @@ final class CoreTrimClusterBFeatureTest extends TestCase
                 'all', 'count', 'create', 'delete', 'deleteMeta', 'find', 'first', 'get', 'getMeta',
                 'getMetaPrefix', 'getSchema', 'limit', 'orderBy', 'paginate', 'registerRestMeta',
                 'restFields', 'scope', 'update', 'updateMeta', 'updateMetaBatch', 'where', 'whereGroup',
-                'whereIn', 'whereMissing', 'whereNot', 'whereNotIn', 'whereTax', 'withMeta', 'withTerms',
+                'whereIn', 'whereMissing', 'whereNot', 'whereNotIn', 'whereRelated', 'whereTax', 'withMeta', 'withTerms',
             ],
             'NTDST_Logger' => [
                 '__construct', 'critical', 'debug', 'error', 'flush', 'flushBatchedLogs', 'info', 'warning',

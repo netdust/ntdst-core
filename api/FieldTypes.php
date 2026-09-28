@@ -544,6 +544,8 @@ final class NTDST_FieldTypes
      * Zeros go, and a non-scalar never becomes an id: absint(['a']) is 1, which
      * is a real post on every site. absint('-3') is 3 — WordPress's answer, not
      * ours. Not wp_parse_id_list(): it de-duplicates and leaves gap keys.
+     * NTDST_Data_Model::whereRelated() matches this exact shape (a re-indexed
+     * list of ints, serialized) — change one and the other stops matching.
      *
      * @param  array<mixed> $value
      * @return list<int>
