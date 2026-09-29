@@ -44,6 +44,14 @@ own commands — see `### 5.0.0 — BREAKING` for the migration table.
 
 ## Versions
 
+### 5.4.0 — page routes per language
+
+Additive. `^5.3` consumers upgrade without a code change: until something
+answers `ntdst/pages/languages`, `path()` and `url()` behave exactly as before.
+`path()` and `url()` accept an array pattern keyed by language code, `url()`
+takes a `$language`, and `ntdst_pages()->language()` names the current one. See
+*A page route has a URL per language* under the 5.0.0 page-route notes.
+
 ### 5.1.1 — FieldTypes fixes
 
 Additive/behaviour-correcting. `^5.1` consumers upgrade without a code change.
@@ -586,7 +594,9 @@ here, and the sweep refuses to exempt a name this table does not carry.
 | `ntdst_inline()` | the other half of the terminal response pair; `ntdst_download()` is read and this is not. Documented as a pair, and recorded as a deletion candidate for `core-shape` rather than exempted silently. `core-shape` KEPT it: 5.0.0 removes neither half of the pair | function |
 | `ntdst/core_ready` | stride — `stride-core.php` and `ProfileTypePolicy` hang their own wiring on it | action |
 | `ntdst/services_registered` | `netdust-mail`, which registers its own service once core's list is in | action |
-| `ntdst/model/registered` | josworld — `functions.php` and `YOOthemeSourcesService` | action |
+| `ntdst/model/registered` | ntdst-baseline's yootheme bridge (`YOOthemeSourcesService`), loaded by josworld and laika. josworld's own reader moved into baseline (`22fd9b2`), which is outside the swept roots | action |
+| `ntdst/pages/languages` | ntdst-baseline polylang `route_languages` — the site's languages, each with its URL prefix and rewrite query; `path()` and `url()` read it | filter |
+| `ntdst/pages/current_language` | ntdst-baseline polylang `route_languages` — the language this request is in; `url()` and `NTDST_Pages::language()` read it | filter |
 | `ntdst/trusted_proxies` | a site's config, which names the proxies `NTDST_ClientIp::detect()` may believe. No fleet reader today | filter |
 
 #### Core-trim — what left the package
@@ -866,6 +876,24 @@ straight back when they differ — WordPress answers as it would have, and no
 route of yours is reachable from a URL it does not own. A `HEAD` is served by
 the route registered for `GET` (RFC 9110); any other verb the route does not
 declare is WordPress's own 404.
+
+**A page route has a URL per language (5.4.0).** Core does not know which
+languages a site has; two filters tell it. `ntdst/pages/languages` answers
+`list<array{code, prefix, query, default?}>` and `ntdst/pages/current_language`
+the code this request is in — ntdst-baseline's polylang module (`route_languages`)
+answers both from Polylang. With languages, `path()` registers ONE route entry
+per language, all sharing the callback: the rule is `^{prefix}/{words}/?$`
+(`^{words}/?$` for an empty prefix) and its query gains `&{query}` when the
+language has one, which is how the request learns its language. An array
+pattern (`path(['nl' => '/speellijst.ics', 'fr' => '/calendrier.ics'], $cb)`)
+gives each language its words; a language it does not name uses the default
+language's words, and on a site without languages the array's first entry is
+the route. Every variant must carry the same placeholders — the callback gets
+one params array — or the route is refused with one `_doing_it_wrong()` and no
+rule. `url($pattern, $params, $language)` builds the URL in `$language`, else
+the current language, else the default, prefixed; `ntdst_pages()->language()`
+is the current code (`null` without languages). Turning languages on shifts
+route indices once, and the rule-set hash flushes for it once.
 
 **A page route answers at the site's canonical trailing-slash form.** The rule
 `add_rewrite_rule()` gets ends in `/?$`, and WordPress's own
