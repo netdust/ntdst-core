@@ -105,6 +105,7 @@ EXCEPTIONS=(
     'ntdst/model/deleted|published model lifecycle (FR-11) — README extension-point table'
     'ntdst/model/meta_updated|published meta-write audit event (ntdst-audit coverage); reader is stride audit bridge — README extension-point table'
     'ntdst/model/meta_deleted|published meta-write audit event (ntdst-audit coverage); reader is stride audit bridge — README extension-point table'
+    'ntdst/model/registered|published registration hook; reader is ntdst-baseline yootheme YOOthemeSourcesService, outside the swept roots since josworld moved its bridge into baseline — README extension-point table'
     'ntdst/model/registering|published registration hook — README extension-point table'
     'ntdst/metabox_saved/|published metabox hook (raw payload) — README extension-point table'
     'ntdst/service_before_boot/|published per-class service lifecycle — README extension-point table'

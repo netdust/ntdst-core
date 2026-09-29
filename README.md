@@ -586,7 +586,7 @@ here, and the sweep refuses to exempt a name this table does not carry.
 | `ntdst_inline()` | the other half of the terminal response pair; `ntdst_download()` is read and this is not. Documented as a pair, and recorded as a deletion candidate for `core-shape` rather than exempted silently. `core-shape` KEPT it: 5.0.0 removes neither half of the pair | function |
 | `ntdst/core_ready` | stride — `stride-core.php` and `ProfileTypePolicy` hang their own wiring on it | action |
 | `ntdst/services_registered` | `netdust-mail`, which registers its own service once core's list is in | action |
-| `ntdst/model/registered` | josworld — `functions.php` and `YOOthemeSourcesService` | action |
+| `ntdst/model/registered` | ntdst-baseline's yootheme bridge (`YOOthemeSourcesService`), loaded by josworld and laika. josworld's own reader moved into baseline (`22fd9b2`), which is outside the swept roots | action |
 | `ntdst/trusted_proxies` | a site's config, which names the proxies `NTDST_ClientIp::detect()` may believe. No fleet reader today | filter |
 
 #### Core-trim — what left the package

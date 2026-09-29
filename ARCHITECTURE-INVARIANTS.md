@@ -547,7 +547,7 @@ Three details are load-bearing, and each was got wrong first:
   `"ntdst/service/{$slug}/config"` is searched as `ntdst/service/`, because the
   reader writes the interpolated name.
 
-**Deliberate exceptions:** 18 published symbols, each with its reader named in
+**Deliberate exceptions:** 19 published symbols, each with its reader named in
 README's `#### Extension points` table (the human home) and its reason in
 `bin/zero-readers.sh`'s `EXCEPTIONS` array (the machine home). This document
 kept a third copy and it went stale; the two homes above are the list.
