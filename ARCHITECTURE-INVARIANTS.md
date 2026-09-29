@@ -261,9 +261,9 @@ way to pass data to a template (`extract()` over a caller array); a second
   request the callback did not answer itself. It is not "the package holds one
   `exit`". A callback may deliberately hand the request to a helper that ends
   it, and there are exactly TWO such helpers, both `never`-typed so the reading
-  is local: `NTDST_Response::redirect()` (`api/Response.php:150`, `exit` at
-  `:157`) and `sendFile()` (`:237`, `exit` at `:249`) behind `download()`
-  (`:211`) / `inline()` (`:225`). Each is called FROM a callback, on that
+  is local: `NTDST_Response::redirect()` (`api/Response.php:159`, `exit` at
+  `:176`) and `sendFile()` (`:256`, `exit` at `:268`) behind `download()`
+  (`:230`) / `inline()` (`:244`). Each is called FROM a callback, on that
   callback's own account, with its bytes already written — the case the
   contract calls "I answered this request myself". README names both.
 - **Two homes for one refusal** — `NTDST_Pages::notFound()`
@@ -281,13 +281,13 @@ way to pass data to a template (`extract()` over a caller array); a second
   edit.
 **Mechanical check:** `grep -rn "is_404 = false\|redirect_canonical\|locate_template(\|extract(" --include=*.php api core admin support services ntdst-core.php` → FIVE hits, all
 `core/TemplateLoader.php`, and none of them a bypass: the single
-`locate_template()` CALL at `:146`, and four comments documenting the guard on
-its result (`:149`, `:190`, `:204`, `:215` — the hit is refused unless it lies
+`locate_template()` CALL at `:147`, and four comments documenting the guard on
+its result (`:150`, `:191`, `:205`, `:216` — the hit is refused unless it lies
 inside a theme directory, `5fa3d61`). `api/Response.php` and `core/Pages.php`
 return ZERO: the canonical-redirect filter, both `is_404 = false` clears and
 both `extract()` calls over a caller array are gone.
 `grep -rn "function addPath\|function redirect" --include=*.php api core admin support services ntdst-core.php` → ONE
-each: `api/Response.php:150` and `core/TemplateLoader.php:31`.
+each: `api/Response.php:159` and `core/TemplateLoader.php:32`.
 (A9 — both greps swept `api core` only, which is the two directories the
 invariant is ABOUT and not the package: a template `include` or a second
 `addPath` in `admin`, `support`, `services` or `ntdst-core.php` was outside
@@ -330,20 +330,23 @@ pinned in `guard.sh` alone (A2). Besides the file's
 `defined('ABSPATH') || exit;` guard at `:96`, the ONE `exit` the file carries is
 `terminate()`'s at `:333` — named under `**Deliberate exceptions:**` above, and
 matched by neither grep. `function redirect` and `function addPath` are each
-ONE: `api/Response.php:150` and `core/TemplateLoader.php:31`. `locate_template(`
-is still the single CALL at `core/TemplateLoader.php:146`, with four comment
-mentions (`:149`, `:190`, `:204`, `:215`). A route refuses by calling
+ONE: `api/Response.php:159` and `core/TemplateLoader.php:32`. `locate_template(`
+is still the single CALL at `core/TemplateLoader.php:147`, with four comment
+mentions (`:150`, `:191`, `:205`, `:216`). A route refuses by calling
 WordPress's `$wp_query->set_404()` — from `NTDST_Response::notFound()`
 (`api/Response.php:99-100`) and from `NTDST_Pages::notFound()`
 (`core/Pages.php:347`) — instead of setting a flag for something downstream to
 honour. `html()` hands its data to WordPress's own
-`load_template($file, false, $data)` inside a buffer (`api/Response.php:191`),
+`load_template($file, false, $data)` inside a buffer (`api/Response.php:210`),
 which is the one way data reaches a template besides
 `NTDST_Template_Loader::page()`. Line numbers re-pinned at `8338c4a`, the last
 CODE commit of the GATE-fix wave; re-verified unchanged at `85b54cb` (T14) —
 every line cited in this paragraph (`Pages.php:141,165,180,204,206,329,331,345`;
 `Response.php:89,99-100,150,157,191,211,225,237,249`) still holds. The `Pages.php` lines re-pinned at 5.4.0 (language variants):
-`146,574,182,206,208,331,333,347`.
+`146,574,182,206,208,331,333,347`. The `Response.php` and `TemplateLoader.php`
+lines had drifted since `85b54cb`; re-pinned at 5.4.0 by re-running both greps
+and reading each cited line at `73d01db`: `Response.php:89,99-100,159,176,210,230,244,256,268`,
+`TemplateLoader.php:32,147,150,191,205,216`.
 
 ## INV-7 — Throttling is one primitive, charged from the permission callback
 
@@ -452,7 +455,8 @@ Every part of (A)'s form is load-bearing:
 - The last filter drops COMMENT lines, the way INV-1's does. A docblock reading
   `@param string $field Field to match (term_id, …)` is prose, not a switch.
 
-(A) returns **51 lines** and (B) returns **1**. Every one of them is named in
+(A) returns **55 lines** and (B) returns **1** (measured at `73d01db`, and 55 at
+this branch's base `0d62394` too). Every one of them is named in
 `## Deliberate exceptions` below, grouped by WHAT it is rather than by where it
 sits. Anything else is a bypass. (It was 59 while `services/Logger.php` still
 declared the `log_entry` model; core-trim FR-5 deleted that model and took eight
@@ -471,7 +475,11 @@ Both commands re-run verbatim at `9fdad3d`: (A) returns **51** and (B) returns
 `core/LogLevel.php` 1, `api/Response.php` 1 — every one of them named under
 `## Deliberate exceptions`. (B)'s single hit is `admin/RelationField.php:46`.
 Re-run verbatim at `85b54cb` (T14): identical — (A) 51 with the same per-file
-shape, (B) 1 at the same line.
+shape, (B) 1 at the same line. Re-run verbatim at 5.4.0 (`73d01db`, measured):
+(A) **55**, (B) 1 at the same line; `api/Data.php` is 15, the other files
+unchanged. The four new hits arrived before this branch (55 at 5.2.0 already):
+three `=== 'callback'` skips (`3d6e2e5`) and `whereGroup()`'s
+`['relation' => $relation]` (`18858d0`), each named below.
 
 Earlier: (A) 51 / (B) 1, both re-run at the core-shape cluster-3 fix wave. (A)'s TOTAL is unchanged from `96560c5` and its shape is
 not: `api/Actions.php` went 2 → 0 (T08 deleted the file, and both its hits were
@@ -556,7 +564,7 @@ kept a third copy and it went stale; the two homes above are the list.
 core-trim Clusters B and C, whose reader definition, stem rule and README
 scoping were corrected at the Cluster D gate). Re-run verbatim at `9fdad3d`:
 `bash bin/zero-readers.sh | wc -l` prints **0**, the script exits 0, and every
-consumer root is present. All eighteen `EXCEPTIONS` rows are named in README's
+consumer root is present. All `EXCEPTIONS` rows (21 at 5.4.0) are named in README's
 `#### Extension points` table and every one of them still has a shipped site —
 `ntdst_inline()` included, which core-shape decided to KEEP rather than delete.
 Re-run verbatim at `85b54cb` (T14): stdout still empty (0 lines), exit 0, and
@@ -565,8 +573,9 @@ stdout, and stdout was empty). Re-run at 5.4.0 (`feature/path-languages`,
 from a checkout beside the consumer roots): stdout empty, exit 0; the two
 `ntdst/pages/*` rows and the `ntdst/model/registered` row are load-bearing. Earlier pin `5506025` — stdout empty and exit 0, with all thirteen consumer
 roots present; the advisory method candidate count is on stderr, not pinned here,
-because it moves whenever a consumer repository does. Nine of the sixteen
-`EXCEPTIONS` rows are load-bearing: drop one and a finding appears. The seven
+because it moves whenever a consumer repository does. Twelve of the 21
+`EXCEPTIONS` rows are load-bearing: drop one and a finding appears (measured
+at `73d01db`, beside the consumer roots, dropping each row in turn). The nine
 redundant rows are named under `## Deliberate exceptions`. The file and line totals the run prints are NOT
 recorded here: they move whenever a consumer repository does, and a status line
 that goes stale on somebody else's commit teaches a reader to skip it.
@@ -721,16 +730,19 @@ Things core does that WordPress also does, kept on purpose. Each names why.
   published contract, so it is kept and named rather than deleted. The count is
   a hand count on purpose: the sweep cannot enumerate an interface, so no
   machine check will correct this number when it drifts.
-- **Seven of the 16 `EXCEPTIONS` rows are REDUNDANT** (INV-9; not to be confused
+- **Nine of the 21 `EXCEPTIONS` rows are REDUNDANT** (INV-9; not to be confused
   with the script's `inert-exception:` finding token, which fires on a
   different case — an exempted symbol the package no longer ships at all).
   Drop the row and the sweep still says nothing, because the symbol has a
   reader the script can see or is a shape it cannot judge: `ntdst/model/created`,
-  `ntdst/model/updated`, `ntdst/model/registering`, `ntdst/service/`,
-  `ntdst_container`, `NTDST_Bootstrap::config()` and `NTDST_Service_Meta`. They
+  `ntdst/model/updated`, `ntdst/model/deleted`, `ntdst/model/meta_updated`,
+  `ntdst/model/meta_deleted`, `ntdst/model/registering`, `ntdst_container`,
+  `NTDST_Bootstrap::config()` and `NTDST_Service_Meta`. They
   are kept so the array reads as the WHOLE published set — a reader should not
   have to ask which extension point was left out for being called somewhere.
-  The other nine are load-bearing: drop one and a finding appears.
+  The other twelve are load-bearing: drop one and a finding appears. Measured at
+  `73d01db` beside the consumer roots, dropping each row in turn (`ntdst/service/`
+  was redundant at 16 rows and is load-bearing now).
 - **The 13 retired type names are guarded by DECLARATION POSITION, not as bare
   words.** `signed_int` is a distinctive token and is pinned bare
   (`bin/guard.sh`, `removedSymbolProvider()`). The other 12 are ordinary
@@ -746,7 +758,7 @@ Things core does that WordPress also does, kept on purpose. Each names why.
 
 ### INV-8 — every hit the field-type check returns
 
-(A) returns 51 lines and (B) returns 1. Each group below says WHAT the hits are,
+(A) returns 55 lines and (B) returns 1 (measured at `73d01db`). Each group below says WHAT the hits are,
 not which line they sit on: a line number is stale after the next edit, and a
 reader matching 59 greps against stale numbers stops reading. Where a group has
 a test that holds it, the test is named — that is its mechanical home.
@@ -761,8 +773,9 @@ a test that holds it, the test is named — that is its mechanical home.
   a new type adds one arm here and nothing anywhere else. Mechanical home:
   `MetaboxGeneratorRenderTest::testNoTypeNameSwitchSurvivesInTheSource`, which
   fails if a TYPE-name switch grows back in that file.
-- **The `callback` render directive** — 3 hits in `admin/MetaboxGenerator.php`,
-  one on the render side and two on the save side. `callback` has no entry on
+- **The `callback` render directive** — 6 hits: 3 in `admin/MetaboxGenerator.php`,
+  one on the render side and two on the save side, and 3 in `api/Data.php`,
+  where binding, sanitizing and formatting step past it the same way (`3d6e2e5`). `callback` has no entry on
   purpose: the field draws itself and the consumer's code owns what it stores.
   Both sides must step past it before they ask the registry anything, or a
   posted `callback` field throws and kills the whole edit screen. Same
@@ -815,8 +828,9 @@ a test that holds it, the test is named — that is its mechanical home.
   exists to make possible. core-trim FR-5 removed the `log_entry` post type, so
   the example is gone; the shape it named is still the one to recognise, and a
   reader comparing this list to an older run needs to know why eight hits left.
-- **MAP KEYS that are not type names** — 9 hits, all from the map-key
-  alternative, in four shapes. WordPress's own `callback` ARGUMENT key
+- **MAP KEYS that are not type names** — 10 hits, all from the map-key
+  alternative, in five shapes. WordPress's `meta_query` `relation` key in
+  `api/Data.php`'s `whereGroup()` (1) — `AND`/`OR`, never a field type. WordPress's own `callback` ARGUMENT key
   (`api/Rest.php`, `core/Pages.php` — 3; `api/Actions.php` carried two more
   until T08 deleted it). WordPress POST
   COLUMN and query words as array keys in `api/Data.php`: the `content` column

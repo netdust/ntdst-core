@@ -120,15 +120,16 @@ EXCEPTIONS=(
     'NTDST_Bootstrap::config()|reads the merged config a consumer passed to register(); kept by FR-2 as the one read-back of that array — README extension-point table'
 )
 
-# SEVEN of these sixteen rows are REDUNDANT: drop the row and the sweep still
-# says nothing, because the symbol has a reader the script can see, or is a
-# shape it cannot judge at all. They are `ntdst/model/created`,
-# `ntdst/model/updated`, `ntdst/model/registering`, `ntdst/service/`,
-# `ntdst_container`, `NTDST_Bootstrap::config()` and `NTDST_Service_Meta`. They
-# stay so the list reads as the WHOLE published set — a reader of this array
-# should not have to ask which published extension point was left out because
-# it happened to be called somewhere. The other nine are load-bearing: drop one
-# and a finding appears. See ARCHITECTURE-INVARIANTS.md
+# NINE of these 21 rows are REDUNDANT (measured at 5.4.0, dropping each in
+# turn): drop the row and the sweep still says nothing, because the symbol has
+# a reader the script can see, or is a shape it cannot judge at all. They are
+# `ntdst/model/created`, `ntdst/model/updated`, `ntdst/model/deleted`,
+# `ntdst/model/meta_updated`, `ntdst/model/meta_deleted`,
+# `ntdst/model/registering`, `ntdst_container`, `NTDST_Bootstrap::config()` and
+# `NTDST_Service_Meta`. They stay so the list reads as the WHOLE published set —
+# a reader of this array should not have to ask which published extension point
+# was left out because it happened to be called somewhere. The other twelve are
+# load-bearing: drop one and a finding appears. See ARCHITECTURE-INVARIANTS.md
 # `## Deliberate exceptions`.
 
 is_exception() {
