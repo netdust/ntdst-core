@@ -134,37 +134,39 @@ class NTDST_Pages
      * Call this on `init` (or earlier): add_rewrite_rule() is only heard while
      * WordPress is still building its rule set.
      *
-     * @param string   $pattern  URL pattern (/path/:param/:id)
-     * @param callable $callback Handler function
-     * @param string   $method   HTTP method (GET, POST, etc.)
+     * LANGUAGES. When `ntdst/pages/languages` answers, the route registers once
+     * per language, each variant its own route entry sharing this callback. An
+     * array pattern is keyed by language code; a language it does not name uses
+     * the default language's words, and with no languages the first entry.
+     *
+     * @param string|array<string, string> $pattern  URL pattern (/path/:param/:id), or one per language code
+     * @param callable                     $callback Handler function
+     * @param string                       $method   HTTP method (GET, POST, etc.)
      */
-    public function path(string $pattern, callable $callback, string $method = 'GET'): self
+    public function path(string|array $pattern, callable $callback, string $method = 'GET'): self
     {
-        $rule = $this->compileRule($pattern);
+        $variants = $this->compileVariants($pattern);
 
-        if ($rule === null) {
+        if ($variants === null) {
             return $this;
         }
 
-        $index = count($this->routes);
-        $query = 'index.php?ntdst_page=' . $index;
-
-        foreach ($rule['params'] as $position => $name) {
-            $query .= '&ntdst_p_' . $name . '=$matches[' . ($position + 1) . ']';
+        foreach ($variants as $variant) {
+            $this->addRoute($variant, $callback, strtoupper($method));
         }
 
-        $this->routes[] = [
-            'pattern' => $pattern,
-            'regex' => $rule['regex'],
-            'query' => $query,
-            'params' => $rule['params'],
-            'callback' => $callback,
-            'method' => strtoupper($method),
-        ];
-
-        add_rewrite_rule($rule['regex'], $query, 'top');
-
         return $this;
+    }
+
+    /**
+     * The language this request is in, as `ntdst/pages/current_language`
+     * answers it; null on a site without languages.
+     */
+    public function language(): ?string
+    {
+        $language = apply_filters('ntdst/pages/current_language', null);
+
+        return is_string($language) && $language !== '' ? $language : null;
     }
 
     /**
@@ -472,6 +474,152 @@ class NTDST_Pages
     }
 
     /**
+     * The route's rule in every language, or null when it is refused.
+     *
+     * Each variant writes its own `$matches` positions, so word order may
+     * differ between languages; the placeholder SET may not, because the
+     * callback receives one params array.
+     *
+     * @return list<array{pattern: string, prefix: string, query: string, regex: string, params: list<string>}>|null
+     */
+    protected function compileVariants(string|array $pattern): ?array
+    {
+        $variants = [];
+
+        foreach ($this->variants($pattern) as $variant) {
+            $rule = $this->compileRule($variant['pattern']);
+
+            if ($rule === null) {
+                return null;
+            }
+
+            if ($variant['prefix'] !== '') {
+                $rule['regex'] = '^' . preg_quote($variant['prefix'], '#') . '/' . substr($rule['regex'], 1);
+            }
+
+            $variants[] = $variant + $rule;
+        }
+
+        if (!$this->sameParams($variants)) {
+            _doing_it_wrong(
+                __CLASS__ . '::path',
+                'the language variants of "' . $variants[0]['pattern'] . '" name different placeholders. Every '
+                    . 'language must carry the same :params, because the callback receives one params array.',
+                '5.4.0',
+            );
+
+            return null;
+        }
+
+        return $variants;
+    }
+
+    /** @param list<array{params: list<string>}> $variants */
+    protected function sameParams(array $variants): bool
+    {
+        $sorted = array_map(static function (array $variant): array {
+            $params = $variant['params'];
+            sort($params);
+
+            return $params;
+        }, $variants);
+
+        return count(array_unique(array_map('serialize', $sorted))) === 1;
+    }
+
+    /**
+     * One entry per language: its words, its URL prefix and its query.
+     *
+     * @return list<array{pattern: string, prefix: string, query: string}>
+     */
+    protected function variants(string|array $pattern): array
+    {
+        $languages = $this->languages();
+
+        if ($languages === []) {
+            return [['pattern' => $this->patternFor($pattern), 'prefix' => '', 'query' => '']];
+        }
+
+        $default = $this->defaultLanguage($languages)['code'];
+
+        return array_map(fn (array $language): array => [
+            'pattern' => $this->patternFor($pattern, $language['code'], $default),
+            'prefix' => $language['prefix'] ?? '',
+            'query' => $language['query'] ?? '',
+        ], $languages);
+    }
+
+    /** @param array{pattern: string, prefix: string, query: string, regex: string, params: list<string>} $variant */
+    protected function addRoute(array $variant, callable $callback, string $method): void
+    {
+        $query = 'index.php?ntdst_page=' . count($this->routes);
+
+        foreach ($variant['params'] as $position => $name) {
+            $query .= '&ntdst_p_' . $name . '=$matches[' . ($position + 1) . ']';
+        }
+
+        if ($variant['query'] !== '') {
+            $query .= '&' . $variant['query'];
+        }
+
+        $this->routes[] = [
+            'pattern' => $variant['pattern'],
+            'regex' => $variant['regex'],
+            'query' => $query,
+            'params' => $variant['params'],
+            'callback' => $callback,
+            'method' => $method,
+        ];
+
+        add_rewrite_rule($variant['regex'], $query, 'top');
+    }
+
+    /**
+     * The languages `ntdst/pages/languages` answers — `[]` on a site without.
+     *
+     * @return list<array{code: string, prefix?: string, query?: string, default?: bool}>
+     */
+    protected function languages(): array
+    {
+        $languages = apply_filters('ntdst/pages/languages', []);
+
+        return is_array($languages) ? array_values($languages) : [];
+    }
+
+    /**
+     * The language flagged `default`, else the first one.
+     *
+     * @param  list<array{code: string, default?: bool}> $languages
+     * @return array{code: string, prefix?: string, query?: string, default?: bool}|null
+     */
+    protected function defaultLanguage(array $languages): ?array
+    {
+        foreach ($languages as $language) {
+            if (!empty($language['default'])) {
+                return $language;
+            }
+        }
+
+        return $languages[0] ?? null;
+    }
+
+    /** The words for the first of $codes the pattern names, else its first entry. */
+    protected function patternFor(string|array $pattern, string ...$codes): string
+    {
+        if (is_string($pattern)) {
+            return $pattern;
+        }
+
+        foreach ($codes as $code) {
+            if (isset($pattern[$code])) {
+                return (string) $pattern[$code];
+            }
+        }
+
+        return (string) reset($pattern);
+    }
+
+    /**
      * Hook into specific WordPress template type
      * Smart wrapper around {$type}_template filters
      *
@@ -629,13 +777,29 @@ class NTDST_Pages
      * Param values are urlencoded so slashes / spaces / hashes don't break
      * routing. Params that don't match a :placeholder in the pattern are
      * silently ignored (no query-string append).
+     *
+     * The URL is in $language, else the current language, else the default —
+     * an array pattern gives that language's words, and a prefixed language
+     * its prefix.
+     *
+     * @param string|array<string, string> $pattern
      */
-    public function url(string $pattern, array $params = []): string
+    public function url(string|array $pattern, array $params = [], ?string $language = null): string
     {
-        $url = $pattern;
+        $languages = $this->languages();
+        $default = $this->defaultLanguage($languages);
+        $chosen = array_column($languages, null, 'code')[$language ?? $this->language() ?? ''] ?? $default;
+
+        $url = $this->patternFor($pattern, $chosen['code'] ?? '', $default['code'] ?? '');
 
         foreach ($params as $key => $value) {
             $url = str_replace(':' . $key, urlencode((string) $value), $url);
+        }
+
+        $prefix = $chosen['prefix'] ?? '';
+
+        if ($prefix !== '') {
+            $url = '/' . $prefix . '/' . ltrim($url, '/');
         }
 
         return home_url($url);

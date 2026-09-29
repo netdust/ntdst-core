@@ -4,6 +4,26 @@ The migration tables live in `README.md` under `## Versions` — this file is th
 short answer to "what changed in this tag". Nothing here replaces reading that
 section before a MAJOR bump.
 
+## 5.4.0
+
+Additive. `^5.3` consumers upgrade without a code change — without languages,
+`path()` and `url()` register and build exactly what they did.
+
+### Added
+
+- Page routes per language. Filter `ntdst/pages/languages`
+  (`list<array{code, prefix, query, default?}>`, default `[]`) and filter
+  `ntdst/pages/current_language` (`?string`); core does not know who answers
+  them — ntdst-baseline's polylang `route_languages` does.
+- `path(string|array $pattern, …)`: one route entry per language sharing the
+  callback, rule `^{prefix}/{words}/?$` with `&{query}` appended when the
+  language has one. An array pattern is keyed by language code; a missing code
+  uses the default's words, and with no languages the first entry. Variants
+  with different placeholders are refused (`_doing_it_wrong`, no rule).
+- `url(string|array $pattern, array $params = [], ?string $language = null)`:
+  the given language, else the current, else the default; prefixed.
+- `NTDST_Pages::language(): ?string` — the current language, `null` without.
+
 ## 5.3.0
 
 Additive. `^5.2` consumers upgrade without a code change.

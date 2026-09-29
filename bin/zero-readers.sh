@@ -111,6 +111,8 @@ EXCEPTIONS=(
     'ntdst/service_before_boot/|published per-class service lifecycle — README extension-point table'
     'ntdst/service_after_boot/|published per-class service lifecycle — README extension-point table'
     'ntdst/service/|the ONE per-service config filter; stride SecurityService and PerformanceService read it — README extension-point table'
+    'ntdst/pages/languages|published language list for page routes; reader is ntdst-baseline polylang route_languages, outside the swept roots — README extension-point table'
+    'ntdst/pages/current_language|published current language for page URLs; reader is ntdst-baseline polylang route_languages, outside the swept roots — README extension-point table'
     'ntdst/trusted_proxies|published security knob; a site config sets it, no fleet reader today — README extension-point table'
     'NTDST_Service_Meta|optional service-shape interface; six implementers in bavi and dozens in netdust-legacy, all outside the swept roots. An INTERFACE cannot be enumerated by this script at all — README is its only check — README extension-point table'
     'ntdst_container|kept by FR-6 as the container accessor. INERT since ludoluykx joined the roots: FluentCRMIntegrationService calls it. Its other readers are the fleet test tearDowns (22 files) and consumer bootstraps, and tests/ is excluded from this sweep by design — README extension-point table'

@@ -244,7 +244,7 @@ way to pass data to a template (`extract()` over a caller array); a second
 `addPath`.
 **Deliberate exceptions:**
 - **The page dispatcher's terminator** — `NTDST_Pages::terminate()`
-  (`core/Pages.php:329`, `exit` at `:331`), called from `dispatch()` when a
+  (`core/Pages.php:331`, `exit` at `:333`), called from `dispatch()` when a
   `path()` callback returns `null`/`true`. ONE site. A callback that answered
   the request itself has already written its bytes, and returning out of
   `template_redirect` leaves WordPress to render the query it had resolved —
@@ -267,7 +267,7 @@ way to pass data to a template (`extract()` over a caller array); a second
   callback's own account, with its bytes already written — the case the
   contract calls "I answered this request myself". README names both.
 - **Two homes for one refusal** — `NTDST_Pages::notFound()`
-  (`core/Pages.php:345`) and `NTDST_Response::notFound()` (`api/Response.php:89`)
+  (`core/Pages.php:347`) and `NTDST_Response::notFound()` (`api/Response.php:89`)
   write the SAME three lines: `$wp_query->set_404()`, `status_header(404)`,
   `nocache_headers()`. WordPress's own `WP::handle_404()` has already decided
   the request was fine by the time either runs, so the flag alone would leave a
@@ -311,10 +311,10 @@ sends WordPress's three lines — landed after it and was the wave's last
 behaviour commit at the time (A5). It re-pins the page-router half after
 RF-1/R-1, R-2 and R-S4; `2fbde3d` (T11) closed the Response half and `5bee797`
 (T10) first closed the page-router half.
-`NTDST_Pages::path()` (`core/Pages.php:141`) calls `add_rewrite_rule()` at
-`:165` and names its query vars on the `query_vars` filter (`queryVars()`
-`:180`); `dispatch()` (`:204`) runs on `template_redirect` and reads
-`get_query_var('ntdst_page')` at `:206`. It answers only where WordPress
+`NTDST_Pages::path()` (`core/Pages.php:146`) calls `add_rewrite_rule()` at
+`:574` (in `addRoute()`, once per language variant) and names its query vars on
+the `query_vars` filter (`queryVars()` `:182`); `dispatch()` (`:206`) runs on
+`template_redirect` and reads `get_query_var('ntdst_page')` at `:208`. It answers only where WordPress
 matched one of THIS router's rules — `$GLOBALS['wp']->matched_rule` against the
 route's own regex — and passes through where it did not, so a hand-written
 `?ntdst_page=` on a foreign URL reaches no callback and forces no 404 (RF-1 /
@@ -328,21 +328,22 @@ it to `compileRule()`, which builds a REWRITE rule instead of a regex the router
 re-matches itself. It was private, so it owes README no migration row and is
 pinned in `guard.sh` alone (A2). Besides the file's
 `defined('ABSPATH') || exit;` guard at `:96`, the ONE `exit` the file carries is
-`terminate()`'s at `:331` — named under `**Deliberate exceptions:**` above, and
+`terminate()`'s at `:333` — named under `**Deliberate exceptions:**` above, and
 matched by neither grep. `function redirect` and `function addPath` are each
 ONE: `api/Response.php:150` and `core/TemplateLoader.php:31`. `locate_template(`
 is still the single CALL at `core/TemplateLoader.php:146`, with four comment
 mentions (`:149`, `:190`, `:204`, `:215`). A route refuses by calling
 WordPress's `$wp_query->set_404()` — from `NTDST_Response::notFound()`
 (`api/Response.php:99-100`) and from `NTDST_Pages::notFound()`
-(`core/Pages.php:345`) — instead of setting a flag for something downstream to
+(`core/Pages.php:347`) — instead of setting a flag for something downstream to
 honour. `html()` hands its data to WordPress's own
 `load_template($file, false, $data)` inside a buffer (`api/Response.php:191`),
 which is the one way data reaches a template besides
 `NTDST_Template_Loader::page()`. Line numbers re-pinned at `8338c4a`, the last
 CODE commit of the GATE-fix wave; re-verified unchanged at `85b54cb` (T14) —
 every line cited in this paragraph (`Pages.php:141,165,180,204,206,329,331,345`;
-`Response.php:89,99-100,150,157,191,211,225,237,249`) still holds.
+`Response.php:89,99-100,150,157,191,211,225,237,249`) still holds. The `Pages.php` lines re-pinned at 5.4.0 (language variants):
+`146,574,182,206,208,331,333,347`.
 
 ## INV-7 — Throttling is one primitive, charged from the permission callback
 
@@ -547,7 +548,7 @@ Three details are load-bearing, and each was got wrong first:
   `"ntdst/service/{$slug}/config"` is searched as `ntdst/service/`, because the
   reader writes the interpolated name.
 
-**Deliberate exceptions:** 19 published symbols, each with its reader named in
+**Deliberate exceptions:** 21 published symbols, each with its reader named in
 README's `#### Extension points` table (the human home) and its reason in
 `bin/zero-readers.sh`'s `EXCEPTIONS` array (the machine home). This document
 kept a third copy and it went stale; the two homes above are the list.
@@ -560,7 +561,9 @@ consumer root is present. All eighteen `EXCEPTIONS` rows are named in README's
 `ntdst_inline()` included, which core-shape decided to KEEP rather than delete.
 Re-run verbatim at `85b54cb` (T14): stdout still empty (0 lines), exit 0, and
 every consumer root still present (a missing root prints as a finding on
-stdout, and stdout was empty). Earlier pin `5506025` — stdout empty and exit 0, with all thirteen consumer
+stdout, and stdout was empty). Re-run at 5.4.0 (`feature/path-languages`,
+from a checkout beside the consumer roots): stdout empty, exit 0; the two
+`ntdst/pages/*` rows and the `ntdst/model/registered` row are load-bearing. Earlier pin `5506025` — stdout empty and exit 0, with all thirteen consumer
 roots present; the advisory method candidate count is on stderr, not pinned here,
 because it moves whenever a consumer repository does. Nine of the sixteen
 `EXCEPTIONS` rows are load-bearing: drop one and a finding appears. The seven
