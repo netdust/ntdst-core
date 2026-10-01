@@ -281,6 +281,7 @@ final class ThemeTrimTest extends TestCase
 
         Monkey\Functions\when('load_theme_textdomain')->justReturn(true);
         Monkey\Functions\when('get_template_directory')->justReturn('/srv/theme');
+        Monkey\Functions\when('get_stylesheet_directory')->justReturn('/srv/theme');
         Monkey\Functions\when('register_nav_menus')->justReturn(null);
 
         // A theme that asks for nothing gets nothing mounted on its behalf.

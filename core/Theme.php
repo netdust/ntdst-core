@@ -71,7 +71,7 @@ class NTDST_Theme
     {
         // Load text domain for translations
         if (!empty($this->config['textdomain'])) {
-            load_theme_textdomain(sanitize_key($this->config['textdomain']), get_template_directory() . '/languages');
+            load_theme_textdomain(sanitize_key($this->config['textdomain']), $this->languages_dir());
         }
 
         // Set content width
@@ -134,6 +134,14 @@ class NTDST_Theme
                 return sprintf($this->config['excerpt']['more'], esc_url(get_permalink()));
             });
         }
+    }
+
+    // A child theme's own languages/ first: get_template_directory() is the parent.
+    private function languages_dir(): string
+    {
+        $child = get_stylesheet_directory() . '/languages';
+
+        return is_dir($child) ? $child : get_template_directory() . '/languages';
     }
 
     /**
