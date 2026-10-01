@@ -4,6 +4,17 @@ The migration tables live in `README.md` under `## Versions` — this file is th
 short answer to "what changed in this tag". Nothing here replaces reading that
 section before a MAJOR bump.
 
+## 5.4.1
+
+Fix. `^5.4` consumers upgrade without a code change.
+
+### Fixed
+
+- `NTDST_Theme::setup_theme()` loads the text domain from the child theme's
+  `languages/` (`get_stylesheet_directory()`) when it exists, falling back to
+  the parent's (`get_template_directory()`). Under a child theme the parent
+  folder was searched, so the child's own translations never loaded.
+
 ## 5.4.0
 
 Additive. `^5.3` consumers upgrade without a code change — without languages,

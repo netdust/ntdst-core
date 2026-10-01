@@ -114,6 +114,7 @@ final class CoreShapeCluster5FeatureTest extends TestCase
     {
         Monkey\Functions\when('load_theme_textdomain')->justReturn(true);
         Monkey\Functions\when('get_template_directory')->justReturn('/srv/theme');
+        Monkey\Functions\when('get_stylesheet_directory')->justReturn('/srv/theme');
         Monkey\Functions\when('__')->returnArg(1);
         Monkey\Functions\when('sanitize_text_field')->returnArg(1);
 
@@ -180,6 +181,7 @@ final class CoreShapeCluster5FeatureTest extends TestCase
     {
         Monkey\Functions\when('load_theme_textdomain')->justReturn(true);
         Monkey\Functions\when('get_template_directory')->justReturn('/srv/theme');
+        Monkey\Functions\when('get_stylesheet_directory')->justReturn('/srv/theme');
         Monkey\Functions\when('__')->returnArg(1);
         Monkey\Functions\when('sanitize_text_field')->returnArg(1);
         Functions\when('add_theme_support')->justReturn(null);
@@ -212,6 +214,7 @@ final class CoreShapeCluster5FeatureTest extends TestCase
     {
         Monkey\Functions\when('load_theme_textdomain')->justReturn(true);
         Monkey\Functions\when('get_template_directory')->justReturn('/srv/theme');
+        Monkey\Functions\when('get_stylesheet_directory')->justReturn('/srv/theme');
         Monkey\Functions\when('__')->returnArg(1);
         Monkey\Functions\when('register_nav_menus')->justReturn(null);
         Monkey\Functions\when('get_permalink')->justReturn('https://example.test/post/');
