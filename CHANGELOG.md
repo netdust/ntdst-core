@@ -4,6 +4,19 @@ The migration tables live in `README.md` under `## Versions` — this file is th
 short answer to "what changed in this tag". Nothing here replaces reading that
 section before a MAJOR bump.
 
+## 5.4.2
+
+Fix. `^5.4` consumers upgrade without a code change; a field that already
+declared a `label` now shows it.
+
+### Fixed
+
+- The metabox draws a top-level field's declared `label` as its label. It was
+  always made from the key (`contact_name` became "Contact Name") and a `label`
+  on the declaration was ignored, while a repeater sub-field already read it. A
+  blank or missing `label` still falls back to the key, and the label is
+  escaped on output.
+
 ## 5.4.1
 
 Fix. `^5.4` consumers upgrade without a code change.
