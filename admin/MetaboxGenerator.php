@@ -788,6 +788,13 @@ final class NTDST_MetaboxGenerator
         // read the developer's own words — options, sub_fields, post_type,
         // button_text — out of one place instead of two.
         $config = is_array($type) ? $type : ['type' => $type];
+
+        // A declared `label` is the developer's word for the field; the key
+        // is only the fallback. A repeater sub-field already read it.
+        if (isset($config['label']) && is_string($config['label']) && trim($config['label']) !== '') {
+            $label = $config['label'];
+        }
+
         $type_name = NTDST_FieldTypes::declaredType($type);
         $readonly = !empty($config['readonly']);
         $required = !empty($config['required']);

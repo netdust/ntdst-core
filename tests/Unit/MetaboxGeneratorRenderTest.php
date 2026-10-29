@@ -773,6 +773,31 @@ final class MetaboxGeneratorRenderTest extends TestCase
         return $this->generator ??= (new ReflectionClass('NTDST_MetaboxGenerator'))->newInstanceWithoutConstructor();
     }
 
+    public function test_a_declared_label_replaces_the_label_made_from_the_key(): void
+    {
+        $html = $this->render(['contact_name' => ['type' => 'text', 'label' => 'Naam']]);
+
+        $this->assertMatchesRegularExpression('/<label[^>]*>Naam<\/label>/', $html);
+        $this->assertStringNotContainsString('Contact Name', $html);
+    }
+
+    public function test_a_blank_or_missing_label_falls_back_to_the_key(): void
+    {
+        $blank = $this->render(['contact_name' => ['type' => 'text', 'label' => '   ']]);
+        $missing = $this->render(['contact_name' => 'text']);
+
+        $this->assertStringContainsString('Contact Name', $blank);
+        $this->assertStringContainsString('Contact Name', $missing);
+    }
+
+    public function test_a_declared_label_is_escaped_on_output(): void
+    {
+        $html = $this->render(['contact_name' => ['type' => 'text', 'label' => '<b onclick="x">Naam</b>']]);
+
+        $this->assertStringNotContainsString('<b onclick', $html);
+        $this->assertStringContainsString('&lt;b onclick', $html);
+    }
+
     /** The whole fifteen-control screen, rendered once. */
     private function renderAll(): string
     {
