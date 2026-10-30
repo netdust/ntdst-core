@@ -32,6 +32,7 @@ if (!class_exists('WP_REST_Request')) {
         public function get_method(): string { return $this->verb; }
         public function get_route(): string { return $this->route; }
         public function set_url_params(array $params): void { $this->urlParams = $params; }
+        public function get_url_params(): array { return $this->urlParams; }
         public function set_query_params(array $params): void { $this->queryParams = $params; }
         public function get_query_params(): array { return $this->queryParams; }
         public function set_body_params(array $params): void { $this->bodyParams = $params; }

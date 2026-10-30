@@ -367,8 +367,10 @@ final class NTDST_Rest
 
     /**
      * The request one ability input stands for: the route's first verb, its
-     * path with every named group replaced by the encoded input value, and the
-     * remaining input as query params on a read verb or body params on a write.
+     * path with every named group replaced by the encoded input value — the
+     * value itself also a URL param, so the permission sees it before the
+     * dispatch matches the route — and the remaining input as query params on
+     * a read verb or body params on a write.
      *
      * @param array<string, mixed> $record
      * @param array<string, mixed> $input
@@ -377,15 +379,18 @@ final class NTDST_Rest
     {
         $verb = self::verbs($record['methods'])[0];
 
+        $values = [];
+
         // A named group must hold no nested parentheses: its body ends at the first ')'.
-        $route = preg_replace_callback('/\(\?P?<([A-Za-z_][A-Za-z0-9_]*)>[^)]*\)/', static function (array $match) use (&$input): string {
-            $value = rawurlencode((string) ($input[$match[1]] ?? ''));
+        $route = preg_replace_callback('/\(\?P?<([A-Za-z_][A-Za-z0-9_]*)>[^)]*\)/', static function (array $match) use (&$input, &$values): string {
+            $values[$match[1]] = (string) ($input[$match[1]] ?? '');
             unset($input[$match[1]]);
 
-            return $value;
+            return rawurlencode($values[$match[1]]);
         }, $record['route']);
 
         $request = new WP_REST_Request($verb, '/' . trim($record['namespace'], '/') . '/' . ltrim($route, '/'));
+        $request->set_url_params($values);
 
         if (in_array($verb, self::READ, true)) {
             $request->set_query_params($input);

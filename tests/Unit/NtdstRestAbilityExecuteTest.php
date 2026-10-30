@@ -358,5 +358,18 @@ final class NtdstRestAbilityExecuteTest extends TestCase
         $this->assertSame('/stride/v1/admin/editions/12', $this->dispatched[0]->get_route());
         $this->assertSame('/stride/v1/admin/editions/12%2F..%2Fx', $this->dispatched[1]->get_route());
         $this->assertArrayNotHasKey('id', $this->dispatched[1]->get_query_params());
+        $this->assertSame(['id' => '12'], $this->dispatched[0]->get_url_params());
+        $this->assertSame(['id' => '12/../x'], $this->dispatched[1]->get_url_params());
+    }
+
+    public function testAPerObjectPermissionSeesThePathParameter(): void
+    {
+        $this->declareRead('/admin/editions/(?P<id>\d+)', 'get-edition', [
+            'permission' => fn(WP_REST_Request $r): bool => $r->get_param('id') === '12',
+        ]);
+        $permission = $this->ability('stride-v1/get-edition')['permission_callback'];
+
+        $this->assertTrue($permission(['id' => '12']));
+        $this->assertFalse($permission(['id' => '13']));
     }
 }

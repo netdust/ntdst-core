@@ -72,7 +72,9 @@ Core registers each distinct category itself, with the slug as its label.
 Executing an ability is one `rest_do_request()`: the ability returns the response's data, and
 a `WP_Error` keeps its status. The route's own permission is also the ability's
 `permission_callback`, so a consumer's own callable runs on two request objects per execution
-— the ability's synthetic one, then the dispatch's memoized one. The rate limit is charged once,
+— the ability's synthetic one, which carries the path parameters as URL params too, so a
+per-object check such as `current_user_can('edit_post', (int) $r['id'])` sees them, then the
+dispatch's memoized one. The rate limit is charged once,
 inside the dispatch.
 
 `schema` (or `output_schema`) describes the RESPONSE as `get_data()` returns it: a list route
