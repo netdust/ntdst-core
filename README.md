@@ -79,17 +79,22 @@ inside the dispatch.
 
 `schema` (or `output_schema`) describes the RESPONSE as `get_data()` returns it: a list route
 declares `type: array` with `items`, or its paginated object, because WordPress validates the
-whole return. `input_schema` is built from the route's path parameters and `args`: a path
+whole return. `['type' => 'object']` is a valid, permissive `output_schema`, so describing the
+response field by field is optional. `input_schema` is built from the route's path parameters and `args`: a path
 parameter is a required `string`, an `args` entry of the same name refines that type, and an
 `args` entry with none of the JSON Schema keywords WordPress allows (`rest_get_allowed_schema_keywords()`) is only listed in
 `required`, and only when it says `required`; an entry with some of them becomes a property with
 just those keys. Path parameter values are `rawurlencode`d
-into the path.
+into the path, so a value that needs encoding reaches the handler percent-encoded, where the
+HTTP door decodes the path once before matching; regex outside the named groups (`/?$`, `\.json`)
+stays in the built path as written and matches nothing.
 
 Three notices say why a route registered and its ability did not: `abilities:unavailable`
 (WordPress < 6.9, or core mounted after the registry initialized), `abilities:after-init`
 (declared after `wp_abilities_api_init` finished) and `abilities:schema` (the route's `schema`
 resolved to nothing). Core mounted too late reports `abilities:mounted-late` for itself.
+With the bridge down (`abilities:unavailable` or `abilities:after-init`) the `ability` block is
+not validated at all: the route registers, one debug notice, nothing else.
 
 On core < 5.5.0 the option is unknown and the whole route is not registered.
 
