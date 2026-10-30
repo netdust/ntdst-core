@@ -218,6 +218,8 @@ final class NtdstRestAbilityTest extends TestCase
             'annotation-type' => ['ability:write-annotations', 'ab/v1', $with(['idempotent' => 'yes'] + $block), false],
             'output-schema'   => ['ability:output-schema', 'ab/v1', $noSchema, false],
             'empty-output'    => ['ability:output-schema', 'ab/v1', ['ability' => ['output_schema' => []] + $block] + $noSchema, false],
+            'bad-output-empty'  => ['ability:output-schema', 'ab/v1', $with(['output_schema' => []] + $block), false],
+            'bad-output-string' => ['ability:output-schema', 'ab/v1', $with(['output_schema' => 'foo'] + $block), false],
             'category'        => ['ability:category', 'ab/v1', $with(['category' => 'Bad Cat'] + $block), false],
             'duplicate'       => ['ability:duplicate', 'ab/v1', $valid, true],
         ];

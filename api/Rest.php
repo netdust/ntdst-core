@@ -937,11 +937,10 @@ final class NTDST_Rest
             return null;
         }
 
-        $schema = $options['schema'] ?? null;
+        $schema = array_key_exists('output_schema', $block) ? $block['output_schema'] : ($options['schema'] ?? null);
 
-        if (!(is_array($block['output_schema'] ?? null) && $block['output_schema'] !== [])
-            && !is_callable($schema) && !(is_array($schema) && $schema !== [])) {
-            $this->refuse($route, $methods, 'ability:output-schema — give the ability an "output_schema" or the route a "schema"', true, '5.5.0');
+        if (!(is_array($schema) && $schema !== []) && (array_key_exists('output_schema', $block) || !is_callable($schema))) {
+            $this->refuse($route, $methods, 'ability:output-schema — a stated "output_schema" must be a non-empty array, and without one the route needs a "schema"', true, '5.5.0');
 
             return null;
         }
