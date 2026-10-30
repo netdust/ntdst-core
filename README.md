@@ -40,9 +40,48 @@ There is one HTTP surface, and it is `ntdst_rest()`. A command is a `->post()`
 route like any other: WordPress checks the `wp_rest` nonce, the route's
 `permission` decides who may call it, and the browser reaches it with
 `wp.apiFetch`. 5.0.0 deleted the separate same-origin dispatcher that used to
-own commands — see `### 5.0.0 — BREAKING` for the migration table.
+own commands — see `### 5.0.0 — BREAKING` for the migration table. Since 5.5.0 a route
+may also be a WordPress ability: `'ability' => [...]`, see `### 5.5.0`.
 
 ## Versions
+
+### 5.5.0 — abilities
+
+Additive. `^5.4` consumers upgrade without a code change.
+
+A route declared through `ntdst_rest()` becomes a WordPress ability (WordPress 6.9+) with
+one option, `ability`. The ability is the route's shadow: it is never registered any other way.
+
+| Key | |
+|-|-|
+| `name`, `label`, `description` | required; `name` is lowercase letters, digits and dashes |
+| `destructive`, `idempotent` | required booleans on a write verb; on a read they are accepted and ignored, the verb decides |
+| `output_schema` | optional; a present one must be a non-empty array |
+| `category` | optional; default is the namespace slug (`stride/v1` becomes `stride-v1`) |
+
+The ability's full name is `<slug>/<name>`. Core writes the three spellings of exposure
+WordPress 6.9, 7.0 and 7.1 read (`public`, `show_in_rest`, `mcp.public`) all as `true`; there
+is no `public` option, and a `->public()` write is refused before the block is read.
+
+Executing an ability is one `rest_do_request()`: the ability returns the response's data, and
+a `WP_Error` keeps its status. The route's own permission is also the ability's
+`permission_callback`, so a consumer's own callable runs on two request objects per execution
+— the ability's synthetic one, then the dispatch's memoized one. The rate limit is charged once,
+inside the dispatch.
+
+`schema` (or `output_schema`) describes the RESPONSE as `get_data()` returns it: a list route
+declares `type: array` with `items`, or its paginated object, because WordPress validates the
+whole return. `input_schema` is built from the route's path parameters and `args`: a path
+parameter is a required `string`, an `args` entry of the same name refines that type, and a
+typeless `args` entry is only listed in `required`. Path parameter values are `rawurlencode`d
+into the path.
+
+Three notices say why a route registered and its ability did not: `abilities:unavailable`
+(WordPress < 6.9, or core mounted after the registry initialized), `abilities:after-init`
+(declared after `wp_abilities_api_init` finished) and `abilities:schema` (the route's `schema`
+resolved to nothing). Core mounted too late reports `abilities:mounted-late` for itself.
+
+On core < 5.5.0 the option is unknown and the whole route is not registered.
 
 ### 5.4.0 — page routes per language
 

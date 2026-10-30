@@ -43,13 +43,13 @@ case that is a threat and not a posture — a write verb whose gate nobody
 named (§4).
 
 The rule has a corollary that matters more than the rule: **anything WordPress
-understands passes straight through.** `NTDST_Rest::OWN` lists the three options
+understands passes straight through.** `NTDST_Rest::OWN` lists the four options
 the class consumes, under the comment *"Options this class consumes; everything
 else goes to WP verbatim."* — and the file header states it once more:
 *"Everything else is passed straight through to WordPress."* (`api/Rest.php`).
 So `registerOne()` forwards `args`, `schema`, `show_in_index` and `allow_batch`
 untouched. A wrapper that hides the thing it wraps is not a wrapper; it is a
-fork with extra steps.
+fork with extra steps. An ability is a route's shadow: `ntdst_rest()`'s `ability` option is the one way a route becomes one, and core registers no ability of its own (INV-11).
 
 Loading is the same rule applied to the class loader. Core installs no
 autoloader, scans no directory and reads no PHP source: a listed service class

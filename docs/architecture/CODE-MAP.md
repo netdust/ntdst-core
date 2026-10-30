@@ -51,3 +51,9 @@ the refusal is `set_404()` + `status_header(404)` + `nocache_headers()`. It is w
 in `NTDST_Pages` and `NTDST_Response`, recorded as a deliberate exception with the
 convergence named (`Pages` calls `ntdst_response()->notFound()` when a shared require
 is acceptable). An edit to one without the other is a defect — this pair drifted once.
+
+## An ability is a route's shadow
+`NTDST_Rest::registerOne()` records an `ability` option's declaration in `Rest::$abilities`; nothing is registered with WordPress there.
+`mountAbilities()` (read by `ntdst-core.php`) hooks the two walks on `wp_abilities_api_categories_init` and `wp_abilities_api_init`, the only callers of `wp_register_ability_category()` and `wp_register_ability()`.
+The `permission_callback` handed to WordPress is the route's resolved permission, never `guard()`; the execute callback is one `rest_do_request()`.
+`bin/guard.sh` holds INV-11's grep: a `wp_register_ability` outside `api/Rest.php` fails the gate.

@@ -8,7 +8,7 @@ rulings in `docs/plans/2026-08-23-core-shape-brief.md` and
 
 Each entry says whether it **holds today** or is **established by** a phase of
 `specs/core-shape`, `specs/field-types` or `specs/core-trim` — INV-9 and INV-10
-are core-trim's, and core-trim re-ran INV-8's two commands at its own merge
+are core-trim's, INV-11 is abilities-bridge's, and core-trim re-ran INV-8's two commands at its own merge
 commit; the mechanical check is what `invariant-auditor` runs verbatim.
 The governing rule behind all of them is `docs/philosophy.md` §1: wrap WordPress,
 never replace it — where WordPress has a word, core uses it.
@@ -200,7 +200,10 @@ named here: `Rest::OWN`, `Rest::READ`, `Rest::RETIRED`,
 surface's OWN option keys, read verbs, retired option names and refused
 `->public()` verbs — words WordPress keeps no table for), `Rest::$limits`,
 `$reported`, `$instances`, `$cors` (declared/max_age only), `$corsOrigins`,
-`$corsResolvers`, `$defaults`,
+`$corsResolvers`, `$defaults`, `Rest::$abilities` (the declarations recorded before
+`wp_abilities_api_init` fires; WordPress refuses a registration outside that hook
+(`abilities-api.php:290-303`), so it keeps no table of a declaration made before it;
+`$abilitiesMounted` is a `bool` and is not a hit),
 `Template_Loader::$custom_paths`, `$template_cache`, `$page_data`,
 `Logger::$batchedLogs`, `Data::$models`, `Data::$globalScopes`,
 `FieldTypes::$table`/`::RETIRED` and `ClientIp::DEFAULT_TRUSTED_PROXIES` — the
@@ -224,7 +227,8 @@ every answer in `{success, data}` — a REST route returns the payload and
 WordPress builds the body.
 
 Re-run verbatim at `85b54cb` (T14): TWENTY hits, unchanged from `2fbde3d` — the
-same twenty names above, nothing new and nothing named here gone.
+same twenty names above, nothing new and nothing named here gone. Re-run verbatim at
+`@@SHA@@` (abilities-bridge): TWENTY-ONE hits — the twenty, plus `Rest::$abilities`.
 
 ## INV-6 — One template resolver; page routes are rewrite rules; a template callback returns a path
 
@@ -664,6 +668,15 @@ file, `core/Bootstrap.php`; (4) has the single gated `ntdst_set($class)` at
 with the same four answers. (2) was also run
 against a scratch file holding the exact line 5.0.0 deleted,
 `$relativePath = str_replace('\\', '/', $class) . '.php';` — one hit.
+
+## INV-11 — An ability is the shadow of a route
+
+A WordPress ability exists in this package and its consumers only as the `ability` option of a route declared through `ntdst_rest()`. Executing it dispatches that route through `rest_do_request()`, so the route's permission, its rate limit and its response shaping run once, where they already run. Core registers no ability of its own.
+
+**Convergence point:** `api/Rest.php` — `registerOne()` records the declaration, `mountAbilities()` hooks `wp_abilities_api_categories_init` and `wp_abilities_api_init` once at boot (its reader is `ntdst-core.php`), and the two walks are the only callers of `wp_register_ability_category()` and `wp_register_ability()`. The ability's `permission_callback` is the route's resolved permission, never `guard()` (INV-7: discovery charges nothing).
+**Bypass smell:** `wp_register_ability(` or `wp_register_ability_category(` outside `api/Rest.php`; an `execute_callback` that is not a REST dispatch; a consumer class named `*AbilityRegistrar`; a `permission_callback` that is the limiter guard.
+**Mechanical check:** `grep -rn "wp_register_ability" --include=*.php . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → EMPTY. `bin/guard.sh` runs the same line, so the gate fails on a second door.
+**Status:** established 2026-10 (specs/abilities-bridge). Re-run verbatim at `@@SHA@@`: EMPTY.
 
 ---
 
