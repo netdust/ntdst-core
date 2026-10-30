@@ -39,7 +39,7 @@ defined('ABSPATH') || exit;
 final class NTDST_Rest
 {
     /** Options this class consumes; everything else goes to WP verbatim. */
-    private const OWN = ['permission', 'rate_limit', 'rate_window'];
+    private const OWN = ['permission', 'rate_limit', 'rate_window', 'ability'];
 
     /**
      * The two postures WordPress can already name for itself, registered as
@@ -144,11 +144,59 @@ final class NTDST_Rest
      */
     private static array $limits = [];
 
+    /**
+     * Declarations that become abilities, keyed by the full name
+     * `<slug>/<name>`, for the two walks on the abilities hooks to register.
+     *
+     * @var array<string, array{namespace: string, route: string, methods: string, permission: callable|string, args: array, schema: callable|array|null, ability: array, readonly: bool}>
+     */
+    private static array $abilities = [];
+
+    /** Whether mountAbilities() hooked the walks — read instead of function_exists(). */
+    private static bool $abilitiesMounted = false;
+
     public function __construct(private string $namespace) {}
 
     public static function forNamespace(string $namespace): self
     {
         return self::$instances[$namespace] ??= new self($namespace);
+    }
+
+    /**
+     * Hook the two walks that turn recorded declarations into abilities, once.
+     *
+     * Called from ntdst-core.php at load, before anything asks the lazy
+     * abilities registry. Without the Abilities API (WordPress < 6.9) it does
+     * nothing and every `ability` option stays inert. Reached after the hook
+     * has fired it mounts nothing and says so — the walks would never run.
+     */
+    public static function mountAbilities(): void
+    {
+        if (self::$abilitiesMounted || !function_exists('wp_register_ability')) {
+            return;
+        }
+
+        if (self::abilitiesTiming() !== 'before') {
+            self::forNamespace('ntdst')->refuse(
+                '(abilities)',
+                '-',
+                'abilities:mounted-late — wp_abilities_api_init has already fired, so nothing declared through ntdst_rest() can become an ability on this request; load ntdst-core before init',
+                false,
+                '5.5.0',
+                'mountAbilities',
+            );
+
+            return;
+        }
+
+        add_action('wp_abilities_api_categories_init', static function (): void {
+            self::walkCategories();
+        });
+        add_action('wp_abilities_api_init', static function (): void {
+            self::walkAbilities();
+        });
+
+        self::$abilitiesMounted = true;
     }
 
     /**
@@ -585,6 +633,22 @@ final class NTDST_Rest
         return function_exists('did_action') && did_action('rest_api_init') ? 'after' : 'before';
     }
 
+    /** timing()'s three states, for wp_abilities_api_init. */
+    private static function abilitiesTiming(): string
+    {
+        if (function_exists('doing_action') && doing_action('wp_abilities_api_init')) {
+            return 'inside';
+        }
+
+        return function_exists('did_action') && did_action('wp_abilities_api_init') ? 'after' : 'before';
+    }
+
+    /** A REST namespace as an ability prefix: 'stride/v1' → 'stride-v1'. */
+    private static function slug(string $namespace): string
+    {
+        return str_replace('/', '-', trim($namespace, '/'));
+    }
+
     /**
      * The priority rest_api_init is firing at, when WordPress can say.
      *
@@ -759,6 +823,17 @@ final class NTDST_Rest
             unset($options[$name]);
         }
 
+        $ability = null;
+
+        if (isset($options['ability'])) {
+            $bridgeUp = self::$abilitiesMounted && self::abilitiesTiming() !== 'after';
+            $ability  = $this->ability($route, $methods, $options);
+
+            if ($ability === null && $bridgeUp) {
+                return;
+            }
+        }
+
         if (($options['rate_limit'] ?? null) !== null) {
             self::$limits[$this->key($route, $methods)] = [
                 'limit'  => (int) $options['rate_limit'],
@@ -778,6 +853,112 @@ final class NTDST_Rest
             'callback'            => $handler,
             'permission_callback' => $literal ? $permission : $this->guard($permission, $route, $methods, $options),
         ]);
+
+        if ($ability !== null) {
+            self::$abilities[self::slug($this->namespace) . '/' . $ability['name']] = [
+                'namespace'  => $this->namespace,
+                'route'      => $route,
+                'methods'    => $methods,
+                'permission' => $permission,
+                'args'       => $options['args'] ?? [],
+                'schema'     => $options['schema'] ?? null,
+                'ability'    => $ability,
+                'readonly'   => array_diff(self::verbs($methods), self::READ) === [],
+            ];
+        }
+    }
+
+    /**
+     * The `ability` block, validated, with its category filled in — or null
+     * after exactly one refusal. Only the two bridge-down refusals are
+     * non-fatal: the route stands and simply is not an ability.
+     *
+     * @param array<string, mixed> $options
+     * @return array<string, mixed>|null
+     */
+    private function ability(string $route, string $methods, array $options): ?array
+    {
+        if (!self::$abilitiesMounted) {
+            $this->refuse($route, $methods, 'abilities:unavailable — the Abilities API is not available on this WordPress (6.9+), or ntdst-core mounted after it had initialized, so the route is registered and the ability is not', false, '5.5.0', 'route', false, false);
+
+            return null;
+        }
+
+        if (self::abilitiesTiming() === 'after') {
+            $this->refuse($route, $methods, 'abilities:after-init — wp_abilities_api_init has finished, so the route is registered and the ability is not; declare it before init', false, '5.5.0');
+
+            return null;
+        }
+
+        $block = $options['ability'];
+
+        if (!is_array($block)) {
+            $this->refuse($route, $methods, 'ability:shape — "ability" must be an array', true, '5.5.0');
+
+            return null;
+        }
+
+        $unknown = array_diff(array_keys($block), ['name', 'label', 'description', 'destructive', 'idempotent', 'output_schema', 'category']);
+
+        if ($unknown !== []) {
+            $this->refuse($route, $methods, 'ability:unknown — unknown key(s): ' . implode(', ', $unknown), true, '5.5.0');
+
+            return null;
+        }
+
+        $slug = self::slug($this->namespace);
+
+        if (!preg_match('/^[a-z0-9-]+$/', $slug)) {
+            $this->refuse($route, $methods, sprintf('ability:namespace — "%s" is not an ability prefix; a namespace must be lowercase letters, digits, dashes and slashes', $this->namespace), true, '5.5.0');
+
+            return null;
+        }
+
+        if (!is_string($block['name'] ?? null) || !preg_match('/^[a-z0-9-]+$/', $block['name'])) {
+            $this->refuse($route, $methods, 'ability:name — "name" must be lowercase letters, digits and dashes', true, '5.5.0');
+
+            return null;
+        }
+
+        foreach (['label', 'description'] as $key) {
+            if (!is_string($block[$key] ?? null) || $block[$key] === '') {
+                $this->refuse($route, $methods, sprintf('ability:%s — "%s" must be a non-empty string', $key, $key), true, '5.5.0');
+
+                return null;
+            }
+        }
+
+        // On a read verb the verb decides the annotations; the two keys are ignored (Ruling 8).
+        $write = array_diff(self::verbs($methods), self::READ) !== [];
+
+        if ($write && (!is_bool($block['destructive'] ?? null) || !is_bool($block['idempotent'] ?? null))) {
+            $this->refuse($route, $methods, 'ability:write-annotations — a write verb must state "destructive" and "idempotent" as booleans', true, '5.5.0');
+
+            return null;
+        }
+
+        $schema = $options['schema'] ?? null;
+
+        if (!(is_array($block['output_schema'] ?? null) && $block['output_schema'] !== [])
+            && !is_callable($schema) && !(is_array($schema) && $schema !== [])) {
+            $this->refuse($route, $methods, 'ability:output-schema — give the ability an "output_schema" or the route a "schema"', true, '5.5.0');
+
+            return null;
+        }
+
+        if (isset($block['category']) && (!is_string($block['category']) || !preg_match('/^[a-z0-9-]+$/', $block['category']))) {
+            $this->refuse($route, $methods, 'ability:category — "category" must be lowercase letters, digits and dashes', true, '5.5.0');
+
+            return null;
+        }
+
+        if (isset(self::$abilities[$slug . '/' . $block['name']])) {
+            $this->refuse($route, $methods, sprintf('ability:duplicate — "%s/%s" is already declared by another route', $slug, $block['name']), true, '5.5.0');
+
+            return null;
+        }
+
+        return ['category' => $block['category'] ?? $slug] + $block;
     }
 
     /**
@@ -1082,6 +1263,8 @@ final class NTDST_Rest
      *                       the file its author is editing, so the caller's line
      *                       joins the id. Everything else is settled by the
      *                       cheap id and never pays for a backtrace.
+     * @param bool $log      False for a notice that is _doing_it_wrong() alone,
+     *                       which WordPress gates on WP_DEBUG — debug only.
      */
     private function refuse(
         string $route,
@@ -1090,7 +1273,8 @@ final class NTDST_Rest
         bool $fatal = true,
         ?string $since = null,
         string $from = 'route',
-        bool $perCallSite = false
+        bool $perCallSite = false,
+        bool $log = true
     ): void {
         $id = implode('|', [$this->namespace, $route, $methods, (int) $fatal, $why]);
 
@@ -1119,6 +1303,10 @@ final class NTDST_Rest
             $fatal ? sprintf('Route was not registered — %s.', $why) : $why,
             $since ?? '3.0.0',
         );
+
+        if (!$log) {
+            return;
+        }
 
         $entry = [
             'namespace' => $this->namespace,
