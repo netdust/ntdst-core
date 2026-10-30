@@ -1,8 +1,8 @@
 <?php // tests/Unit/NtdstRestAbilityTest.php
 // The `ability` option on ntdst_rest() (5.5.0): a route declared with it also
 // becomes a WordPress ability. This file pins the declaration half — the
-// refusals, the record, the boot-time mount. The walks that register from the
-// record are Task 3's, so $this->registered / $this->categories stay empty here.
+// refusals, the record, the boot-time mount — and the walk half: the two
+// abilities hooks registering categories and abilities from the record.
 defined('ABSPATH') || exit; // direct web hit: ABSPATH undefined → exit; the bootstrap defines it under phpunit
 
 use Brain\Monkey;
@@ -35,6 +35,9 @@ final class NtdstRestAbilityTest extends TestCase
     /** doing_action('wp_abilities_api_init'). */
     private bool $abilitiesInitDoing = false;
 
+    /** rest_get_server() and both registrations, in call order. */
+    private array $calls = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -46,6 +49,7 @@ final class NtdstRestAbilityTest extends TestCase
         $this->categories         = [];
         $this->abilitiesInitDid   = 0;
         $this->abilitiesInitDoing = false;
+        $this->calls              = [];
 
         $this->resetRestHarness();
 
@@ -57,7 +61,18 @@ final class NtdstRestAbilityTest extends TestCase
             },
         );
 
+        // Like WordPress, the first rest_get_server() fires rest_api_init. The
+        // harness's own calls while that hook runs are not the code's, so only
+        // the outer ones are recorded.
         Functions\when('rest_get_server')->alias(function () {
+            if (!$this->restApiInitDoing) {
+                $this->calls[] = 'rest_get_server';
+            }
+
+            if ($this->restApiInitDid === 0) {
+                $this->fireRestApiInit();
+            }
+
             $table = $this->routeTable;
             return new class($table) {
                 public function __construct(private array $table) {}
@@ -87,11 +102,13 @@ final class NtdstRestAbilityTest extends TestCase
         });
 
         Functions\when('wp_register_ability')->alias(function ($name, $args = []) {
+            $this->calls[] = 'wp_register_ability:' . $name;
             $this->registered[(string) $name] = $args;
             return true;
         });
 
         Functions\when('wp_register_ability_category')->alias(function ($slug, $args = []) {
+            $this->calls[] = 'wp_register_ability_category:' . $slug;
             $this->categories[(string) $slug] = $args;
             return true;
         });
@@ -120,6 +137,98 @@ final class NtdstRestAbilityTest extends TestCase
     private function mount(): void
     {
         NTDST_Rest::mountAbilities();
+    }
+
+    /**
+     * Run one abilities hook the way WP_Hook does, in priority order;
+     * did_action() and doing_action() read as WordPress would while
+     * wp_abilities_api_init runs.
+     */
+    private function fire(string $hook): void
+    {
+        $byPriority = $this->hooked[$hook] ?? [];
+        ksort($byPriority);
+
+        $abilities = $hook === 'wp_abilities_api_init';
+
+        if ($abilities) {
+            $this->abilitiesInitDid   = 1;
+            $this->abilitiesInitDoing = true;
+        }
+
+        foreach ($byPriority as $callbacks) {
+            foreach ($callbacks as $callback) {
+                $callback();
+            }
+        }
+
+        if ($abilities) {
+            $this->abilitiesInitDoing = false;
+        }
+    }
+
+    private function fireBoth(): void
+    {
+        $this->fire('wp_abilities_api_categories_init');
+        $this->fire('wp_abilities_api_init');
+    }
+
+    /** The two callbacks out, so the rest can be compared by value. */
+    private static function withoutCallbacks(array $args): array
+    {
+        return array_diff_key($args, ['execute_callback' => 1, 'permission_callback' => 1]);
+    }
+
+    /** The GET /admin/stats read; a read that still writes 'destructive' => true. */
+    private static function declareStats(array $options = []): void
+    {
+        ntdst_rest('stride/v1')->get('/admin/stats', self::handler(), $options + [
+            'permission' => 'stride_view',
+            'args'       => [
+                'fresh' => ['type' => 'boolean', 'description' => 'Skip the cache', 'sanitize_callback' => 'rest_sanitize_boolean'],
+            ],
+            'schema'     => static fn(): array => self::schema(),
+            'ability'    => [
+                'name'        => 'get-stats',
+                'label'       => 'Get stats',
+                'description' => 'Reads the admin stats.',
+                'destructive' => true,
+            ],
+        ]);
+    }
+
+    /** "The option, as a consumer writes it", verbatim. */
+    private static function declareAttendance(): void
+    {
+        $c = new class {
+            public function handleMarkAttendance(): array
+            {
+                return ['ok' => true];
+            }
+
+            public function attendanceSchema(): array
+            {
+                return ['type' => 'object', 'properties' => ['status' => ['type' => 'string']]];
+            }
+        };
+
+        ntdst_rest('stride/v1')->post('/admin/attendance', [$c, 'handleMarkAttendance'], [
+            'permission' => 'stride_manage',
+            'rate_limit' => 300,
+            'args'       => [
+                'session_id' => ['type' => 'integer', 'required' => true, 'description' => 'Session post ID'],
+                'user_id'    => ['type' => 'integer', 'required' => true],
+                'status'     => ['type' => 'string', 'default' => 'present'],
+            ],
+            'schema'     => [$c, 'attendanceSchema'],
+            'ability'    => [
+                'name'        => 'mark-attendance',
+                'label'       => 'Mark attendance',
+                'description' => 'Marks one user present, absent or excused for one session.',
+                'destructive' => false,
+                'idempotent'  => true,
+            ],
+        ]);
     }
 
     /** The `reason` of every ntdst_log('api') entry at this level. */
@@ -381,5 +490,228 @@ final class NtdstRestAbilityTest extends TestCase
             $this->assertCount(1, $callbacks, "one closure on {$hook}.");
             $this->assertInstanceOf(Closure::class, $callbacks[0]);
         }
+    }
+
+    // =====================================================================
+    // The walk — two hooks, registering from the record
+    // =====================================================================
+
+    public function testAPublicWriteNeverBecomesAnAbility(): void
+    {
+        $this->mount();
+
+        ntdst_rest('ab/v1')->post('/x', self::handler(), [
+            'schema'  => self::schema(),
+            'ability' => ['name' => 'x', 'label' => 'X', 'description' => 'd', 'destructive' => true, 'idempotent' => true],
+        ])->public();
+        $this->fireBoth();
+
+        $this->assertArrayNotHasKey('/ab/v1/x', $this->routeTable, 'the verb rule refuses an anonymous write.');
+
+        foreach ([...$this->logReasons('error'), ...$this->logReasons('warning')] as $reason) {
+            $this->assertStringNotContainsString('ability:', $reason, 'refused before the block is read.');
+        }
+
+        $this->assertSame([], $this->registered);
+    }
+
+    public function testAValidReadDeclarationIsRecordedOnce(): void
+    {
+        $this->mount();
+
+        self::declareStats();
+        $this->fireBoth();
+        $this->fireRestApiInit();
+
+        $this->assertSame(['stride-v1/get-stats'], array_keys($this->registered));
+        $this->assertSame(['wp_register_ability:stride-v1/get-stats'], array_values(array_filter(
+            $this->calls,
+            static fn(string $call): bool => str_starts_with($call, 'wp_register_ability:'),
+        )));
+    }
+
+    public function testADeclarationInsideTheHookIsRecorded(): void
+    {
+        $this->mount();
+
+        self::declareStats();
+        $this->assertSame([], $this->routeTable, 'queued for rest_api_init, not yet flushed.');
+
+        $this->fire('wp_abilities_api_init');
+
+        $this->assertArrayHasKey('/stride/v1/admin/stats', $this->routeTable);
+        $this->assertArrayHasKey('stride-v1/get-stats', $this->registered, 'flushed by the walk while the hook runs: recorded, then registered.');
+        $this->assertSame([], $this->logReasons('warning'), 'no abilities:after-init.');
+    }
+
+    public function testARouteWithoutArgsRecordsNoInputSchema(): void
+    {
+        $this->mount();
+
+        self::declareStats(['args' => []]);
+        $this->fireBoth();
+
+        $this->assertArrayNotHasKey('input_schema', $this->registered['stride-v1/get-stats']);
+    }
+
+    public function testTheWalkFillsTheBufferBeforeRegistering(): void
+    {
+        $this->mount();
+
+        self::declareAttendance();
+        $this->fireBoth();
+
+        $this->assertSame([
+            'rest_get_server',
+            'wp_register_ability_category:stride-v1',
+            'rest_get_server',
+            'wp_register_ability:stride-v1/mark-attendance',
+        ], array_slice($this->calls, 0, 4));
+    }
+
+    public function testTheRegisteredArgsAreExactForAReadAndAWrite(): void
+    {
+        $this->mount();
+
+        self::declareStats();
+        self::declareAttendance();
+        $this->fireBoth();
+
+        $read  = $this->registered['stride-v1/get-stats'];
+        $write = $this->registered['stride-v1/mark-attendance'];
+
+        $this->assertSame([
+            'label'         => 'Get stats',
+            'description'   => 'Reads the admin stats.',
+            'category'      => 'stride-v1',
+            'input_schema'  => [
+                'type'       => 'object',
+                'properties' => ['fresh' => ['type' => 'boolean', 'description' => 'Skip the cache']],
+            ],
+            'output_schema' => self::schema(),
+            'meta'          => [
+                'annotations'  => ['readonly' => true, 'destructive' => false, 'idempotent' => true],
+                'public'       => true,
+                'show_in_rest' => true,
+                'mcp'          => ['public' => true],
+            ],
+        ], self::withoutCallbacks($read), 'a read: the verb decides the annotations, the declared destructive is ignored.');
+
+        $this->assertSame([
+            'label'         => 'Mark attendance',
+            'description'   => 'Marks one user present, absent or excused for one session.',
+            'category'      => 'stride-v1',
+            'input_schema'  => [
+                'type'       => 'object',
+                'properties' => [
+                    'session_id' => ['type' => 'integer', 'description' => 'Session post ID'],
+                    'user_id'    => ['type' => 'integer'],
+                    'status'     => ['type' => 'string', 'default' => 'present'],
+                ],
+                'required'   => ['session_id', 'user_id'],
+            ],
+            'output_schema' => ['type' => 'object', 'properties' => ['status' => ['type' => 'string']]],
+            'meta'          => [
+                'annotations'  => ['readonly' => false, 'destructive' => false, 'idempotent' => true],
+                'public'       => true,
+                'show_in_rest' => true,
+                'mcp'          => ['public' => true],
+            ],
+        ], self::withoutCallbacks($write));
+
+        foreach ([$read, $write] as $args) {
+            $this->assertSame(
+                ['label', 'description', 'category', 'input_schema', 'output_schema', 'execute_callback', 'permission_callback', 'meta'],
+                array_keys($args),
+            );
+            $this->assertInstanceOf(Closure::class, $args['execute_callback']);
+            $this->assertInstanceOf(Closure::class, $args['permission_callback']);
+        }
+    }
+
+    public function testAPathParameterBecomesARequiredStringUnlessArgsSaysOtherwise(): void
+    {
+        $this->mount();
+
+        $edition = static fn(string $name, array $args): array => [
+            'permission' => 'stride_view',
+            'args'       => $args,
+            'schema'     => self::schema(),
+            'ability'    => ['name' => $name, 'label' => 'Edition', 'description' => 'Reads one edition.'],
+        ];
+
+        ntdst_rest('stride/v1')->get('/admin/editions/(?P<id>\d+)', self::handler(), $edition('get-edition', []));
+        ntdst_rest('stride/v1')->get('/admin/edition/(?P<id>\d+)', self::handler(), $edition('get-edition-typed', ['id' => ['type' => 'integer']]));
+        $this->fireBoth();
+
+        $this->assertSame(
+            ['type' => 'object', 'properties' => ['id' => ['type' => 'string']], 'required' => ['id']],
+            $this->registered['stride-v1/get-edition']['input_schema'],
+        );
+        $this->assertSame(
+            ['type' => 'object', 'properties' => ['id' => ['type' => 'integer']], 'required' => ['id']],
+            $this->registered['stride-v1/get-edition-typed']['input_schema'],
+        );
+    }
+
+    public function testAnEmptyBufferRegistersNothing(): void
+    {
+        $this->mount();
+
+        $this->fireBoth();
+
+        $this->assertSame([], $this->categories);
+        $this->assertSame([], $this->registered);
+        $this->assertSame(['rest_get_server', 'rest_get_server'], $this->calls, 'each walk still asks for the server first.');
+    }
+
+    public function testOneCategoryPerSlugAndTheOverrideIsItsOwn(): void
+    {
+        $this->mount();
+
+        $rest = ntdst_rest('stride/v1');
+        $rest->post('/one', self::handler(), self::validWrite(['name' => 'one']));
+        $rest->post('/two', self::handler(), self::validWrite(['name' => 'two']));
+        $rest->post('/three', self::handler(), self::validWrite(['name' => 'three', 'category' => 'stride']));
+        $this->fireBoth();
+
+        $this->assertSame(
+            ['wp_register_ability_category:stride-v1', 'wp_register_ability_category:stride'],
+            array_values(array_filter($this->calls, static fn(string $call): bool => str_starts_with($call, 'wp_register_ability_category:'))),
+        );
+        $this->assertSame(
+            ['label' => 'stride-v1', 'description' => 'Routes declared through ntdst_rest(), as abilities.'],
+            $this->categories['stride-v1'],
+        );
+        $this->assertSame('stride', $this->registered['stride-v1/three']['category']);
+        $this->assertSame('stride-v1', $this->registered['stride-v1/one']['category']);
+    }
+
+    public function testASchemaThatResolvesToNothingSkipsThatAbilityOnly(): void
+    {
+        $this->mount();
+
+        $rest = ntdst_rest('ab/v1');
+        $rest->post('/empty', self::handler(), ['schema' => static fn(): array => []] + self::validWrite(['name' => 'empty']));
+        $rest->post('/fine', self::handler(), self::validWrite(['name' => 'fine']));
+        $this->fireBoth();
+
+        $this->assertOneReasonContains('warning', 'abilities:schema');
+        $this->assertSame([], $this->logReasons('error'));
+        $this->assertSame(['ab-v1/fine'], array_keys($this->registered));
+        $this->assertArrayHasKey('/ab/v1/empty', $this->routeTable);
+        $this->assertArrayHasKey('/ab/v1/fine', $this->routeTable);
+    }
+
+    public function testTheOutputSchemaOfTheOptionWinsOverTheRoutesSchema(): void
+    {
+        $this->mount();
+
+        $own = ['type' => 'object', 'properties' => ['marked' => ['type' => 'integer']]];
+
+        ntdst_rest('ab/v1')->post('/x', self::handler(), self::validWrite(['output_schema' => $own]));
+        $this->fireBoth();
+
+        $this->assertSame($own, $this->registered['ab-v1/x']['output_schema']);
     }
 }

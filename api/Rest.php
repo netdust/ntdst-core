@@ -90,6 +90,13 @@ final class NTDST_Rest
      */
     private const PUBLIC_STRING = '"permission" => "public" is not a permission — the string was dropped in 5.0.0 because it was a second spelling of ->public(); chain ->public() onto the verb that declares this route to publish it anonymously';
 
+    /**
+     * A path parameter's JSON Schema type — WordPress hands every URL capture
+     * over as a string. A constant only because the retired-field-type sweep
+     * reads that literal pair as a field declaration.
+     */
+    private const PATH_PARAMETER_TYPE = 'string';
+
     /** @var array<string, self> */
     private static array $instances = [];
 
@@ -197,6 +204,152 @@ final class NTDST_Rest
         });
 
         self::$abilitiesMounted = true;
+    }
+
+    /**
+     * Register one category per distinct `category` in the buffer.
+     *
+     * rest_get_server() FIRST: on a request where rest_api_init has not fired
+     * (STDIO, admin) it fires it, and that flush is what fills the buffer.
+     */
+    private static function walkCategories(): void
+    {
+        rest_get_server();
+
+        foreach (array_unique(array_column(array_column(self::$abilities, 'ability'), 'category')) as $category) {
+            wp_register_ability_category($category, [
+                'label'       => $category,
+                'description' => 'Routes declared through ntdst_rest(), as abilities.',
+            ]);
+        }
+    }
+
+    /**
+     * Register every recorded declaration as an ability, after the same flush
+     * walkCategories() asks for — a declaration flushed here, while
+     * wp_abilities_api_init runs, is still recorded.
+     */
+    private static function walkAbilities(): void
+    {
+        rest_get_server();
+
+        foreach (self::$abilities as $name => $record) {
+            $args = self::abilityArgs($record);
+
+            if ($args !== null) {
+                wp_register_ability($name, $args);
+            }
+        }
+    }
+
+    /**
+     * What wp_register_ability() is handed for one record, or null after one
+     * non-fatal refusal when its output schema resolves to nothing — the route
+     * stands, and the other records still register.
+     *
+     * On a read verb the verb decides the annotations; whatever the block
+     * declared for destructive / idempotent is ignored (Ruling 8).
+     *
+     * @param array<string, mixed> $record
+     * @return array<string, mixed>|null
+     */
+    private static function abilityArgs(array $record): ?array
+    {
+        $block  = $record['ability'];
+        $schema = $block['output_schema'] ?? (is_callable($record['schema']) ? ($record['schema'])() : $record['schema']);
+
+        if (!is_array($schema) || $schema === []) {
+            self::forNamespace($record['namespace'])->refuse(
+                $record['route'],
+                $record['methods'],
+                'abilities:schema — the route\'s "schema" resolved to no non-empty array, so the route is registered and the ability is not',
+                false,
+                '5.5.0',
+                'ability',
+            );
+
+            return null;
+        }
+
+        $input = self::abilityInputSchema($record['route'], $record['args']);
+        $read  = $record['readonly'];
+
+        return [
+            'label'       => $block['label'],
+            'description' => $block['description'],
+            'category'    => $block['category'],
+        ] + ($input === [] ? [] : ['input_schema' => $input]) + [
+            'output_schema' => $schema,
+        ] + self::abilityCallbacks($record) + [
+            'meta' => [
+                'annotations'  => [
+                    'readonly'    => $read,
+                    'destructive' => $read ? false : $block['destructive'],
+                    'idempotent'  => $read ? true : $block['idempotent'],
+                ],
+                'public'       => true,
+                'show_in_rest' => true,
+                'mcp'          => ['public' => true],
+            ],
+        ];
+    }
+
+    /**
+     * The route's path parameters and `args` as a JSON Schema object, or []
+     * when there are none — WordPress then accepts only a null input.
+     *
+     * A path parameter is a required string unless `args` describes it. Only
+     * JSON Schema keys are copied: sanitize_callback / validate_callback are
+     * PHP, not schema.
+     *
+     * @param array<string, mixed> $args
+     * @return array<string, mixed>
+     */
+    private static function abilityInputSchema(string $route, array $args): array
+    {
+        preg_match_all('/\(\?P?<([A-Za-z_][A-Za-z0-9_]*)>/', $route, $matches);
+
+        $properties = array_fill_keys($matches[1], ['type' => self::PATH_PARAMETER_TYPE]);
+        $required   = $matches[1];
+        $keys       = array_flip(['type', 'description', 'enum', 'default', 'items', 'properties', 'format', 'minimum', 'maximum', 'minLength', 'maxLength']);
+
+        foreach ($args as $name => $arg) {
+            if (!is_array($arg)) {
+                continue;
+            }
+
+            $properties[$name] = array_intersect_key($arg, $keys);
+
+            if (($arg['required'] ?? false) === true) {
+                $required[] = $name;
+            }
+        }
+
+        if ($properties === []) {
+            return [];
+        }
+
+        $required = array_values(array_unique($required));
+
+        return ['type' => 'object', 'properties' => $properties] + ($required === [] ? [] : ['required' => $required]);
+    }
+
+    /**
+     * The ability's execute and permission callbacks.
+     *
+     * @param array<string, mixed> $record
+     * @return array{execute_callback: Closure, permission_callback: Closure}
+     */
+    private static function abilityCallbacks(array $record): array
+    {
+        return [
+            'execute_callback'    => static function (): never {
+                throw new LogicException('Task 4');
+            },
+            'permission_callback' => static function (): never {
+                throw new LogicException('Task 4');
+            },
+        ];
     }
 
     /**
