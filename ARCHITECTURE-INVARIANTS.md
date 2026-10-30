@@ -459,8 +459,8 @@ Every part of (A)'s form is load-bearing:
 - The last filter drops COMMENT lines, the way INV-1's does. A docblock reading
   `@param string $field Field to match (term_id, …)` is prose, not a switch.
 
-(A) returns **55 lines** and (B) returns **1** (measured at `73d01db`, and 55 at
-this branch's base `0d62394` too). Every one of them is named in
+(A) returns **55 lines** and (B) returns **2** (measured at 5.5.0; (B) was 1 at
+`73d01db`, and (A) 55 at `0d62394` too). Every one of them is named in
 `## Deliberate exceptions` below, grouped by WHAT it is rather than by where it
 sits. Anything else is a bypass. (It was 59 while `services/Logger.php` still
 declared the `log_entry` model; core-trim FR-5 deleted that model and took eight
@@ -484,6 +484,9 @@ shape, (B) 1 at the same line. Re-run verbatim at 5.4.0 (`73d01db`, measured):
 unchanged. The four new hits arrived before this branch (55 at 5.2.0 already):
 three `=== 'callback'` skips (`3d6e2e5`) and `whereGroup()`'s
 `['relation' => $relation]` (`18858d0`), each named below.
+Re-run verbatim at 5.5.0: (A) 55, same per-file shape (`api/Rest.php` 3); (B) 2 —
+`admin/RelationField.php:46` and `api/Rest.php:98`'s `PATH_PARAMETER_TYPE`
+(abilities-bridge), both named below.
 
 Earlier: (A) 51 / (B) 1, both re-run at the core-shape cluster-3 fix wave. (A)'s TOTAL is unchanged from `96560c5` and its shape is
 not: `api/Actions.php` went 2 → 0 (T08 deleted the file, and both its hits were
@@ -771,7 +774,7 @@ Things core does that WordPress also does, kept on purpose. Each names why.
 
 ### INV-8 — every hit the field-type check returns
 
-(A) returns 55 lines and (B) returns 1 (measured at `73d01db`). Each group below says WHAT the hits are,
+(A) returns 55 lines and (B) returns 2 (measured at 5.5.0). Each group below says WHAT the hits are,
 not which line they sit on: a line number is stale after the next edit, and a
 reader matching 59 greps against stale numbers stops reading. Where a group has
 a test that holds it, the test is named — that is its mechanical home.
@@ -854,13 +857,21 @@ a test that holds it, the test is named — that is its mechanical home.
   `'json' => 'application/json'` MIME entry (`:365`, 1) — a MAP KEY inside
   `mimeTypes()`, which adds the four types WordPress's own table lacks through
   the `mime_types` filter. It is a MIME type, not a field type, and it is an (A)
-  hit only: (B)'s one hit since T11 is `admin/RelationField.php:46`.
-- **(B)'s hits, now one.** `api/Response.php`'s `$mimeTypes` — MIME types, not field
+  hit only: (B)'s hits are the next item.
+- **(B)'s hits, two since 5.5.0.** `api/Response.php`'s `$mimeTypes` — MIME types, not field
   types: the `[Tt][Yy][Pp][Ee][Ss]?` fragment catches the word. It was an INV-5
   item — WordPress keeps that table as `wp_get_mime_types()` — and T11 deleted it
-  at `2fbde3d`, so (B) has ONE hit now. That one is `admin/RelationField.php:46`'s
+  at `2fbde3d`, leaving ONE hit until 5.5.0. That one is `admin/RelationField.php:46`'s
   `private const MAX_REQUESTED_TYPES = 20`, which is not a table of anything: it
   is the most post types one relation search may name, stated once and read
   twice (the `post_type` arg's `maxItems`, and the hard refusal at the top of
   `mayPickFromAll()` — cluster-3 fix wave F2). (B) hunts for a second LIST; an
   integer is the shape to recognise as a false positive.
+  **`NTDST_Rest::PATH_PARAMETER_TYPE`** (`api/Rest.php`) — (B)'s second hit since
+  5.5.0. A `private const … = 'string'`: the JSON-Schema type of a URL capture in
+  an ability's `input_schema` — not a field type and not a list. It is a constant
+  because the literal `['type' => 'string']` on its one use site carries none of
+  the REST-only words the retired-type pin exempts by content, so the pin would
+  read it as a retired declaration. (B) hunts a second LIST; a one-word scalar is
+  the shape to recognise. (B) is TWO at 5.5.0: this and
+  `admin/RelationField.php:46`.
