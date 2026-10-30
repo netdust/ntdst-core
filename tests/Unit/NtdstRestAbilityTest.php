@@ -690,6 +690,20 @@ final class NtdstRestAbilityTest extends TestCase
         );
     }
 
+    public function testTypelessOnlyArgsGiveNoPropertiesKey(): void
+    {
+        $this->mount();
+
+        self::declareStats(['args' => ['x' => ['sanitize_callback' => 'absint', 'required' => true]]]);
+        $this->fireBoth();
+
+        $this->assertSame(
+            ['type' => 'object', 'required' => ['x']],
+            $this->registered['stride-v1/get-stats']['input_schema'],
+            'an empty properties is a JSON array where JSON Schema wants an object.',
+        );
+    }
+
     public function testAnEmptyBufferRegistersNothing(): void
     {
         $this->mount();

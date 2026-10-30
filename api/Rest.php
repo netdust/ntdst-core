@@ -337,7 +337,9 @@ final class NTDST_Rest
 
         $required = array_values(array_unique($required));
 
-        return ['type' => 'object', 'properties' => $properties] + ($required === [] ? [] : ['required' => $required]);
+        return ['type' => 'object']
+            + ($properties === [] ? [] : ['properties' => $properties])
+            + ($required === [] ? [] : ['required' => $required]);
     }
 
     /**
