@@ -179,7 +179,7 @@ final class NtdstRestAbilityTest extends TestCase
         return array_diff_key($args, ['execute_callback' => 1, 'permission_callback' => 1]);
     }
 
-    /** The GET /admin/stats read; a read that still writes 'destructive' => true. */
+    /** The GET /admin/stats read; it declares both write annotations the wrong way round. */
     private static function declareStats(array $options = []): void
     {
         ntdst_rest('stride/v1')->get('/admin/stats', self::handler(), $options + [
@@ -193,6 +193,7 @@ final class NtdstRestAbilityTest extends TestCase
                 'label'       => 'Get stats',
                 'description' => 'Reads the admin stats.',
                 'destructive' => true,
+                'idempotent'  => false,
             ],
         ]);
     }
@@ -651,6 +652,28 @@ final class NtdstRestAbilityTest extends TestCase
         $this->assertSame(
             ['type' => 'object', 'properties' => ['id' => ['type' => 'integer']], 'required' => ['id']],
             $this->registered['stride-v1/get-edition-typed']['input_schema'],
+        );
+    }
+
+    public function testAnArgsEntryRefinesAPathParameterAndATypelessOneIsOnlyRequired(): void
+    {
+        $this->mount();
+
+        ntdst_rest('stride/v1')->get('/admin/editions/(?P<id>\d+)', self::handler(), [
+            'permission' => 'stride_view',
+            'args'       => [
+                'id' => ['validate_callback' => 'is_numeric', 'description' => 'Edition ID'],
+                'x'  => ['sanitize_callback' => 'absint', 'required' => true],
+            ],
+            'schema'     => self::schema(),
+            'ability'    => ['name' => 'get-edition', 'label' => 'Edition', 'description' => 'Reads one edition.'],
+        ]);
+        $this->fireBoth();
+
+        $this->assertSame(
+            ['type' => 'object', 'properties' => ['id' => ['description' => 'Edition ID', 'type' => 'string']], 'required' => ['id', 'x']],
+            $this->registered['stride-v1/get-edition']['input_schema'],
+            'a path parameter keeps its string type; an entry with no schema keys is never an empty property.',
         );
     }
 
