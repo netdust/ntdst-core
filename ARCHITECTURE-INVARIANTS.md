@@ -8,7 +8,7 @@ rulings in `docs/plans/2026-08-23-core-shape-brief.md` and
 
 Each entry says whether it **holds today** or is **established by** a phase of
 `specs/core-shape`, `specs/field-types` or `specs/core-trim` — INV-9 and INV-10
-are core-trim's, and core-trim re-ran INV-8's two commands at its own merge
+are core-trim's, INV-11 is abilities-bridge's, and core-trim re-ran INV-8's two commands at its own merge
 commit; the mechanical check is what `invariant-auditor` runs verbatim.
 The governing rule behind all of them is `docs/philosophy.md` §1: wrap WordPress,
 never replace it — where WordPress has a word, core uses it.
@@ -18,6 +18,8 @@ prints a recursive hit as `api/Data.php` where GNU grep prints `./api/Data.php`.
 An exclusion anchored on `^./` therefore matches nothing, and the check passes for
 the wrong reason. Every exclusion below is written
 `grep -vE "^(\./)?<file>|(^|/)vendor/|(^|/)tests/"` so it holds under both.
+ugrep also honours `.gitignore` on a recursive run; from a consumer root the checks skip
+composer-installed directories unless `--no-ignore-files` is given.
 
 ---
 
@@ -200,7 +202,12 @@ named here: `Rest::OWN`, `Rest::READ`, `Rest::RETIRED`,
 surface's OWN option keys, read verbs, retired option names and refused
 `->public()` verbs — words WordPress keeps no table for), `Rest::$limits`,
 `$reported`, `$instances`, `$cors` (declared/max_age only), `$corsOrigins`,
-`$corsResolvers`, `$defaults`,
+`$corsResolvers`, `$defaults`, `Rest::$abilities` (the declarations recorded before
+`wp_abilities_api_init` fires; WordPress refuses a registration outside that hook
+(`abilities-api.php:290-303`), so it keeps no table of a declaration made before it;
+its third reader, beside the two walks, is the duplicate check in `ability()`, which
+refuses at declaration what WordPress would refuse at walk time after the route had
+already registered; `$abilitiesMounted` is a `bool` and is not a hit),
 `Template_Loader::$custom_paths`, `$template_cache`, `$page_data`,
 `Logger::$batchedLogs`, `Data::$models`, `Data::$globalScopes`,
 `FieldTypes::$table`/`::RETIRED` and `ClientIp::DEFAULT_TRUSTED_PROXIES` — the
@@ -224,7 +231,9 @@ every answer in `{success, data}` — a REST route returns the payload and
 WordPress builds the body.
 
 Re-run verbatim at `85b54cb` (T14): TWENTY hits, unchanged from `2fbde3d` — the
-same twenty names above, nothing new and nothing named here gone.
+same twenty names above, nothing new and nothing named here gone. Re-run verbatim at
+`409bb34` (abilities-bridge): TWENTY-ONE hits — the twenty, plus `Rest::$abilities`.
+Re-run verbatim at `824ef7c` (the abilities-bridge review's fix pass): TWENTY-ONE, the same names.
 
 ## INV-6 — One template resolver; page routes are rewrite rules; a template callback returns a path
 
@@ -371,7 +380,10 @@ and consumed on read, not a count of anything. In `guard()`,
 `NTDST_RateLimiter::attempt` at `:949`. Re-run verbatim at `85b54cb` (T14):
 identical — same NINE hits at the same lines, and the guard-order pair
 (`:928`, `:949`) unchanged. Earlier pin `f42c732`; baseline's login
-throttle converges on it (`ntdst-baseline` `51f7e2e`).
+throttle converges on it (`ntdst-baseline` `51f7e2e`). Re-run verbatim at 5.5.0
+(`824ef7c`, abilities-bridge): the same NINE hits (MetaboxGenerator's three now at
+`:2071`, `:2113`, `:2123`), and in `guard()` `$permission($request)` at
+`api/Rest.php:1314` precedes `NTDST_RateLimiter::attempt` at `:1335`.
 
 ## INV-8 — One field-type vocabulary; a type name resolves in one table
 
@@ -455,8 +467,8 @@ Every part of (A)'s form is load-bearing:
 - The last filter drops COMMENT lines, the way INV-1's does. A docblock reading
   `@param string $field Field to match (term_id, …)` is prose, not a switch.
 
-(A) returns **55 lines** and (B) returns **1** (measured at `73d01db`, and 55 at
-this branch's base `0d62394` too). Every one of them is named in
+(A) returns **55 lines** and (B) returns **2** (measured at 5.5.0; (B) was 1 at
+`73d01db`, and (A) 55 at `0d62394` too). Every one of them is named in
 `## Deliberate exceptions` below, grouped by WHAT it is rather than by where it
 sits. Anything else is a bypass. (It was 59 while `services/Logger.php` still
 declared the `log_entry` model; core-trim FR-5 deleted that model and took eight
@@ -480,6 +492,9 @@ shape, (B) 1 at the same line. Re-run verbatim at 5.4.0 (`73d01db`, measured):
 unchanged. The four new hits arrived before this branch (55 at 5.2.0 already):
 three `=== 'callback'` skips (`3d6e2e5`) and `whereGroup()`'s
 `['relation' => $relation]` (`18858d0`), each named below.
+Re-run verbatim at 5.5.0: (A) 55, same per-file shape (`api/Rest.php` 3); (B) 2 —
+`admin/RelationField.php:46` and `api/Rest.php:98`'s `PATH_PARAMETER_TYPE`
+(abilities-bridge), both named below.
 
 Earlier: (A) 51 / (B) 1, both re-run at the core-shape cluster-3 fix wave. (A)'s TOTAL is unchanged from `96560c5` and its shape is
 not: `api/Actions.php` went 2 → 0 (T08 deleted the file, and both its hits were
@@ -665,6 +680,15 @@ with the same four answers. (2) was also run
 against a scratch file holding the exact line 5.0.0 deleted,
 `$relativePath = str_replace('\\', '/', $class) . '.php';` — one hit.
 
+## INV-11 — An ability is the shadow of a route
+
+A WordPress ability exists in this package and its consumers only as the `ability` option of a route declared through `ntdst_rest()`. Executing it dispatches that route through `rest_do_request()`, so the route's permission, its rate limit and its response shaping run once, where they already run. Core registers no ability of its own.
+
+**Convergence point:** `api/Rest.php` — `registerOne()` records the declaration, `mountAbilities()` hooks `wp_abilities_api_categories_init` and `wp_abilities_api_init` once at boot (its reader is `ntdst-core.php`), and the two walks are the only callers of `wp_register_ability_category()` and `wp_register_ability()`. The ability's `permission_callback` is the route's resolved permission, never `guard()` (INV-7: discovery charges nothing).
+**Bypass smell:** `wp_register_ability(` or `wp_register_ability_category(` outside `api/Rest.php`; an `execute_callback` that is not a REST dispatch; a consumer class named `*AbilityRegistrar`; a `permission_callback` that is the limiter guard.
+**Mechanical check:** `grep -rn "wp_register_ability" --include=*.php . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → EMPTY. `bin/guard.sh` runs the same line, so the gate fails on a second door. The comment filter drops nothing today (EMPTY with and without it). On a consumer the bare word also matches a `function_exists('wp_register_ability')` version guard (Stride `ntdst-assistant.php:26`); drop that shape by content — `| grep -vE "function_exists\(['\"]wp_register_ability"` — rather than switching to the call shape, which loses a string-callable registration. Drift check #16 runs the call shape plus `AbilityRegistrar`.
+**Status:** established 2026-10 (specs/abilities-bridge). Re-run verbatim at `409bb34`: EMPTY. Re-run verbatim at `824ef7c`: EMPTY — with the calibration filter, without the comment filter, and as written.
+
 ---
 
 ## Deliberate exceptions
@@ -758,7 +782,7 @@ Things core does that WordPress also does, kept on purpose. Each names why.
 
 ### INV-8 — every hit the field-type check returns
 
-(A) returns 55 lines and (B) returns 1 (measured at `73d01db`). Each group below says WHAT the hits are,
+(A) returns 55 lines and (B) returns 2 (measured at 5.5.0). Each group below says WHAT the hits are,
 not which line they sit on: a line number is stale after the next edit, and a
 reader matching 59 greps against stale numbers stops reading. Where a group has
 a test that holds it, the test is named — that is its mechanical home.
@@ -841,13 +865,21 @@ a test that holds it, the test is named — that is its mechanical home.
   `'json' => 'application/json'` MIME entry (`:365`, 1) — a MAP KEY inside
   `mimeTypes()`, which adds the four types WordPress's own table lacks through
   the `mime_types` filter. It is a MIME type, not a field type, and it is an (A)
-  hit only: (B)'s one hit since T11 is `admin/RelationField.php:46`.
-- **(B)'s hits, now one.** `api/Response.php`'s `$mimeTypes` — MIME types, not field
+  hit only: (B)'s hits are the next item.
+- **(B)'s hits, two since 5.5.0.** `api/Response.php`'s `$mimeTypes` — MIME types, not field
   types: the `[Tt][Yy][Pp][Ee][Ss]?` fragment catches the word. It was an INV-5
   item — WordPress keeps that table as `wp_get_mime_types()` — and T11 deleted it
-  at `2fbde3d`, so (B) has ONE hit now. That one is `admin/RelationField.php:46`'s
+  at `2fbde3d`, leaving ONE hit until 5.5.0. That one is `admin/RelationField.php:46`'s
   `private const MAX_REQUESTED_TYPES = 20`, which is not a table of anything: it
   is the most post types one relation search may name, stated once and read
   twice (the `post_type` arg's `maxItems`, and the hard refusal at the top of
   `mayPickFromAll()` — cluster-3 fix wave F2). (B) hunts for a second LIST; an
   integer is the shape to recognise as a false positive.
+  **`NTDST_Rest::PATH_PARAMETER_TYPE`** (`api/Rest.php`) — (B)'s second hit since
+  5.5.0. A `private const … = 'string'`: the JSON-Schema type of a URL capture in
+  an ability's `input_schema` — not a field type and not a list. It is a constant
+  because the literal `['type' => 'string']` on its one use site carries none of
+  the REST-only words the retired-type pin exempts by content, so the pin would
+  read it as a retired declaration. (B) hunts a second LIST; a one-word scalar is
+  the shape to recognise. (B) is TWO at 5.5.0: this and
+  `admin/RelationField.php:46`.

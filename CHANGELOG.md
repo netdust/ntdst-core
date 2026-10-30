@@ -4,6 +4,15 @@ The migration tables live in `README.md` under `## Versions` — this file is th
 short answer to "what changed in this tag". Nothing here replaces reading that
 section before a MAJOR bump.
 
+## 5.5.0
+
+Additive. `^5.4` consumers upgrade without a code change.
+
+### Added
+- The `ability` option on `ntdst_rest()` routes: a route becomes a WordPress ability (6.9+), executed by dispatching the route itself.
+- `NTDST_Rest::mountAbilities()` and the two walks on `wp_abilities_api_categories_init` / `wp_abilities_api_init`, the only callers of `wp_register_ability_category()` and `wp_register_ability()`.
+- INV-11 (an ability is the shadow of a route) and its line in `bin/guard.sh`.
+
 ## 5.4.2
 
 Fix. `^5.4` consumers upgrade without a code change; a field that already

@@ -51,32 +51,7 @@ use PHPUnit\Framework\TestCase;
 
 require_once __DIR__ . '/../../api/Rest.php';
 
-// WP classes do not exist in this harness. Guarded because DownloadDispatchTest
-// defines the same doubles and PHPUnit loads every file in the suite — whichever
-// loads first wins, so this file uses only the intersection of that API
-// (constructor params + get_param + get_json_params).
-if (!class_exists('WP_REST_Request')) {
-    class WP_REST_Request
-    {
-        private array $queryParams = [];
-
-        public function __construct(private array $params = []) {}
-        public function get_json_params(): array { return $this->params; }
-        public function get_body_params(): array { return []; }
-        public function get_param(string $k): mixed { return $this->params[$k] ?? $this->queryParams[$k] ?? null; }
-        public function get_file_params(): array { return []; }
-        public function set_query_params(array $params): void { $this->queryParams = $params; }
-        public function get_query_params(): array { return $this->queryParams; }
-    }
-}
-if (!class_exists('WP_REST_Response')) {
-    class WP_REST_Response
-    {
-        public function __construct(public mixed $data = null, public int $status = 200) {}
-        public function get_data(): mixed { return $this->data; }
-        public function get_status(): int { return $this->status; }
-    }
-}
+// WP_REST_Request and WP_REST_Response: tests/Support/wp-rest-doubles.php, required by the bootstrap.
 if (!class_exists('WP_Error')) {
     class WP_Error
     {

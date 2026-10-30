@@ -2,7 +2,7 @@
 
 /**
  * Description: DI Container, Bootstrap, and Service System for WordPress
- * Version: 5.4.1
+ * Version: 5.5.0
  * Author: Stefan Vandermeulen
  *
  * Architecture:
@@ -63,6 +63,7 @@ require_once NTDST_PATH . '/admin/RelationField.php';
 
 // Load the REST surface
 require_once NTDST_PATH . '/api/Rest.php';
+NTDST_Rest::mountAbilities(); // before anything asks the lazy abilities registry (after init)
 
 /**
  * Enqueue the shared NTDST admin toolkit CSS.

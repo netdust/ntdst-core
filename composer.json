@@ -41,7 +41,7 @@
     },
     "extra": {
         "branch-alias": {
-            "dev-main": "5.4.x-dev"
+            "dev-main": "5.5.x-dev"
         }
     },
     "scripts-descriptions": {

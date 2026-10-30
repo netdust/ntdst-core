@@ -273,6 +273,17 @@ if [ -n "$REMOVED" ]; then
     exit 1
 fi
 
+# INV-11: an ability is the shadow of a route. api/Rest.php's two walks are the
+# only callers of wp_register_ability() / wp_register_ability_category().
+ABILITY_DOORS=$(grep -rn "wp_register_ability" --include=*.php . \
+    | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/" \
+    | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)" || true)
+if [ -n "$ABILITY_DOORS" ]; then
+    echo "An ability is registered outside api/Rest.php (INV-11):"
+    echo "$ABILITY_DOORS"
+    exit 1
+fi
+
 # v5.0.0 core-trim: PER-FILE METHOD PINS. This table is the home for every
 # "this file must not declare this method again" rule — add a row here rather
 # than a new grep block. Each entry keeps its own rationale above it.

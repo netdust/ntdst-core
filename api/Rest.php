@@ -39,7 +39,7 @@ defined('ABSPATH') || exit;
 final class NTDST_Rest
 {
     /** Options this class consumes; everything else goes to WP verbatim. */
-    private const OWN = ['permission', 'rate_limit', 'rate_window'];
+    private const OWN = ['permission', 'rate_limit', 'rate_window', 'ability'];
 
     /**
      * The two postures WordPress can already name for itself, registered as
@@ -89,6 +89,13 @@ final class NTDST_Rest
      * exactly like a route that was never declared.
      */
     private const PUBLIC_STRING = '"permission" => "public" is not a permission — the string was dropped in 5.0.0 because it was a second spelling of ->public(); chain ->public() onto the verb that declares this route to publish it anonymously';
+
+    /**
+     * A path parameter's JSON Schema type — WordPress hands every URL capture
+     * over as a string. A constant only because the retired-field-type sweep
+     * reads that literal pair as a field declaration.
+     */
+    private const PATH_PARAMETER_TYPE = 'string';
 
     /** @var array<string, self> */
     private static array $instances = [];
@@ -144,11 +151,261 @@ final class NTDST_Rest
      */
     private static array $limits = [];
 
+    /**
+     * Declarations that become abilities, keyed by the full name
+     * `<slug>/<name>`, for the two walks on the abilities hooks to register.
+     *
+     * @var array<string, array{namespace: string, route: string, methods: string, permission: callable|string, args: array, schema: callable|array|null, ability: array, readonly: bool}>
+     */
+    private static array $abilities = [];
+
+    /** Whether mountAbilities() hooked the walks — read instead of function_exists(). */
+    private static bool $abilitiesMounted = false;
+
     public function __construct(private string $namespace) {}
 
     public static function forNamespace(string $namespace): self
     {
         return self::$instances[$namespace] ??= new self($namespace);
+    }
+
+    /**
+     * Hook the two walks that turn recorded declarations into abilities, once.
+     *
+     * Called from ntdst-core.php at load, before anything asks the lazy
+     * abilities registry. Without the Abilities API (WordPress < 6.9) it does
+     * nothing and every `ability` option stays inert. Reached after the hook
+     * has fired it mounts nothing and says so — the walks would never run.
+     */
+    public static function mountAbilities(): void
+    {
+        if (self::$abilitiesMounted || !function_exists('wp_register_ability')) {
+            return;
+        }
+
+        if (self::timing('wp_abilities_api_init') !== 'before') {
+            self::forNamespace('ntdst')->refuse(
+                '(abilities)',
+                '-',
+                'abilities:mounted-late — wp_abilities_api_init has already fired, so nothing declared through ntdst_rest() can become an ability on this request; load ntdst-core before init',
+                false,
+                '5.5.0',
+                'mountAbilities',
+            );
+
+            return;
+        }
+
+        add_action('wp_abilities_api_categories_init', static function (): void {
+            self::walkCategories();
+        });
+        add_action('wp_abilities_api_init', static function (): void {
+            self::walkAbilities();
+        });
+
+        self::$abilitiesMounted = true;
+    }
+
+    /**
+     * Register one category per distinct `category` in the buffer.
+     *
+     * rest_get_server() FIRST: on a request where rest_api_init has not fired
+     * (STDIO, admin) it fires it, and that flush is what fills the buffer.
+     */
+    private static function walkCategories(): void
+    {
+        rest_get_server();
+
+        foreach (array_unique(array_column(array_column(self::$abilities, 'ability'), 'category')) as $category) {
+            wp_register_ability_category($category, [
+                'label'       => $category,
+                'description' => 'Routes declared through ntdst_rest(), as abilities.',
+            ]);
+        }
+    }
+
+    /**
+     * Register every recorded declaration as an ability, after the same flush
+     * walkCategories() asks for — a declaration flushed here, while
+     * wp_abilities_api_init runs, is still recorded.
+     */
+    private static function walkAbilities(): void
+    {
+        rest_get_server();
+
+        foreach (self::$abilities as $name => $record) {
+            $args = self::abilityArgs($record);
+
+            if ($args !== null) {
+                wp_register_ability($name, $args);
+            }
+        }
+    }
+
+    /**
+     * What wp_register_ability() is handed for one record, or null after one
+     * non-fatal refusal when its output schema resolves to nothing — the route
+     * stands, and the other records still register.
+     *
+     * On a read verb the verb decides the annotations; whatever the block
+     * declared for destructive / idempotent is ignored (Ruling 8).
+     *
+     * @param array<string, mixed> $record
+     * @return array<string, mixed>|null
+     */
+    private static function abilityArgs(array $record): ?array
+    {
+        $block  = $record['ability'];
+        $schema = $block['output_schema'] ?? (is_callable($record['schema']) ? ($record['schema'])() : $record['schema']);
+
+        if (!is_array($schema) || $schema === []) {
+            self::forNamespace($record['namespace'])->refuse(
+                $record['route'],
+                $record['methods'],
+                'abilities:schema — the route\'s "schema" resolved to no non-empty array, so the route is registered and the ability is not',
+                false,
+                '5.5.0',
+                'ability',
+            );
+
+            return null;
+        }
+
+        $input = self::abilityInputSchema($record['route'], $record['args']);
+        $read  = $record['readonly'];
+
+        return [
+            'label'       => $block['label'],
+            'description' => $block['description'],
+            'category'    => $block['category'],
+        ] + ($input === [] ? [] : ['input_schema' => $input]) + [
+            'output_schema' => $schema,
+        ] + self::abilityCallbacks($record) + [
+            'meta' => [
+                'annotations'  => [
+                    'readonly'    => $read,
+                    'destructive' => $read ? false : $block['destructive'],
+                    'idempotent'  => $read ? true : $block['idempotent'],
+                ],
+                'public'       => true,
+                'show_in_rest' => true,
+                'mcp'          => ['public' => true],
+            ],
+        ];
+    }
+
+    /**
+     * The route's path parameters and `args` as a JSON Schema object, or []
+     * when there are none — WordPress then accepts only a null input.
+     *
+     * A path parameter is a required string; an `args` entry of the same name
+     * refines it, never empties it. Only the keywords WordPress allows in a
+     * REST schema are copied — sanitize_callback / validate_callback are PHP,
+     * not schema — and an entry with none of them is no property, though it
+     * may still be required.
+     *
+     * @param array<string, mixed> $args
+     * @return array<string, mixed>
+     */
+    private static function abilityInputSchema(string $route, array $args): array
+    {
+        preg_match_all('/\(\?P?<([A-Za-z_][A-Za-z0-9_]*)>/', $route, $matches);
+
+        $properties = array_fill_keys($matches[1], ['type' => self::PATH_PARAMETER_TYPE]);
+        $required   = $matches[1];
+        $keys       = array_flip(rest_get_allowed_schema_keywords());
+
+        foreach ($args as $name => $arg) {
+            if (!is_array($arg)) {
+                continue;
+            }
+
+            $schema = array_intersect_key($arg, $keys) + ($properties[$name] ?? []);
+
+            if ($schema !== []) {
+                $properties[$name] = $schema;
+            }
+
+            if (($arg['required'] ?? false) === true) {
+                $required[] = $name;
+            }
+        }
+
+        if ($properties === [] && $required === []) {
+            return [];
+        }
+
+        $required = array_values(array_unique($required));
+
+        return ['type' => 'object']
+            + ($properties === [] ? [] : ['properties' => $properties])
+            + ($required === [] ? [] : ['required' => $required]);
+    }
+
+    /**
+     * The ability's execute and permission callbacks.
+     *
+     * The permission is the route's RESOLVED permission, never guard(): WordPress
+     * asks it for discovery too, and the limiter is charged only inside the
+     * dispatch. Executing is one rest_do_request(), so the route's own guard,
+     * args validation and sanitizing all run again on the way to the handler.
+     *
+     * @param array<string, mixed> $record
+     * @return array{execute_callback: Closure, permission_callback: Closure}
+     */
+    private static function abilityCallbacks(array $record): array
+    {
+        return [
+            'execute_callback'    => static function ($input = null) use ($record) {
+                $response = rest_do_request(self::abilityRequest($record, (array) $input));
+
+                return $response->is_error() ? $response->as_error() : $response->get_data();
+            },
+            'permission_callback' => static function ($input = null) use ($record) {
+                $allowed = ($record['permission'])(self::abilityRequest($record, (array) $input));
+
+                // WordPress reads anything but a bool or WP_Error as false; guard() reads it as truthy.
+                return $allowed instanceof WP_Error ? $allowed : (bool) $allowed;
+            },
+        ];
+    }
+
+    /**
+     * The request one ability input stands for: the route's first verb, its
+     * path with every named group replaced by the encoded input value — the
+     * value itself also a URL param, so the permission sees it before the
+     * dispatch matches the route — and the remaining input as query params on
+     * a read verb or body params on a write.
+     *
+     * @param array<string, mixed> $record
+     * @param array<string, mixed> $input
+     */
+    private static function abilityRequest(array $record, array $input): WP_REST_Request
+    {
+        $verb = self::verbs($record['methods'])[0];
+
+        $values = [];
+
+        // Trimmed as register_rest_route() trims it, BEFORE substitution: an
+        // empty last value must keep its '/', or it names the sibling route.
+        // A named group must hold no nested parentheses: its body ends at the first ')'.
+        $route = preg_replace_callback('/\(\?P?<([A-Za-z_][A-Za-z0-9_]*)>[^)]*\)/', static function (array $match) use (&$input, &$values): string {
+            $values[$match[1]] = (string) ($input[$match[1]] ?? '');
+            unset($input[$match[1]]);
+
+            return rawurlencode($values[$match[1]]);
+        }, trim($record['route'], '/'));
+
+        $request = new WP_REST_Request($verb, '/' . trim($record['namespace'], '/') . '/' . $route);
+        $request->set_url_params($values);
+
+        if (in_array($verb, self::READ, true)) {
+            $request->set_query_params($input);
+        } else {
+            $request->set_body_params($input);
+        }
+
+        return $request;
     }
 
     /**
@@ -564,7 +821,8 @@ final class NTDST_Rest
     }
 
     /**
-     * Where this call stands relative to rest_api_init — the ONE place the
+     * Where this call stands relative to a hook — rest_api_init unless the
+     * abilities bridge asks about wp_abilities_api_init — the ONE place the
      * question is asked.
      *
      *   before  did_action 0 / doing_action false  → queue it, flush at 10
@@ -576,13 +834,19 @@ final class NTDST_Rest
      * hook and the same 1 an hour later. function_exists() guarded so a harness
      * that stubs one and not the other reads a state instead of fatalling.
      */
-    private static function timing(): string
+    private static function timing(string $hook = 'rest_api_init'): string
     {
-        if (function_exists('doing_action') && doing_action('rest_api_init')) {
+        if (function_exists('doing_action') && doing_action($hook)) {
             return 'inside';
         }
 
-        return function_exists('did_action') && did_action('rest_api_init') ? 'after' : 'before';
+        return function_exists('did_action') && did_action($hook) ? 'after' : 'before';
+    }
+
+    /** A REST namespace as an ability prefix: 'stride/v1' → 'stride-v1'. */
+    private static function slug(string $namespace): string
+    {
+        return str_replace('/', '-', trim($namespace, '/'));
     }
 
     /**
@@ -759,6 +1023,17 @@ final class NTDST_Rest
             unset($options[$name]);
         }
 
+        $ability = null;
+
+        if (isset($options['ability'])) {
+            $bridgeUp = self::$abilitiesMounted && self::timing('wp_abilities_api_init') !== 'after';
+            $ability  = $this->ability($route, $methods, $options);
+
+            if ($ability === null && $bridgeUp) {
+                return;
+            }
+        }
+
         if (($options['rate_limit'] ?? null) !== null) {
             self::$limits[$this->key($route, $methods)] = [
                 'limit'  => (int) $options['rate_limit'],
@@ -778,6 +1053,117 @@ final class NTDST_Rest
             'callback'            => $handler,
             'permission_callback' => $literal ? $permission : $this->guard($permission, $route, $methods, $options),
         ]);
+
+        if ($ability !== null) {
+            self::$abilities[self::slug($this->namespace) . '/' . $ability['name']] = [
+                'namespace'  => $this->namespace,
+                'route'      => $route,
+                'methods'    => $methods,
+                'permission' => $permission,
+                'args'       => $options['args'] ?? [],
+                'schema'     => $options['schema'] ?? null,
+                'ability'    => $ability,
+                'readonly'   => array_diff(self::verbs($methods), self::READ) === [],
+            ];
+        }
+    }
+
+    /**
+     * The `ability` block, validated, with its category filled in — or null
+     * after exactly one refusal. Only the two bridge-down refusals are
+     * non-fatal: the route stands and simply is not an ability.
+     *
+     * @param array<string, mixed> $options
+     * @return array<string, mixed>|null
+     */
+    private function ability(string $route, string $methods, array $options): ?array
+    {
+        if (!self::$abilitiesMounted) {
+            $this->refuse($route, $methods, 'abilities:unavailable — the Abilities API is not available on this WordPress (6.9+), or ntdst-core mounted after it had initialized, so the route is registered and the ability is not', false, '5.5.0', 'route', false, false);
+
+            return null;
+        }
+
+        if (self::timing('wp_abilities_api_init') === 'after') {
+            $this->refuse($route, $methods, 'abilities:after-init — wp_abilities_api_init has finished, so the route is registered and the ability is not; declare it before init', false, '5.5.0');
+
+            return null;
+        }
+
+        $block = $options['ability'];
+
+        if (!is_array($block)) {
+            $this->refuse($route, $methods, 'ability:shape — "ability" must be an array', true, '5.5.0');
+
+            return null;
+        }
+
+        $unknown = array_diff(array_keys($block), ['name', 'label', 'description', 'destructive', 'idempotent', 'output_schema', 'category']);
+
+        if ($unknown !== []) {
+            $this->refuse($route, $methods, 'ability:unknown — unknown key(s): ' . implode(', ', $unknown), true, '5.5.0');
+
+            return null;
+        }
+
+        $slug = self::slug($this->namespace);
+
+        if (!preg_match('/^[a-z0-9-]+$/', $slug)) {
+            $this->refuse($route, $methods, sprintf('ability:namespace — "%s" is not an ability prefix; a namespace must be lowercase letters, digits, dashes and slashes', $this->namespace), true, '5.5.0');
+
+            return null;
+        }
+
+        if (!is_string($block['name'] ?? null) || !preg_match('/^[a-z0-9-]+$/', $block['name'])) {
+            $this->refuse($route, $methods, 'ability:name — "name" must be lowercase letters, digits and dashes', true, '5.5.0');
+
+            return null;
+        }
+
+        foreach (['label', 'description'] as $key) {
+            if (!is_string($block[$key] ?? null) || $block[$key] === '') {
+                $this->refuse($route, $methods, sprintf('ability:%s — "%s" must be a non-empty string', $key, $key), true, '5.5.0');
+
+                return null;
+            }
+        }
+
+        if (count(self::verbs($methods)) !== 1) {
+            $this->refuse($route, $methods, 'ability:methods — one verb per ability; an ability is dispatched on one verb, so a route answering several cannot say which one it stands for', true, '5.5.0');
+
+            return null;
+        }
+
+        // On a read verb the verb decides the annotations; the two keys are ignored (Ruling 8).
+        $write = array_diff(self::verbs($methods), self::READ) !== [];
+
+        if ($write && (!is_bool($block['destructive'] ?? null) || !is_bool($block['idempotent'] ?? null))) {
+            $this->refuse($route, $methods, 'ability:write-annotations — a write verb must state "destructive" and "idempotent" as booleans', true, '5.5.0');
+
+            return null;
+        }
+
+        $schema = array_key_exists('output_schema', $block) ? $block['output_schema'] : ($options['schema'] ?? null);
+
+        if (!(is_array($schema) && $schema !== []) && (array_key_exists('output_schema', $block) || !is_callable($schema))) {
+            $this->refuse($route, $methods, 'ability:output-schema — a stated "output_schema" must be a non-empty array, and without one the route needs a "schema"', true, '5.5.0');
+
+            return null;
+        }
+
+        if (isset($block['category']) && (!is_string($block['category']) || !preg_match('/^[a-z0-9-]+$/', $block['category']))) {
+            $this->refuse($route, $methods, 'ability:category — "category" must be lowercase letters, digits and dashes', true, '5.5.0');
+
+            return null;
+        }
+
+        if (isset(self::$abilities[$slug . '/' . $block['name']])) {
+            $this->refuse($route, $methods, sprintf('ability:duplicate — "%s/%s" is already declared by another route', $slug, $block['name']), true, '5.5.0');
+
+            return null;
+        }
+
+        return ['category' => $block['category'] ?? $slug] + $block;
     }
 
     /**
@@ -1082,6 +1468,8 @@ final class NTDST_Rest
      *                       the file its author is editing, so the caller's line
      *                       joins the id. Everything else is settled by the
      *                       cheap id and never pays for a backtrace.
+     * @param bool $log      False for a notice that is _doing_it_wrong() alone,
+     *                       which WordPress gates on WP_DEBUG — debug only.
      */
     private function refuse(
         string $route,
@@ -1090,7 +1478,8 @@ final class NTDST_Rest
         bool $fatal = true,
         ?string $since = null,
         string $from = 'route',
-        bool $perCallSite = false
+        bool $perCallSite = false,
+        bool $log = true
     ): void {
         $id = implode('|', [$this->namespace, $route, $methods, (int) $fatal, $why]);
 
@@ -1119,6 +1508,10 @@ final class NTDST_Rest
             $fatal ? sprintf('Route was not registered — %s.', $why) : $why,
             $since ?? '3.0.0',
         );
+
+        if (!$log) {
+            return;
+        }
 
         $entry = [
             'namespace' => $this->namespace,
