@@ -308,7 +308,7 @@ final class NtdstRestAbilityTest extends TestCase
         $this->assertOneReasonContains('error', 'ability:write-annotations');
     }
 
-    /** @return array<string, array{0: string, 1: string, 2: array<string, mixed>, 3: bool}> */
+    /** @return array<string, array{0: string, 1: string, 2: array<string, mixed>, 3: bool, 4?: string}> */
     public static function refusalProvider(): array
     {
         $valid = self::validWrite();
@@ -333,6 +333,7 @@ final class NtdstRestAbilityTest extends TestCase
             'name-missing'    => ['ability:name', 'ab/v1', $with(array_diff_key($block, ['name' => 1])), false],
             'label-empty'     => ['ability:label', 'ab/v1', $with(['label' => ''] + $block), false],
             'description'     => ['ability:description', 'ab/v1', $with($noDescription), false],
+            'methods'         => ['ability:methods', 'ab/v1', $valid, false, 'GET, POST'],
             'annotations'     => ['ability:write-annotations', 'ab/v1', $with($noDestructive), false],
             'annotation-type' => ['ability:write-annotations', 'ab/v1', $with(['idempotent' => 'yes'] + $block), false],
             'output-schema'   => ['ability:output-schema', 'ab/v1', $noSchema, false],
@@ -347,7 +348,7 @@ final class NtdstRestAbilityTest extends TestCase
     /**
      * @dataProvider refusalProvider
      */
-    public function testEachRefusalNamesItsReason(string $id, string $namespace, array $options, bool $declaredTwice): void
+    public function testEachRefusalNamesItsReason(string $id, string $namespace, array $options, bool $declaredTwice, string $methods = 'POST'): void
     {
         $this->mount();
 
@@ -357,7 +358,7 @@ final class NtdstRestAbilityTest extends TestCase
             $rest->post('/first', self::handler(), $options);
         }
 
-        $rest->post('/x', self::handler(), $options);
+        $rest->route('/x', $methods, self::handler(), $options);
         $this->fireRestApiInit();
 
         $this->assertArrayNotHasKey("/{$namespace}/x", $this->routeTable, "{$id} must refuse the route.");

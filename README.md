@@ -64,7 +64,7 @@ WordPress 6.9, 7.0 and 7.1 read (`public`, `show_in_rest`, `mcp.public`) all as 
 is no `public` option, because WordPress lists nothing without `show_in_rest` and discovery already needs `read`; a `->public()` write is refused before the block is read.
 
 The hard `ability:*` refusals (`shape`, `unknown`, `namespace`, `name`, `label` / `description`,
-`write-annotations`, `output-schema`, `category`, `duplicate`) refuse the whole ROUTE, not just the
+`methods` (one verb per ability), `write-annotations`, `output-schema`, `category`, `duplicate`) refuse the whole ROUTE, not just the
 ability. The notices below are the only cases where the route registers without it.
 
 Core registers each distinct category itself, with the slug as its label.

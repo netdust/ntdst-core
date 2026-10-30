@@ -1121,6 +1121,12 @@ final class NTDST_Rest
             }
         }
 
+        if (count(self::verbs($methods)) !== 1) {
+            $this->refuse($route, $methods, 'ability:methods — one verb per ability; an ability is dispatched on one verb, so a route answering several cannot say which one it stands for', true, '5.5.0');
+
+            return null;
+        }
+
         // On a read verb the verb decides the annotations; the two keys are ignored (Ruling 8).
         $write = array_diff(self::verbs($methods), self::READ) !== [];
 
