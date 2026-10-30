@@ -115,6 +115,14 @@ final class NtdstRestAbilityExecuteTest extends TestCase
 
         Functions\when('wp_register_ability_category')->justReturn(true);
 
+        // WordPress 6.8.2's list, read from wp-includes/rest-api.php.
+        Functions\when('rest_get_allowed_schema_keywords')->justReturn([
+            'title', 'description', 'default', 'type', 'format', 'enum', 'items', 'properties',
+            'additionalProperties', 'patternProperties', 'minProperties', 'maxProperties',
+            'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf',
+            'minLength', 'maxLength', 'pattern', 'minItems', 'maxItems', 'uniqueItems', 'anyOf', 'oneOf',
+        ]);
+
         Functions\when('current_user_can')->alias(function ($capability) {
             $this->asked[] = (string) $capability;
             return $this->can;

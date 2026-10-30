@@ -113,6 +113,14 @@ final class NtdstRestAbilityTest extends TestCase
             return true;
         });
 
+        // WordPress 6.8.2's list, read from wp-includes/rest-api.php.
+        Functions\when('rest_get_allowed_schema_keywords')->justReturn([
+            'title', 'description', 'default', 'type', 'format', 'enum', 'items', 'properties',
+            'additionalProperties', 'patternProperties', 'minProperties', 'maxProperties',
+            'minimum', 'maximum', 'exclusiveMinimum', 'exclusiveMaximum', 'multipleOf',
+            'minLength', 'maxLength', 'pattern', 'minItems', 'maxItems', 'uniqueItems', 'anyOf', 'oneOf',
+        ]);
+
         Functions\when('current_user_can')->justReturn(false);
         Functions\when('is_user_logged_in')->justReturn(true);
         Functions\when('__')->returnArg();
@@ -186,6 +194,7 @@ final class NtdstRestAbilityTest extends TestCase
             'permission' => 'stride_view',
             'args'       => [
                 'fresh' => ['type' => 'boolean', 'description' => 'Skip the cache', 'sanitize_callback' => 'rest_sanitize_boolean'],
+                'ids'   => ['type' => 'array', 'items' => ['type' => 'integer'], 'maxItems' => 500],
             ],
             'schema'     => static fn(): array => self::schema(),
             'ability'    => [
@@ -587,7 +596,10 @@ final class NtdstRestAbilityTest extends TestCase
             'category'      => 'stride-v1',
             'input_schema'  => [
                 'type'       => 'object',
-                'properties' => ['fresh' => ['type' => 'boolean', 'description' => 'Skip the cache']],
+                'properties' => [
+                    'fresh' => ['type' => 'boolean', 'description' => 'Skip the cache'],
+                    'ids'   => ['type' => 'array', 'items' => ['type' => 'integer'], 'maxItems' => 500],
+                ],
             ],
             'output_schema' => self::schema(),
             'meta'          => [

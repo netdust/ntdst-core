@@ -299,9 +299,10 @@ final class NTDST_Rest
      * when there are none — WordPress then accepts only a null input.
      *
      * A path parameter is a required string; an `args` entry of the same name
-     * refines it, never empties it. Only JSON Schema keys are copied —
-     * sanitize_callback / validate_callback are PHP, not schema — and an entry
-     * with none of them is no property, though it may still be required.
+     * refines it, never empties it. Only the keywords WordPress allows in a
+     * REST schema are copied — sanitize_callback / validate_callback are PHP,
+     * not schema — and an entry with none of them is no property, though it
+     * may still be required.
      *
      * @param array<string, mixed> $args
      * @return array<string, mixed>
@@ -312,7 +313,7 @@ final class NTDST_Rest
 
         $properties = array_fill_keys($matches[1], ['type' => self::PATH_PARAMETER_TYPE]);
         $required   = $matches[1];
-        $keys       = array_flip(['type', 'description', 'enum', 'default', 'items', 'properties', 'format', 'minimum', 'maximum', 'minLength', 'maxLength']);
+        $keys       = array_flip(rest_get_allowed_schema_keywords());
 
         foreach ($args as $name => $arg) {
             if (!is_array($arg)) {

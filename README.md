@@ -79,8 +79,7 @@ inside the dispatch.
 declares `type: array` with `items`, or its paginated object, because WordPress validates the
 whole return. `input_schema` is built from the route's path parameters and `args`: a path
 parameter is a required `string`, an `args` entry of the same name refines that type, and an
-`args` entry with none of the JSON Schema keys it copies (`type`, `description`, `enum`, `default`,
-`items`, `properties`, `format`, `minimum`, `maximum`, `minLength`, `maxLength`) is only listed in
+`args` entry with none of the JSON Schema keywords WordPress allows (`rest_get_allowed_schema_keywords()`) is only listed in
 `required`, and only when it says `required`; an entry with some of them becomes a property with
 just those keys. Path parameter values are `rawurlencode`d
 into the path.
