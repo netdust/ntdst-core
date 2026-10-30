@@ -18,6 +18,8 @@ prints a recursive hit as `api/Data.php` where GNU grep prints `./api/Data.php`.
 An exclusion anchored on `^./` therefore matches nothing, and the check passes for
 the wrong reason. Every exclusion below is written
 `grep -vE "^(\./)?<file>|(^|/)vendor/|(^|/)tests/"` so it holds under both.
+ugrep also honours `.gitignore` on a recursive run; from a consumer root the checks skip
+composer-installed directories unless `--no-ignore-files` is given.
 
 ---
 
@@ -203,7 +205,9 @@ surface's OWN option keys, read verbs, retired option names and refused
 `$corsResolvers`, `$defaults`, `Rest::$abilities` (the declarations recorded before
 `wp_abilities_api_init` fires; WordPress refuses a registration outside that hook
 (`abilities-api.php:290-303`), so it keeps no table of a declaration made before it;
-`$abilitiesMounted` is a `bool` and is not a hit),
+its third reader, beside the two walks, is the duplicate check in `ability()`, which
+refuses at declaration what WordPress would refuse at walk time after the route had
+already registered; `$abilitiesMounted` is a `bool` and is not a hit),
 `Template_Loader::$custom_paths`, `$template_cache`, `$page_data`,
 `Logger::$batchedLogs`, `Data::$models`, `Data::$globalScopes`,
 `FieldTypes::$table`/`::RETIRED` and `ClientIp::DEFAULT_TRUSTED_PROXIES` — the
@@ -229,6 +233,7 @@ WordPress builds the body.
 Re-run verbatim at `85b54cb` (T14): TWENTY hits, unchanged from `2fbde3d` — the
 same twenty names above, nothing new and nothing named here gone. Re-run verbatim at
 `409bb34` (abilities-bridge): TWENTY-ONE hits — the twenty, plus `Rest::$abilities`.
+Re-run verbatim at `824ef7c` (the abilities-bridge review's fix pass): TWENTY-ONE, the same names.
 
 ## INV-6 — One template resolver; page routes are rewrite rules; a template callback returns a path
 
@@ -375,7 +380,10 @@ and consumed on read, not a count of anything. In `guard()`,
 `NTDST_RateLimiter::attempt` at `:949`. Re-run verbatim at `85b54cb` (T14):
 identical — same NINE hits at the same lines, and the guard-order pair
 (`:928`, `:949`) unchanged. Earlier pin `f42c732`; baseline's login
-throttle converges on it (`ntdst-baseline` `51f7e2e`).
+throttle converges on it (`ntdst-baseline` `51f7e2e`). Re-run verbatim at 5.5.0
+(`824ef7c`, abilities-bridge): the same NINE hits (MetaboxGenerator's three now at
+`:2071`, `:2113`, `:2123`), and in `guard()` `$permission($request)` at
+`api/Rest.php:1314` precedes `NTDST_RateLimiter::attempt` at `:1335`.
 
 ## INV-8 — One field-type vocabulary; a type name resolves in one table
 
@@ -678,8 +686,8 @@ A WordPress ability exists in this package and its consumers only as the `abilit
 
 **Convergence point:** `api/Rest.php` — `registerOne()` records the declaration, `mountAbilities()` hooks `wp_abilities_api_categories_init` and `wp_abilities_api_init` once at boot (its reader is `ntdst-core.php`), and the two walks are the only callers of `wp_register_ability_category()` and `wp_register_ability()`. The ability's `permission_callback` is the route's resolved permission, never `guard()` (INV-7: discovery charges nothing).
 **Bypass smell:** `wp_register_ability(` or `wp_register_ability_category(` outside `api/Rest.php`; an `execute_callback` that is not a REST dispatch; a consumer class named `*AbilityRegistrar`; a `permission_callback` that is the limiter guard.
-**Mechanical check:** `grep -rn "wp_register_ability" --include=*.php . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → EMPTY. `bin/guard.sh` runs the same line, so the gate fails on a second door.
-**Status:** established 2026-10 (specs/abilities-bridge). Re-run verbatim at `409bb34`: EMPTY.
+**Mechanical check:** `grep -rn "wp_register_ability" --include=*.php . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → EMPTY. `bin/guard.sh` runs the same line, so the gate fails on a second door. The comment filter drops nothing today (EMPTY with and without it). On a consumer the bare word also matches a `function_exists('wp_register_ability')` version guard (Stride `ntdst-assistant.php:26`); drop that shape by content — `| grep -vE "function_exists\(['\"]wp_register_ability"` — rather than switching to the call shape, which loses a string-callable registration. Drift check #16 runs the call shape plus `AbilityRegistrar`.
+**Status:** established 2026-10 (specs/abilities-bridge). Re-run verbatim at `409bb34`: EMPTY. Re-run verbatim at `824ef7c`: EMPTY — with the calibration filter, without the comment filter, and as written.
 
 ---
 
