@@ -228,7 +228,7 @@ WordPress builds the body.
 
 Re-run verbatim at `85b54cb` (T14): TWENTY hits, unchanged from `2fbde3d` — the
 same twenty names above, nothing new and nothing named here gone. Re-run verbatim at
-`@@SHA@@` (abilities-bridge): TWENTY-ONE hits — the twenty, plus `Rest::$abilities`.
+`409bb34` (abilities-bridge): TWENTY-ONE hits — the twenty, plus `Rest::$abilities`.
 
 ## INV-6 — One template resolver; page routes are rewrite rules; a template callback returns a path
 
@@ -676,7 +676,7 @@ A WordPress ability exists in this package and its consumers only as the `abilit
 **Convergence point:** `api/Rest.php` — `registerOne()` records the declaration, `mountAbilities()` hooks `wp_abilities_api_categories_init` and `wp_abilities_api_init` once at boot (its reader is `ntdst-core.php`), and the two walks are the only callers of `wp_register_ability_category()` and `wp_register_ability()`. The ability's `permission_callback` is the route's resolved permission, never `guard()` (INV-7: discovery charges nothing).
 **Bypass smell:** `wp_register_ability(` or `wp_register_ability_category(` outside `api/Rest.php`; an `execute_callback` that is not a REST dispatch; a consumer class named `*AbilityRegistrar`; a `permission_callback` that is the limiter guard.
 **Mechanical check:** `grep -rn "wp_register_ability" --include=*.php . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → EMPTY. `bin/guard.sh` runs the same line, so the gate fails on a second door.
-**Status:** established 2026-10 (specs/abilities-bridge). Re-run verbatim at `@@SHA@@`: EMPTY.
+**Status:** established 2026-10 (specs/abilities-bridge). Re-run verbatim at `409bb34`: EMPTY.
 
 ---
 
