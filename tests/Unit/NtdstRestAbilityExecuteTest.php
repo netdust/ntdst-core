@@ -360,6 +360,11 @@ final class NtdstRestAbilityExecuteTest extends TestCase
         $this->assertArrayNotHasKey('id', $this->dispatched[1]->get_query_params());
         $this->assertSame(['id' => '12'], $this->dispatched[0]->get_url_params());
         $this->assertSame(['id' => '12/../x'], $this->dispatched[1]->get_url_params());
+
+        $execute([]);
+
+        $this->assertSame('/stride/v1/admin/editions/', $this->dispatched[2]->get_route(), 'a missing value leaves the group empty and keeps its \'/\', so it never names the sibling /admin/editions; the route\'s own \\d+ refuses it.');
+        $this->assertSame(['id' => ''], $this->dispatched[2]->get_url_params());
     }
 
     public function testATrailingSlashIsTrimmedAsWordPressTrimsTheRoute(): void

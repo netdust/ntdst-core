@@ -386,15 +386,17 @@ final class NTDST_Rest
 
         $values = [];
 
+        // Trimmed as register_rest_route() trims it, BEFORE substitution: an
+        // empty last value must keep its '/', or it names the sibling route.
         // A named group must hold no nested parentheses: its body ends at the first ')'.
         $route = preg_replace_callback('/\(\?P?<([A-Za-z_][A-Za-z0-9_]*)>[^)]*\)/', static function (array $match) use (&$input, &$values): string {
             $values[$match[1]] = (string) ($input[$match[1]] ?? '');
             unset($input[$match[1]]);
 
             return rawurlencode($values[$match[1]]);
-        }, $record['route']);
+        }, trim($record['route'], '/'));
 
-        $request = new WP_REST_Request($verb, '/' . trim($record['namespace'], '/') . '/' . trim($route, '/'));
+        $request = new WP_REST_Request($verb, '/' . trim($record['namespace'], '/') . '/' . $route);
         $request->set_url_params($values);
 
         if (in_array($verb, self::READ, true)) {
