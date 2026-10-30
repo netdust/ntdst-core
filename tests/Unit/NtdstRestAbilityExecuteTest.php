@@ -371,6 +371,19 @@ final class NtdstRestAbilityExecuteTest extends TestCase
         $this->assertSame('/stride/v1/admin/stats', $this->dispatched[0]->get_route());
     }
 
+    public function testATruthyPermissionResultIsTrueAndAnErrorStaysAnError(): void
+    {
+        $error = new WP_Error('nope', 'No.');
+
+        $this->declareRead('/one', 'get-one', ['permission' => static fn(): int => 1]);
+        $this->declareRead('/two', 'get-two', ['permission' => static fn(): WP_Error => $error]);
+        $this->fire('wp_abilities_api_categories_init');
+        $this->fire('wp_abilities_api_init');
+
+        $this->assertTrue($this->registered['stride-v1/get-one']['permission_callback']([]), 'the route admits 1, so the ability must too.');
+        $this->assertSame($error, $this->registered['stride-v1/get-two']['permission_callback']([]));
+    }
+
     public function testAPerObjectPermissionSeesThePathParameter(): void
     {
         $this->declareRead('/admin/editions/(?P<id>\d+)', 'get-edition', [

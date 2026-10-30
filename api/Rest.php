@@ -360,7 +360,10 @@ final class NTDST_Rest
                 return $response->is_error() ? $response->as_error() : $response->get_data();
             },
             'permission_callback' => static function ($input = null) use ($record) {
-                return ($record['permission'])(self::abilityRequest($record, (array) $input));
+                $allowed = ($record['permission'])(self::abilityRequest($record, (array) $input));
+
+                // WordPress reads anything but a bool or WP_Error as false; guard() reads it as truthy.
+                return $allowed instanceof WP_Error ? $allowed : (bool) $allowed;
             },
         ];
     }
