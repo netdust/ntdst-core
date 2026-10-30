@@ -362,6 +362,15 @@ final class NtdstRestAbilityExecuteTest extends TestCase
         $this->assertSame(['id' => '12/../x'], $this->dispatched[1]->get_url_params());
     }
 
+    public function testATrailingSlashIsTrimmedAsWordPressTrimsTheRoute(): void
+    {
+        $this->declareRead('/admin/stats/', 'get-stats');
+
+        $this->ability('stride-v1/get-stats')['execute_callback']([]);
+
+        $this->assertSame('/stride/v1/admin/stats', $this->dispatched[0]->get_route());
+    }
+
     public function testAPerObjectPermissionSeesThePathParameter(): void
     {
         $this->declareRead('/admin/editions/(?P<id>\d+)', 'get-edition', [

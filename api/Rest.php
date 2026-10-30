@@ -389,7 +389,7 @@ final class NTDST_Rest
             return rawurlencode($values[$match[1]]);
         }, $record['route']);
 
-        $request = new WP_REST_Request($verb, '/' . trim($record['namespace'], '/') . '/' . ltrim($route, '/'));
+        $request = new WP_REST_Request($verb, '/' . trim($record['namespace'], '/') . '/' . trim($route, '/'));
         $request->set_url_params($values);
 
         if (in_array($verb, self::READ, true)) {
