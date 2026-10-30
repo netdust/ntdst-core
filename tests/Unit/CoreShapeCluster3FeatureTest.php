@@ -101,21 +101,6 @@ if (!class_exists('WP_Post_Type')) {
     }
 }
 
-if (!class_exists('WP_REST_Request')) {
-    class WP_REST_Request
-    {
-        private array $queryParams = [];
-
-        public function __construct(private array $params = []) {}
-        public function get_json_params(): array { return $this->params; }
-        public function get_body_params(): array { return []; }
-        public function get_param(string $k): mixed { return $this->params[$k] ?? $this->queryParams[$k] ?? null; }
-        public function get_file_params(): array { return []; }
-        public function set_query_params(array $params): void { $this->queryParams = $params; }
-        public function get_query_params(): array { return $this->queryParams; }
-    }
-}
-
 /**
  * The picker's request as WordPress hands it over.
  *

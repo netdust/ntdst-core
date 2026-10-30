@@ -342,19 +342,57 @@ final class NTDST_Rest
     /**
      * The ability's execute and permission callbacks.
      *
+     * The permission is the route's RESOLVED permission, never guard(): WordPress
+     * asks it for discovery too, and the limiter is charged only inside the
+     * dispatch. Executing is one rest_do_request(), so the route's own guard,
+     * args validation and sanitizing all run again on the way to the handler.
+     *
      * @param array<string, mixed> $record
      * @return array{execute_callback: Closure, permission_callback: Closure}
      */
     private static function abilityCallbacks(array $record): array
     {
         return [
-            'execute_callback'    => static function (): never {
-                throw new LogicException('Task 4');
+            'execute_callback'    => static function ($input = null) use ($record) {
+                $response = rest_do_request(self::abilityRequest($record, (array) $input));
+
+                return $response->is_error() ? $response->as_error() : $response->get_data();
             },
-            'permission_callback' => static function (): never {
-                throw new LogicException('Task 4');
+            'permission_callback' => static function ($input = null) use ($record) {
+                return ($record['permission'])(self::abilityRequest($record, (array) $input));
             },
         ];
+    }
+
+    /**
+     * The request one ability input stands for: the route's first verb, its
+     * path with every named group replaced by the encoded input value, and the
+     * remaining input as query params on a read verb or body params on a write.
+     *
+     * @param array<string, mixed> $record
+     * @param array<string, mixed> $input
+     */
+    private static function abilityRequest(array $record, array $input): WP_REST_Request
+    {
+        $verb = self::verbs($record['methods'])[0];
+
+        // A named group must hold no nested parentheses: its body ends at the first ')'.
+        $route = preg_replace_callback('/\(\?P?<([A-Za-z_][A-Za-z0-9_]*)>[^)]*\)/', static function (array $match) use (&$input): string {
+            $value = rawurlencode((string) ($input[$match[1]] ?? ''));
+            unset($input[$match[1]]);
+
+            return $value;
+        }, $record['route']);
+
+        $request = new WP_REST_Request($verb, '/' . trim($record['namespace'], '/') . '/' . ltrim($route, '/'));
+
+        if (in_array($verb, self::READ, true)) {
+            $request->set_query_params($input);
+        } else {
+            $request->set_body_params($input);
+        }
+
+        return $request;
     }
 
     /**

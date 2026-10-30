@@ -120,24 +120,6 @@ if (!class_exists('WP_Post_Type')) {
     }
 }
 
-// The intersection of the WP_REST_Request doubles already in this suite
-// (NtdstRestTest, ActionsRateBucketTest, RelationSearchRouteTest) — guarded, so
-// whichever file loads first defines it for all of them.
-if (!class_exists('WP_REST_Request')) {
-    class WP_REST_Request
-    {
-        private array $queryParams = [];
-
-        public function __construct(private array $params = []) {}
-        public function get_json_params(): array { return $this->params; }
-        public function get_body_params(): array { return []; }
-        public function get_param(string $k): mixed { return $this->params[$k] ?? $this->queryParams[$k] ?? null; }
-        public function get_file_params(): array { return []; }
-        public function set_query_params(array $params): void { $this->queryParams = $params; }
-        public function get_query_params(): array { return $this->queryParams; }
-    }
-}
-
 final class RelationFieldSearchTest extends TestCase
 {
     use MockeryPHPUnitIntegration;
