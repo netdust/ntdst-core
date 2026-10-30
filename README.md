@@ -56,12 +56,18 @@ one option, `ability`. The ability is the route's shadow: it is never registered
 |-|-|
 | `name`, `label`, `description` | required; `name` is lowercase letters, digits and dashes |
 | `destructive`, `idempotent` | required booleans on a write verb; on a read they are accepted and ignored, the verb decides |
-| `output_schema` | optional; a present one must be a non-empty array |
-| `category` | optional; default is the namespace slug (`stride/v1` becomes `stride-v1`) |
+| `output_schema` | optional when the route has a `schema`; a present one must be a non-empty array. With neither, the ability is refused `ability:output-schema` |
+| `category` | optional; default is the namespace slug (`stride/v1` becomes `stride-v1`); lowercase letters, digits and dashes |
 
 The ability's full name is `<slug>/<name>`. Core writes the three spellings of exposure
 WordPress 6.9, 7.0 and 7.1 read (`public`, `show_in_rest`, `mcp.public`) all as `true`; there
-is no `public` option, and a `->public()` write is refused before the block is read.
+is no `public` option, because WordPress lists nothing without `show_in_rest` and discovery already needs `read`; a `->public()` write is refused before the block is read.
+
+The hard `ability:*` refusals (`shape`, `unknown`, `namespace`, `name`, `label` / `description`,
+`write-annotations`, `output-schema`, `category`, `duplicate`) refuse the whole ROUTE, not just the
+ability. The notices below are the only cases where the route registers without it.
+
+Core registers each distinct category itself, with the slug as its label.
 
 Executing an ability is one `rest_do_request()`: the ability returns the response's data, and
 a `WP_Error` keeps its status. The route's own permission is also the ability's
@@ -72,8 +78,11 @@ inside the dispatch.
 `schema` (or `output_schema`) describes the RESPONSE as `get_data()` returns it: a list route
 declares `type: array` with `items`, or its paginated object, because WordPress validates the
 whole return. `input_schema` is built from the route's path parameters and `args`: a path
-parameter is a required `string`, an `args` entry of the same name refines that type, and a
-typeless `args` entry is only listed in `required`. Path parameter values are `rawurlencode`d
+parameter is a required `string`, an `args` entry of the same name refines that type, and an
+`args` entry with none of the JSON Schema keys it copies (`type`, `description`, `enum`, `default`,
+`items`, `properties`, `format`, `minimum`, `maximum`, `minLength`, `maxLength`) is only listed in
+`required`, and only when it says `required`; an entry with some of them becomes a property with
+just those keys. Path parameter values are `rawurlencode`d
 into the path.
 
 Three notices say why a route registered and its ability did not: `abilities:unavailable`
