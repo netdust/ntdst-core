@@ -183,7 +183,7 @@ final class NTDST_Rest
             return;
         }
 
-        if (self::abilitiesTiming() !== 'before') {
+        if (self::timing('wp_abilities_api_init') !== 'before') {
             self::forNamespace('ntdst')->refuse(
                 '(abilities)',
                 '-',
@@ -814,7 +814,8 @@ final class NTDST_Rest
     }
 
     /**
-     * Where this call stands relative to rest_api_init — the ONE place the
+     * Where this call stands relative to a hook — rest_api_init unless the
+     * abilities bridge asks about wp_abilities_api_init — the ONE place the
      * question is asked.
      *
      *   before  did_action 0 / doing_action false  → queue it, flush at 10
@@ -826,23 +827,13 @@ final class NTDST_Rest
      * hook and the same 1 an hour later. function_exists() guarded so a harness
      * that stubs one and not the other reads a state instead of fatalling.
      */
-    private static function timing(): string
+    private static function timing(string $hook = 'rest_api_init'): string
     {
-        if (function_exists('doing_action') && doing_action('rest_api_init')) {
+        if (function_exists('doing_action') && doing_action($hook)) {
             return 'inside';
         }
 
-        return function_exists('did_action') && did_action('rest_api_init') ? 'after' : 'before';
-    }
-
-    /** timing()'s three states, for wp_abilities_api_init. */
-    private static function abilitiesTiming(): string
-    {
-        if (function_exists('doing_action') && doing_action('wp_abilities_api_init')) {
-            return 'inside';
-        }
-
-        return function_exists('did_action') && did_action('wp_abilities_api_init') ? 'after' : 'before';
+        return function_exists('did_action') && did_action($hook) ? 'after' : 'before';
     }
 
     /** A REST namespace as an ability prefix: 'stride/v1' → 'stride-v1'. */
@@ -1028,7 +1019,7 @@ final class NTDST_Rest
         $ability = null;
 
         if (isset($options['ability'])) {
-            $bridgeUp = self::$abilitiesMounted && self::abilitiesTiming() !== 'after';
+            $bridgeUp = self::$abilitiesMounted && self::timing('wp_abilities_api_init') !== 'after';
             $ability  = $this->ability($route, $methods, $options);
 
             if ($ability === null && $bridgeUp) {
@@ -1086,7 +1077,7 @@ final class NTDST_Rest
             return null;
         }
 
-        if (self::abilitiesTiming() === 'after') {
+        if (self::timing('wp_abilities_api_init') === 'after') {
             $this->refuse($route, $methods, 'abilities:after-init — wp_abilities_api_init has finished, so the route is registered and the ability is not; declare it before init', false, '5.5.0');
 
             return null;
