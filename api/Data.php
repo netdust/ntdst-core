@@ -721,14 +721,7 @@ class NTDST_Data_Model
             $previous_post_data[$post_field] = $existing->{$post_field} ?? null;
         }
 
-        // Update post data
-        if ($post_data) {
-            $result = wp_update_post($post_data + ['ID' => $id], true);
-            if (is_wp_error($result)) {
-                return $result;
-            }
-        }
-
+        // Fields first: the revision wp_update_post() takes then holds them.
         $meta_data = $this->extractMetaData($data);
         $previous_meta = [];
         foreach ($meta_data as $key => $value) {
@@ -738,10 +731,19 @@ class NTDST_Data_Model
             ];
 
             if (!$this->updateMetaValue($id, $key, $value)) {
-                $this->restorePostData($id, $previous_post_data);
                 $this->restoreMetaData($id, $previous_meta);
                 return new WP_Error('meta_update_failed', sprintf('Failed to update meta field %s', $key), ['status' => 500]);
             }
+        }
+
+        if ($post_data) {
+            $result = wp_update_post($post_data + ['ID' => $id], true);
+            if (is_wp_error($result)) {
+                $this->restoreMetaData($id, $previous_meta);
+                return $result;
+            }
+        } elseif ($meta_data) {
+            wp_save_post_revision($id);
         }
 
         // Fire after hook. The fourth argument is the before-state this method
@@ -891,18 +893,6 @@ class NTDST_Data_Model
         }
 
         return $this->valuesMatch(get_post_meta($id, $metaKey, true), $value);
-    }
-
-    /**
-     * Restore post-table fields after a partial update failure.
-     */
-    protected function restorePostData(int $id, array $previousPostData): void
-    {
-        if (empty($previousPostData)) {
-            return;
-        }
-
-        wp_update_post($previousPostData + ['ID' => $id], true);
     }
 
     /**
