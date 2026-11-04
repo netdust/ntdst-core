@@ -6,7 +6,7 @@
 
 **Architecture:** `NTDST_Data_Manager::register()` adds `revisions` support to a model's post type when the registered post type has `show_ui` and the model's config does not say `'revisions' => false`. A private manager method then hooks three WordPress filters/actions for its own post type only: `wp_post_revision_meta_keys` (its field keys, so WordPress copies them into revisions, notices a field-only change and restores them), `wp_{type}_revisions_to_keep` (5), and a guard around `wp_restore_post_revision` that keeps a field's current value when the revision holds no copy of it. Nothing is registered with `register_post_meta()`, no sanitizer attaches, no stored value changes. `NTDST_Data_Model::update()` writes its fields before `wp_update_post()`, so the revision WordPress takes holds them (R6).
 
-**First working version:** Task 1 — on the unit tier, a `show_ui` model registers with `revisions` support and its prefixed field keys in `wp_post_revision_meta_keys`; Task 2 shows it on real WordPress.
+**First working version:** Task 1 — on the unit tier, a `show_ui` model registers with `revisions` support and its prefixed field keys in `wp_post_revision_meta_keys`; Task 3 shows it on real WordPress.
 
 **Tech Stack:** PHP 8.1+, WordPress ≥ 6.4 (revisioned meta; the suites run 7.1.4), PHPUnit 9 + Brain Monkey (core's only tier), ntdst-baseline's wp-phpunit suite on DDEV for the real-WordPress proof.
 
@@ -69,13 +69,14 @@ No threat model: no security-boundary file is touched (no capability check, inpu
 
 1. A model that passes its own `supports` list (e.g. `['title']`) still gains `revisions` when `show_ui` — not only the default list. → Row 1.
 2. `show_ui` resolved as WordPress resolves it (unset → follows `public`); read from the registered post type object, never from `$config['show_ui']` alone. → Row 1.
-3. A pre-5.6 revision (no meta copy) restored → every field keeps its current value; a revision that holds a key restores it. → Rows 1 and 2.
-4. Hooks scoped per post type: a page/post restore and a second model's keys are untouched by one model's hooks. → Rows 1 and 2.
-5. A field-only change (title and content equal) makes a new revision — WordPress's `wp_check_revisioned_meta_fields_have_changed` reads the keys we name. → Row 2.
+3. A pre-5.6 revision (no meta copy) restored → every field keeps its current value; a revision that holds a key restores it. → Rows 1 and 3.
+4. Hooks scoped per post type: a page/post restore and a second model's keys are untouched by one model's hooks. → Rows 1 and 3.
+5. A field-only change (title and content equal) makes a new revision — WordPress's `wp_check_revisioned_meta_fields_have_changed` reads the keys we name. → Row 3.
+6. A fields-only `update()` through core makes one revision holding the new values; a title + field `update()` makes one, not two (R6). → Rows 2 and 3.
 
 ## Simplest design
 
-The simplest design that meets R1–R5 is the one planned: add a support flag and three hooks per model, all inside the model registration core already runs. Registering every field with `revisions_enabled` is shorter to write but attaches sanitizers to keys site code writes directly (spec Approaches 2); a separate service class would be a second home for model registration. The restore guard is the one piece WordPress lacks — two hooks around its own restore (priority 9 snapshot of keys the revision lacks, priority 11 put them back), leaving WordPress's `wp_restore_post_revision_meta` in place rather than removing a core hook.
+The simplest design that meets R1–R5 is the one planned: add a support flag and three hooks per model, all inside the model registration core already runs. Registering every field with `revisions_enabled` is shorter to write but attaches sanitizers to keys site code writes directly (spec Approaches 2); a separate service class would be a second home for model registration. The restore guard is the one piece WordPress lacks — two hooks around its own restore (priority 9 snapshot of keys the revision lacks, priority 11 put them back), leaving WordPress's `wp_restore_post_revision_meta` in place rather than removing a core hook. For R6, calling `wp_save_post_revision()` after `update()`'s meta loop without reordering would give a title + field write two revisions (a stale one from `wp_update_post`, then the fields one); writing the fields first gives one.
 
 ## Test map
 
@@ -134,13 +135,14 @@ add_action('wp_restore_post_revision', static function (int $postId) use (&$kept
 ### Task 2: `update()` writes fields before the post
 
 **Files:**
-- Modify: `api/Data.php` — `NTDST_Data_Model::update()` (`:696-765`)
+- Modify: `api/Data.php` — `NTDST_Data_Model::update()` (`:696-765`); delete `restorePostData()` (`:899`), whose only caller (`:741`) goes away
+- Modify: `tests/Unit/DataModelHooksTest.php` (`:108`), `tests/Unit/DataReadsTheVocabularyTest.php` (`:166`), `tests/Unit/CoreTrimClusterBFeatureTest.php` (`:684`) — each setUp gains `Functions\when('wp_save_post_revision')->justReturn(0);` beside its `wp_update_post` stub (10 existing tests call `update()` fields-only; no assertion changes)
 - Test: `tests/Unit/DataModelUpdateOrderTest.php`
 
 **Interfaces — produces:** `update()` keeps its signature, return values, hooks (`ntdst/model/updating` before any write, the after-hook with its before-state) and rollback promise. New order: the meta loop first; then `wp_update_post()` when there are post columns; when there are none and at least one field was written, `wp_save_post_revision($id)` (WordPress's own function returns early where revisions are off). Rollback: a meta failure restores the meta written so far (no post column is written yet); a `wp_update_post()` error restores every written meta and returns the error.
 
 - [ ] **Step 1: Tests** (Brain Monkey, recording call order): `testFieldsAreWrittenBeforeThePost` (title + field → `update_post_meta` recorded before `wp_update_post`); `testAFieldsOnlyUpdateTakesARevision` (`wp_save_post_revision` called once with the id); `testAColumnsUpdateTakesNoExtraRevision` (`wp_save_post_revision` not called when `wp_update_post` ran); `testAFailedPostWriteRestoresTheFields` (`wp_update_post` returns WP_Error → each written key restored, error returned); `testAFailedFieldWriteWritesNoPost` (`wp_update_post` never called). Run; RED (today's order).
-- [ ] **Step 2:** Reorder `update()`; the filter run GREEN; every existing `Data*` unit test green with no assertion edited (`composer test -- --filter Data`); `composer gate` exit 0; commit `fix(data): update() writes fields before the post, so its revision holds them`.
+- [ ] **Step 2:** Reorder `update()`; the filter run GREEN; every existing unit test green with no assertion edited — `composer gate` exit 0 (not a `--filter Data` run: `CoreTrimClusterBFeatureTest` would escape it); commit `fix(data): update() writes fields before the post, so its revision holds them`.
 
 ### Task 3: The proof on real WordPress
 
