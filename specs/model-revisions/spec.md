@@ -1,6 +1,6 @@
 # model-revisions — ntdst-core 5.6.0: an editable model keeps revisions, fields included
 
-**Status:** short design, 2026-11-04, from a conversation with Stefan. Awaiting approval.
+**Status:** short design, 2026-11-04, approved by Stefan the same day.
 **Target release:** v5.6.0 (minor: every admin-editable model changes on update).
 **Follow-up elsewhere:** ntdst-baseline's chat stops refusing ntdst model types (its spec R5), after this tag.
 
@@ -27,12 +27,12 @@ revision.
 *Source: Stefan, 2026-11-04: "ok, and we keep max 5 revisions"*
 
 **R4 — A site can switch it off for one model** with `'revisions' => false` in the model's config.
-*Source: invented — proposed 2026-11-04, awaiting approval.*
+*Source: invented — approved 2026-11-04.*
 
 **R5 — Restoring an older revision never empties a field.** A revision made before 5.6.0 holds no copy
 of the fields; WordPress's restore deletes each listed key, then copies it from the revision. When the
 revision has no copy of a key, the record keeps its current value.
-*Source: invented — found 2026-11-04 (`wp-includes/revision.php:530-543`), proposed, awaiting approval.*
+*Source: invented — found 2026-11-04 (`wp-includes/revision.php:530-543`), approved 2026-11-04.*
 
 ## Approaches
 
