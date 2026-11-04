@@ -2096,6 +2096,8 @@ class NTDST_Data_Model
  */
 class NTDST_Data_Manager
 {
+    private const REVISIONS_TO_KEEP = 5;
+
     protected static array $models = [];
 
     /**
@@ -2126,6 +2128,50 @@ class NTDST_Data_Manager
     public static function getScope(string $name): ?callable
     {
         return self::$globalScopes[$name] ?? null;
+    }
+
+    /**
+     * Revisions for one model's post type: its declared fields ride along (WordPress copies,
+     * diffs and restores the keys named here), the history is capped, and a revision that
+     * holds no copy of a field restores without emptying it.
+     */
+    private function registerRevisions(string $name, NTDST_Data_Model $model): void
+    {
+        $keys = [];
+        foreach ($model->getSchema() as $field => $declaration) {
+            if (NTDST_FieldTypes::declaredType($declaration) !== 'callback') {
+                $keys[] = $model->getMetaPrefix() . $field;
+            }
+        }
+
+        add_filter('wp_post_revision_meta_keys', static function (array $metaKeys, $postType = null) use ($name, $keys): array {
+            return $postType === $name ? array_values(array_unique(array_merge($metaKeys, $keys))) : $metaKeys;
+        }, 10, 2);
+
+        add_filter("wp_{$name}_revisions_to_keep", static fn(): int => self::REVISIONS_TO_KEEP);
+
+        $kept = [];
+        add_action('wp_restore_post_revision', static function (int $postId, int $revisionId) use ($name, $keys, &$kept): void {
+            $kept = [];
+            if (get_post_type($postId) !== $name) {
+                return;
+            }
+            foreach ($keys as $key) {
+                if (!metadata_exists('post', $revisionId, $key) && metadata_exists('post', $postId, $key)) {
+                    $kept[$key] = get_post_meta($postId, $key);
+                }
+            }
+        }, 9, 2);
+
+        // WordPress's own step at 10 deletes every listed key and copies only what the revision holds.
+        add_action('wp_restore_post_revision', static function (int $postId) use (&$kept): void {
+            foreach ($kept as $key => $values) {
+                foreach ($values as $value) {
+                    add_post_meta($postId, $key, wp_slash($value));
+                }
+            }
+            $kept = [];
+        }, 11, 1);
     }
 
     /**
@@ -2241,6 +2287,7 @@ class NTDST_Data_Manager
                 'auto_metabox',
                 'scopes',
                 'taxonomies',
+                'revisions',
             ])));
 
             // `custom-fields` is the switch that makes WordPress emit `meta` at all,
@@ -2270,6 +2317,12 @@ class NTDST_Data_Manager
             if (is_wp_error($registered)) {
                 $this->logRegistrationFailure($name, 'post type', $registered);
                 return $registered;
+            }
+
+            // WordPress resolves an unset `show_ui` from `public`, so ask the registered type.
+            if (($registered->show_ui ?? false) === true && ($config['revisions'] ?? true) !== false) {
+                add_post_type_support($name, 'revisions');
+                $this->registerRevisions($name, $model);
             }
 
             // Taxonomies declared WITH the model, collapsing the hand-rolled
