@@ -34,6 +34,13 @@ of the fields; WordPress's restore deletes each listed key, then copies it from 
 revision has no copy of a key, the record keeps its current value.
 *Source: invented — found 2026-11-04 (`wp-includes/revision.php:530-543`), approved 2026-11-04.*
 
+**R6 — A write through core's own `update()` is revisioned like a wp-admin save.** `update()` writes
+the fields before it saves the post, so the revision WordPress takes holds the new fields; a fields-only
+`update()` also takes a revision. (`updateMeta()` / `updateMetaBatch()`, the single-key writers, stay as
+they are.)
+*Source: Stefan, 2026-11-04: "b" — to the plan review's S1: "(b) Fix it in this release: `update()` writes
+the fields before saving the post, so the revision WordPress takes holds the new fields."*
+
 ## Approaches
 
 1. **Name the keys through `wp_post_revision_meta_keys` (WP 6.4), and add `revisions` support** —
@@ -61,7 +68,7 @@ revision has no copy of a key, the record keeps its current value.
 ## Non-goals
 
 No migration of stored values. No revisions for models without `show_ui`. No change to how fields are
-read, written, sanitized or published over REST. Baseline's chat change is its own plan.
+sanitized or published over REST; the one change to how they are written is R6's order inside `update()`. Baseline's chat change is its own plan.
 
 ## Tests (the plan's Test map will refine)
 

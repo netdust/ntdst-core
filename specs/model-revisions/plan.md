@@ -4,13 +4,13 @@
 
 **Goal:** Every admin-editable ntdst model keeps WordPress revisions, its declared fields included, at most 5 per record — ntdst-core 5.6.0.
 
-**Architecture:** `NTDST_Data_Manager::register()` adds `revisions` support to a model's post type when the registered post type has `show_ui` and the model's config does not say `'revisions' => false`. A private manager method then hooks three WordPress filters/actions for its own post type only: `wp_post_revision_meta_keys` (its field keys, so WordPress copies them into revisions, notices a field-only change and restores them), `wp_{type}_revisions_to_keep` (5), and a guard around `wp_restore_post_revision` that keeps a field's current value when the revision holds no copy of it. Nothing is registered with `register_post_meta()`, no sanitizer attaches, no stored value changes.
+**Architecture:** `NTDST_Data_Manager::register()` adds `revisions` support to a model's post type when the registered post type has `show_ui` and the model's config does not say `'revisions' => false`. A private manager method then hooks three WordPress filters/actions for its own post type only: `wp_post_revision_meta_keys` (its field keys, so WordPress copies them into revisions, notices a field-only change and restores them), `wp_{type}_revisions_to_keep` (5), and a guard around `wp_restore_post_revision` that keeps a field's current value when the revision holds no copy of it. Nothing is registered with `register_post_meta()`, no sanitizer attaches, no stored value changes. `NTDST_Data_Model::update()` writes its fields before `wp_update_post()`, so the revision WordPress takes holds them (R6).
 
 **First working version:** Task 1 — on the unit tier, a `show_ui` model registers with `revisions` support and its prefixed field keys in `wp_post_revision_meta_keys`; Task 2 shows it on real WordPress.
 
 **Tech Stack:** PHP 8.1+, WordPress ≥ 6.4 (revisioned meta; the suites run 7.1.4), PHPUnit 9 + Brain Monkey (core's only tier), ntdst-baseline's wp-phpunit suite on DDEV for the real-WordPress proof.
 
-**Spec:** `specs/model-revisions/spec.md` (R1–R5, approved by Stefan 2026-11-04).
+**Spec:** `specs/model-revisions/spec.md` (R1–R6, approved by Stefan 2026-11-04; R6 from the plan review's S1).
 
 ## Global Constraints
 
@@ -82,11 +82,12 @@ The simplest design that meets R1–R5 is the one planned: add a support flag an
 | Unit | Seam | Tests: tier · file · command | E2E flows |
 |---|---|---|---|
 | 1. Model revisions (support, keys, cap, restore guard) | `ntdst_data()->register($name, $config)` and the WordPress hooks it adds | unit · `tests/Unit/DataModelRevisionsTest.php` · `composer test -- --filter DataModelRevisionsTest` | — |
-| 2. The same on real WordPress | `ntdst_data()->register()` → `wp_update_post` / `wp_restore_post_revision` | integration · ntdst-baseline proof branch `chore/model-revisions-proof`, `tests/Integration/ModelRevisionsProofTest.php` · `ddev composer test:int -- --filter ModelRevisionsProofTest` | — (wp-admin's revision screen is WordPress's own) |
+| 2. `update()` writes fields first (R6) | `ntdst_data()->get($type)->update($id, $data)` | unit · `tests/Unit/DataModelUpdateOrderTest.php` · `composer test -- --filter DataModelUpdateOrderTest` | — |
+| 3. The same on real WordPress | `ntdst_data()->register()` → `wp_update_post` / `wp_restore_post_revision` | integration · ntdst-baseline proof branch `chore/model-revisions-proof`, `tests/Integration/ModelRevisionsProofTest.php` · `ddev composer test:int -- --filter ModelRevisionsProofTest` | — (wp-admin's revision screen is WordPress's own) |
 
 Core has no integration tier yet (plan 5 adds it); the real-WordPress proof runs in ntdst-baseline's suite with core required at `dev-feature/model-revisions`, on a branch that is pushed as evidence and never merged — the abilities-bridge precedent (Stride `chore/abilities-bridge`).
 
-Mode: **Native** — no security-boundary unit; three tasks.
+Mode: **Native** — no security-boundary unit; four tasks.
 
 ---
 
@@ -130,16 +131,27 @@ add_action('wp_restore_post_revision', static function (int $postId) use (&$kept
 
   `composer test -- --filter DataModelRevisionsTest` GREEN; `composer gate` exit 0 (`DataSurfaceTest` unchanged and green); commit `feat(data): an editable model keeps revisions, its fields included`.
 
-### Task 2: The proof on real WordPress
+### Task 2: `update()` writes fields before the post
+
+**Files:**
+- Modify: `api/Data.php` — `NTDST_Data_Model::update()` (`:696-765`)
+- Test: `tests/Unit/DataModelUpdateOrderTest.php`
+
+**Interfaces — produces:** `update()` keeps its signature, return values, hooks (`ntdst/model/updating` before any write, the after-hook with its before-state) and rollback promise. New order: the meta loop first; then `wp_update_post()` when there are post columns; when there are none and at least one field was written, `wp_save_post_revision($id)` (WordPress's own function returns early where revisions are off). Rollback: a meta failure restores the meta written so far (no post column is written yet); a `wp_update_post()` error restores every written meta and returns the error.
+
+- [ ] **Step 1: Tests** (Brain Monkey, recording call order): `testFieldsAreWrittenBeforeThePost` (title + field → `update_post_meta` recorded before `wp_update_post`); `testAFieldsOnlyUpdateTakesARevision` (`wp_save_post_revision` called once with the id); `testAColumnsUpdateTakesNoExtraRevision` (`wp_save_post_revision` not called when `wp_update_post` ran); `testAFailedPostWriteRestoresTheFields` (`wp_update_post` returns WP_Error → each written key restored, error returned); `testAFailedFieldWriteWritesNoPost` (`wp_update_post` never called). Run; RED (today's order).
+- [ ] **Step 2:** Reorder `update()`; the filter run GREEN; every existing `Data*` unit test green with no assertion edited (`composer test -- --filter Data`); `composer gate` exit 0; commit `fix(data): update() writes fields before the post, so its revision holds them`.
+
+### Task 3: The proof on real WordPress
 
 **Files (in `~/Sites/ntdst-baseline`, branch `chore/model-revisions-proof` from `origin/main`):** `composer.json`/`composer.lock` (`netdust/ntdst-core`: `dev-feature/model-revisions as 5.6.0`), Create `tests/Integration/ModelRevisionsProofTest.php`. Push core's `feature/model-revisions` first so Composer can resolve it.
 
-- [ ] **Step 1:** RED on baseline's current core (5.5.0), GREEN after the require: a throwaway model per test registered **with a `label`** (`'proof_' . bin2hex(random_bytes(4))`, `show_ui => true`, a `text` field), as `tests/Integration/ChatTextTest.php:199` does — without `label` no post type is registered (`Data.php:2226`); baseline's global limit set to 50 for the test (`add_filter('wp_revisions_to_keep', fn() => 50, 99)`, removed after) so the cap can only come from core's per-type filter: six saves → 5 revisions; a field-only change → a new revision; restore an older revision → the field's old value is back (writes go through `wp_update_post` + `update_post_meta` in `save_post`, the wp-admin order; see S1 for the Data-API writer); a revision whose meta copy is deleted (simulating pre-5.6) → restore keeps the current field value; a page's restore unaffected. `ddev composer test:int -- --filter ModelRevisionsProofTest` RED then GREEN, quoted.
+- [ ] **Step 1:** RED on baseline's current core (5.5.0), GREEN after the require: a throwaway model per test registered **with a `label`** (`'proof_' . bin2hex(random_bytes(4))`, `show_ui => true`, a `text` field), as `tests/Integration/ChatTextTest.php:199` does — without `label` no post type is registered (`Data.php:2226`); baseline's global limit set to 50 for the test (`add_filter('wp_revisions_to_keep', fn() => 50, 99)`, removed after) so the cap can only come from core's per-type filter: six saves → 5 revisions; a field-only change → a new revision; restore an older revision → the field's old value is back; the same through core's writer — `ntdst_data()->get($type)->update($id, ['tagline' => …])` alone makes a revision holding the new value, and a title + field `update()` makes one revision holding both (R6); a revision whose meta copy is deleted (simulating pre-5.6) → restore keeps the current field value; a page's restore unaffected. `ddev composer test:int -- --filter ModelRevisionsProofTest` RED then GREEN, quoted.
 - [ ] **Step 2:** Commit and push the proof branch (evidence; never merged, never promoted). Quote the commit.
 
-### Task 3: Release notes
+### Task 4: Release notes
 
-**Files:** `ntdst-core.php` (`Version: 5.6.0`), `CHANGELOG.md` (`## 5.6.0`: what changes on update — revisions appear for every `show_ui` model, at most 5, fields included; `'revisions' => false` to opt out; `callback` fields not revisioned; models without a `label` register no post type and get none; a revision with no copy of a field (pre-5.6, or taken while the field was unset) restores without emptying it; DB growth; WordPress's own `/revisions` and `/autosaves` routes now mount for `show_in_rest` models, behind `edit_post`), `README.md` (the model config key `revisions`).
+**Files:** `ntdst-core.php` (`Version: 5.6.0`), `CHANGELOG.md` (`## 5.6.0`: what changes on update — revisions appear for every `show_ui` model, at most 5, fields included; `'revisions' => false` to opt out; `callback` fields not revisioned; models without a `label` register no post type and get none; a revision with no copy of a field (pre-5.6, or taken while the field was unset) restores without emptying it; DB growth; WordPress's own `/revisions` and `/autosaves` routes now mount for `show_in_rest` models, behind `edit_post`), `README.md` (the model config key `revisions`). CHANGELOG also names R6's order change: `update()` writes fields before the post, so a `save_post` listener now sees the new field values during a Data-API update.
 
 - [ ] **Step 1:** Write them; `composer gate` exit 0; commit `release: 5.6.0 — an editable model keeps revisions`. Push the feature branch. Tag and merge are Stefan's.
 
