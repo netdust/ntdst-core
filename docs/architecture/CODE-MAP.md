@@ -57,3 +57,9 @@ is acceptable). An edit to one without the other is a defect — this pair drift
 `mountAbilities()` (read by `ntdst-core.php`) hooks the two walks on `wp_abilities_api_categories_init` and `wp_abilities_api_init`, the only callers of `wp_register_ability_category()` and `wp_register_ability()`.
 The `permission_callback` handed to WordPress is the route's resolved permission, never `guard()`; the execute callback is one `rest_do_request()`.
 `bin/guard.sh` holds INV-11's grep: a `wp_register_ability` outside `api/Rest.php` fails the gate.
+
+## Model revisions ride WordPress's filter, never `register_post_meta()`
+`NTDST_Data_Manager::register()` gives a `show_ui` model `revisions` support (read from the registered post type, not the config; `'revisions' => false` opts out) and `registerRevisions()` hooks, once per model name: its prefixed field keys into `wp_post_revision_meta_keys` (`callback` fields skipped), a cap of `min(5, site setting)` on `wp_{type}_revisions_to_keep` (0 stays off, -1 reads as 5), and a restore guard.
+- WordPress's restore step at priority 10 deletes every listed key and copies only what the revision holds, so the guard snapshots at 9 the keys the revision lacks and puts them back at 11, then takes one more revision (WordPress took its own before the fields came back).
+- Autosaves never carry model fields: `add_post_metadata` / `update_post_metadata` refuse the keys on an autosave of the model, because WordPress copies raw `$_POST` / REST meta for a named key and restore would write it unsanitised. Do not "fix" that by routing the copy through `update()`.
+- `NTDST_Data_Model::update()` writes fields before the post and saves the original first when a record has no revision yet. A revision restore changes fields without an `ntdst/model/*` hook: a deliberate exception.

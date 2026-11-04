@@ -682,6 +682,8 @@ final class CoreTrimClusterBFeatureTest extends TestCase
         // the writers
         Functions\when('wp_insert_post')->alias(fn(...$args) => $this->insertAnswer);
         Functions\when('wp_update_post')->alias(static fn($data) => (int) ($data['ID'] ?? self::POST_ID));
+        Functions\when('wp_save_post_revision')->justReturn(0);
+        Functions\when('post_type_supports')->justReturn(false);
         Functions\when('wp_delete_post')->alias(fn(...$args) => $this->deleteAnswer);
         Functions\when('wp_trash_post')->alias(fn(...$args) => $this->deleteAnswer);
 

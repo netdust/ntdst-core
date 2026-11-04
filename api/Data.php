@@ -721,14 +721,12 @@ class NTDST_Data_Model
             $previous_post_data[$post_field] = $existing->{$post_field} ?? null;
         }
 
-        // Update post data
-        if ($post_data) {
-            $result = wp_update_post($post_data + ['ID' => $id], true);
-            if (is_wp_error($result)) {
-                return $result;
-            }
+        // WordPress saves only the post-update state: with no revision yet, the original is saved first.
+        if (post_type_supports($this->post_type, 'revisions') && !wp_get_post_revisions($id, ['numberposts' => 1, 'fields' => 'ids'])) {
+            wp_save_post_revision($id);
         }
 
+        // Fields first: the revision wp_update_post() takes then holds them.
         $meta_data = $this->extractMetaData($data);
         $previous_meta = [];
         foreach ($meta_data as $key => $value) {
@@ -738,10 +736,19 @@ class NTDST_Data_Model
             ];
 
             if (!$this->updateMetaValue($id, $key, $value)) {
-                $this->restorePostData($id, $previous_post_data);
                 $this->restoreMetaData($id, $previous_meta);
                 return new WP_Error('meta_update_failed', sprintf('Failed to update meta field %s', $key), ['status' => 500]);
             }
+        }
+
+        if ($post_data) {
+            $result = wp_update_post($post_data + ['ID' => $id], true);
+            if (is_wp_error($result)) {
+                $this->restoreMetaData($id, $previous_meta);
+                return $result;
+            }
+        } elseif ($meta_data) {
+            wp_save_post_revision($id);
         }
 
         // Fire after hook. The fourth argument is the before-state this method
@@ -894,18 +901,6 @@ class NTDST_Data_Model
     }
 
     /**
-     * Restore post-table fields after a partial update failure.
-     */
-    protected function restorePostData(int $id, array $previousPostData): void
-    {
-        if (empty($previousPostData)) {
-            return;
-        }
-
-        wp_update_post($previousPostData + ['ID' => $id], true);
-    }
-
-    /**
      * Restore meta fields after a partial update failure.
      */
     protected function restoreMetaData(int $id, array $previousMeta): void
@@ -915,7 +910,7 @@ class NTDST_Data_Model
             $value = is_array($snapshot) && array_key_exists('value', $snapshot) ? $snapshot['value'] : $snapshot;
 
             if ($exists) {
-                update_post_meta($id, $key, $value);
+                update_post_meta($id, $key, wp_slash($value));
             } else {
                 delete_post_meta($id, $key);
             }
@@ -2096,6 +2091,11 @@ class NTDST_Data_Model
  */
 class NTDST_Data_Manager
 {
+    private const REVISIONS_TO_KEEP = 5;
+
+    /** @var array<string, list<string>> model name => the field keys its revision hooks name */
+    private static array $revisionKeys = [];
+
     protected static array $models = [];
 
     /**
@@ -2126,6 +2126,81 @@ class NTDST_Data_Manager
     public static function getScope(string $name): ?callable
     {
         return self::$globalScopes[$name] ?? null;
+    }
+
+    /**
+     * Revisions for one model's post type: its declared fields ride along (WordPress copies,
+     * diffs and restores the keys named here), the history is capped, a revision that holds
+     * no copy of a field restores without emptying it, and autosaves never carry the fields.
+     *
+     * The hooks are added once per model name; a second registration only refreshes the keys.
+     */
+    private function registerRevisions(string $name, NTDST_Data_Model $model): void
+    {
+        $keys = [];
+        foreach ($model->getSchema() as $field => $declaration) {
+            if (NTDST_FieldTypes::declaredType($declaration) !== 'callback') {
+                $keys[] = $model->getMetaPrefix() . $field;
+            }
+        }
+
+        $hooked = isset(self::$revisionKeys[$name]);
+        self::$revisionKeys[$name] = $keys;
+        if ($hooked) {
+            return;
+        }
+
+        add_filter('wp_post_revision_meta_keys', static function (array $metaKeys, $postType = null) use ($name): array {
+            return $postType === $name ? array_values(array_unique(array_merge($metaKeys, self::$revisionKeys[$name]))) : $metaKeys;
+        }, 10, 2);
+
+        // At most 5, never more than the site allows: 0 stays off, WordPress's -1 (unlimited) reads as 5.
+        add_filter("wp_{$name}_revisions_to_keep", static function ($num): int {
+            $num = (int) $num;
+
+            return $num === 0 ? 0 : ($num < 0 ? self::REVISIONS_TO_KEEP : min(self::REVISIONS_TO_KEEP, $num));
+        });
+
+        // WordPress copies raw $_POST / REST meta for a named key into an autosave and restore writes it
+        // back unsanitised: model fields stay out of autosaves, and the restore guard keeps the live value.
+        $outOfAutosaves = static function ($check, $objectId, $metaKey) use ($name) {
+            if (!in_array($metaKey, self::$revisionKeys[$name], true)) {
+                return $check;
+            }
+            $parent = wp_is_post_autosave((int) $objectId);
+
+            return $parent && get_post_type($parent) === $name ? false : $check;
+        };
+        add_filter('add_post_metadata', $outOfAutosaves, 10, 3);
+        add_filter('update_post_metadata', $outOfAutosaves, 10, 3);
+
+        $kept = [];
+        add_action('wp_restore_post_revision', static function (int $postId, int $revisionId) use ($name, &$kept): void {
+            $kept = [];
+            if (get_post_type($postId) !== $name) {
+                return;
+            }
+            foreach (self::$revisionKeys[$name] as $key) {
+                if (!metadata_exists('post', $revisionId, $key) && metadata_exists('post', $postId, $key)) {
+                    $kept[$key] = get_post_meta($postId, $key);
+                }
+            }
+        }, 9, 2);
+
+        // WordPress's own step at 10 deletes every listed key and copies only what the revision holds.
+        add_action('wp_restore_post_revision', static function (int $postId) use ($name, &$kept): void {
+            if (get_post_type($postId) !== $name) {
+                return;
+            }
+            foreach ($kept as $key => $values) {
+                foreach ($values as $value) {
+                    add_post_meta($postId, $key, wp_slash($value));
+                }
+            }
+            $kept = [];
+            // WordPress took its revision before the fields came back: take the one that holds them.
+            wp_save_post_revision($postId);
+        }, 11, 1);
     }
 
     /**
@@ -2241,6 +2316,7 @@ class NTDST_Data_Manager
                 'auto_metabox',
                 'scopes',
                 'taxonomies',
+                'revisions',
             ])));
 
             // `custom-fields` is the switch that makes WordPress emit `meta` at all,
@@ -2270,6 +2346,12 @@ class NTDST_Data_Manager
             if (is_wp_error($registered)) {
                 $this->logRegistrationFailure($name, 'post type', $registered);
                 return $registered;
+            }
+
+            // WordPress resolves an unset `show_ui` from `public`, so ask the registered type.
+            if ((bool) ($registered->show_ui ?? false) && ($config['revisions'] ?? true) !== false) {
+                add_post_type_support($name, 'revisions');
+                $this->registerRevisions($name, $model);
             }
 
             // Taxonomies declared WITH the model, collapsing the hand-rolled
