@@ -305,6 +305,7 @@ final class MetaboxReadsTheVocabularyTest extends TestCase
         Functions\when('metadata_exists')->alias(fn($type, $id, $key) => array_key_exists($key, $this->meta));
         Functions\when('wp_insert_post')->justReturn(self::POST_ID);
         Functions\when('wp_update_post')->alias(static fn($data) => (int) ($data['ID'] ?? self::POST_ID));
+        Functions\when('post_type_supports')->justReturn(false);
         Functions\when('wp_delete_post')->justReturn(true);
         Functions\when('is_wp_error')->alias(static fn($v) => $v instanceof WP_Error);
         Functions\when('maybe_unserialize')->returnArg(1);
@@ -833,6 +834,7 @@ final class MetaboxReadsTheVocabularyTest extends TestCase
     public function testAPostedKeyOutsideTheDeclaredSetNeverBecomesAPostColumn(): void
     {
         $columns = [];
+        Functions\when('post_type_supports')->justReturn(false);
         Functions\when('wp_update_post')->alias(function ($data = [], $wpError = false) use (&$columns) {
             $columns[] = (array) $data;
 

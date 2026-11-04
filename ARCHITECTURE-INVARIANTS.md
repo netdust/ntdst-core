@@ -467,7 +467,7 @@ Every part of (A)'s form is load-bearing:
 - The last filter drops COMMENT lines, the way INV-1's does. A docblock reading
   `@param string $field Field to match (term_id, …)` is prose, not a switch.
 
-(A) returns **55 lines** and (B) returns **2** (measured at 5.5.0; (B) was 1 at
+(A) returns **56 lines** and (B) returns **2** (measured at 5.6.0; (B) was 1 at
 `73d01db`, and (A) 55 at `0d62394` too). Every one of them is named in
 `## Deliberate exceptions` below, grouped by WHAT it is rather than by where it
 sits. Anything else is a bypass. (It was 59 while `services/Logger.php` still
@@ -782,7 +782,7 @@ Things core does that WordPress also does, kept on purpose. Each names why.
 
 ### INV-8 — every hit the field-type check returns
 
-(A) returns 55 lines and (B) returns 2 (measured at 5.5.0). Each group below says WHAT the hits are,
+(A) returns 56 lines and (B) returns 2 (measured at 5.6.0). Each group below says WHAT the hits are,
 not which line they sit on: a line number is stale after the next edit, and a
 reader matching 59 greps against stale numbers stops reading. Where a group has
 a test that holds it, the test is named — that is its mechanical home.
@@ -797,9 +797,10 @@ a test that holds it, the test is named — that is its mechanical home.
   a new type adds one arm here and nothing anywhere else. Mechanical home:
   `MetaboxGeneratorRenderTest::testNoTypeNameSwitchSurvivesInTheSource`, which
   fails if a TYPE-name switch grows back in that file.
-- **The `callback` render directive** — 6 hits: 3 in `admin/MetaboxGenerator.php`,
-  one on the render side and two on the save side, and 3 in `api/Data.php`,
-  where binding, sanitizing and formatting step past it the same way (`3d6e2e5`). `callback` has no entry on
+- **The `callback` render directive** — 7 hits: 3 in `admin/MetaboxGenerator.php`,
+  one on the render side and two on the save side, and 4 in `api/Data.php`,
+  where binding, sanitizing, formatting and `registerRevisions()` (its revisioned keys skip a
+  `callback` field, whose storage is the consumer's) step past it the same way (`3d6e2e5`). `callback` has no entry on
   purpose: the field draws itself and the consumer's code owns what it stores.
   Both sides must step past it before they ask the registry anything, or a
   posted `callback` field throws and kills the whole edit screen. Same

@@ -31,6 +31,12 @@ final class DataModelRevisionsTest extends TestCase
     /** @var array<int, string> post id => post type */
     private array $types = [];
 
+    /** @var list<int> post ids wp_save_post_revision() was called for */
+    private array $saved = [];
+
+    /** @var array<int, int> autosave id => parent id */
+    private array $autosaves = [];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -40,6 +46,8 @@ final class DataModelRevisionsTest extends TestCase
         $this->supports = [];
         $this->meta = [];
         $this->types = [];
+        $this->saved = [];
+        $this->autosaves = [];
         unset($GLOBALS['_ntdst_test_filters_at']);
 
         Functions\when('is_wp_error')->justReturn(false);
@@ -59,6 +67,12 @@ final class DataModelRevisionsTest extends TestCase
         });
 
         Functions\when('get_post_type')->alias(fn($id) => $this->types[$id] ?? false);
+        Functions\when('wp_is_post_autosave')->alias(fn($id) => $this->autosaves[$id] ?? false);
+        Functions\when('wp_save_post_revision')->alias(function ($id) {
+            $this->saved[] = $id;
+
+            return 0;
+        });
         Functions\when('metadata_exists')->alias(fn($t, $id, $key) => isset($this->meta[$id][$key]));
         Functions\when('get_post_meta')->alias(fn($id, $key) => $this->meta[$id][$key] ?? []);
         Functions\when('add_post_meta')->alias(function ($id, $key, $value) {
@@ -177,14 +191,51 @@ final class DataModelRevisionsTest extends TestCase
         $this->assertSame(['_x'], $this->metaKeysFor('page', ['_x']));
     }
 
-    public function testFiveRevisionsAreKept(): void
+    /** @return array<string, array{0: int, 1: int}> */
+    public static function capCases(): array
+    {
+        return [
+            'a high site limit is capped at 5' => [50, 5],
+            'a lower site limit is kept'       => [3, 3],
+            'unlimited (-1) reads as 5'        => [-1, 5],
+            'revisions off stays off'          => [0, 0],
+        ];
+    }
+
+    /** @dataProvider capCases */
+    public function testTheCapNeverExceedsFiveOrTheSitesOwnSetting(int $site, int $expected): void
     {
         $name = $this->registerModel(true);
 
         $filters = $this->callbacks("wp_{$name}_revisions_to_keep");
 
         $this->assertCount(1, $filters);
-        $this->assertSame(5, $filters[0](-1, (object) []));
+        $this->assertSame($expected, $filters[0]($site, (object) []));
+    }
+
+    public function testAnAutosaveOfTheModelNeverCarriesItsFields(): void
+    {
+        $name = $this->registerModel(true);
+        $this->types[7] = $name;
+        $this->autosaves[9] = 7;
+
+        foreach (['add_post_metadata', 'update_post_metadata'] as $tag) {
+            [$guard] = $this->callbacks($tag);
+            $this->assertFalse($guard(null, 9, '_p_tagline', 'raw'), "$tag: a field on an autosave is refused");
+            $this->assertNull($guard(null, 9, '_unrelated', 'raw'), "$tag: another key is untouched");
+            $this->assertNull($guard(null, 7, '_p_tagline', 'raw'), "$tag: the live post is untouched");
+        }
+    }
+
+    public function testAnotherPostTypesAutosaveIsUntouched(): void
+    {
+        $this->registerModel(true);
+        $this->types[3] = 'page';
+        $this->autosaves[4] = 3;
+
+        [$guard] = $this->callbacks('add_post_metadata');
+
+        $this->assertNull($guard(null, 4, '_p_tagline', 'raw'));
     }
 
     public function testRestoringARevisionWithoutAFieldKeepsItsValue(): void
@@ -224,16 +275,40 @@ final class DataModelRevisionsTest extends TestCase
         $this->assertSame(['then'], $this->meta[7]['_p_tagline']);
     }
 
-    public function testRegisteringTwiceNamesEachKeyOnce(): void
+    public function testRegisteringTwiceHooksTheGuardOnce(): void
     {
         $name = $this->registerModel(true);
-        $once = $this->metaKeysFor($name);
+        $this->registerModel(true, [], $name);
+        $this->types[7] = $name;
+        $this->meta[7]['_p_config'] = ['kept'];
 
-        // Two registrations stack two callbacks on WordPress's filter: the second sees the first's output.
-        $twice = $this->metaKeysFor($name, $once);
+        $this->assertCount(1, $this->callbacks('wp_restore_post_revision', 9));
+        $this->assertCount(1, $this->callbacks('wp_restore_post_revision', 11));
 
-        $this->assertSame(count($twice), count(array_unique($twice)));
-        $this->assertEqualsCanonicalizing($once, $twice);
+        foreach ($this->callbacks('wp_restore_post_revision', 9) as $cb) {
+            $cb(7, 8);
+        }
+        $this->meta[7] = [];
+        foreach ($this->callbacks('wp_restore_post_revision', 11) as $cb) {
+            $cb(7, 8);
+        }
+
+        $this->assertSame(['kept'], $this->meta[7]['_p_config'], 'one meta row, not two');
+    }
+
+    public function testARestoreTakesARevisionHoldingTheRestoredFields(): void
+    {
+        $name = $this->registerModel(true);
+        $this->types[7] = $name;
+
+        foreach ($this->callbacks('wp_restore_post_revision', 9) as $cb) {
+            $cb(7, 8);
+        }
+        foreach ($this->callbacks('wp_restore_post_revision', 11) as $cb) {
+            $cb(7, 8);
+        }
+
+        $this->assertSame([7], $this->saved);
     }
 
     public function testAnotherPostTypesRestoreIsUntouched(): void
@@ -251,5 +326,6 @@ final class DataModelRevisionsTest extends TestCase
         }
 
         $this->assertSame([], $this->meta[3]);
+        $this->assertSame([], $this->saved);
     }
 }

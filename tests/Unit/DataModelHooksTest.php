@@ -107,6 +107,7 @@ final class DataModelHooksTest extends TestCase
         Functions\when('wp_insert_post')->justReturn(42);
         Functions\when('wp_update_post')->alias(static fn($data) => (int) ($data['ID'] ?? 7));
         Functions\when('wp_save_post_revision')->justReturn(0);
+        Functions\when('post_type_supports')->justReturn(false);
         Functions\when('wp_delete_post')->justReturn(true);
         Functions\when('wp_trash_post')->justReturn(true);
 

@@ -47,7 +47,7 @@ may also be a WordPress ability: `'ability' => [...]`, see `### 5.5.0`.
 
 ### 5.6.0 — model revisions
 
-A model registered with a `label` whose post type has `show_ui` keeps revisions: `register()` adds `revisions` support, caps the history at 5 per record and lists the model's declared fields (not `callback` ones) as revisioned meta, so a field-only change makes a revision and a restore brings the fields back. A revision with no copy of a field restores without emptying it. `update()` writes fields before the post, so its revision holds them.
+A model registered with a `label` whose post type has `show_ui` keeps revisions: `register()` adds `revisions` support, caps the history at 5 per record (a lower site setting wins) and lists the model's declared fields (not `callback` ones) as revisioned meta, so a field-only change makes a revision and a restore brings the fields back. A revision with no copy of a field restores without emptying it. `update()` writes fields before the post, so its revision holds them.
 
 | Model config key | Effect |
 |---|---|

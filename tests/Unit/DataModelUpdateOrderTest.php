@@ -26,6 +26,9 @@ final class DataModelUpdateOrderTest extends TestCase
 
     private mixed $postResult = 7;
 
+    /** @var list<int> */
+    private array $revisions = [1];
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -35,6 +38,7 @@ final class DataModelUpdateOrderTest extends TestCase
         $this->calls = [];
         $this->metaWrites = true;
         $this->postResult = 7;
+        $this->revisions = [1];
         $GLOBALS['_ntdst_test_log'] = [];
 
         Functions\when('sanitize_text_field')->alias(static fn($v) => trim(strip_tags((string) $v)));
@@ -69,6 +73,8 @@ final class DataModelUpdateOrderTest extends TestCase
         Functions\when('wp_cache_get')->alias(fn($id = null, $group = '') => $group === 'post_meta'
             ? array_map(static fn($v) => [$v], $this->stored)
             : false);
+        Functions\when('post_type_supports')->justReturn(true);
+        Functions\when('wp_get_post_revisions')->alias(fn() => $this->revisions);
         Functions\when('wp_save_post_revision')->alias(function ($id) {
             $this->calls[] = "revision:$id";
 
@@ -106,6 +112,15 @@ final class DataModelUpdateOrderTest extends TestCase
         $this->model()->update(7, ['title' => 'new', 'headline' => 'x']);
 
         $this->assertNotContains('revision:7', $this->calls);
+    }
+
+    public function testARecordWithNoRevisionYetHasItsOriginalSavedFirst(): void
+    {
+        $this->revisions = [];
+
+        $this->model()->update(7, ['title' => 'new', 'headline' => 'x']);
+
+        $this->assertSame(['revision:7', 'meta:_p_headline', 'post'], $this->calls);
     }
 
     public function testAFailedPostWriteRestoresTheFields(): void
