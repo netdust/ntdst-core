@@ -4,7 +4,7 @@
 
 **Goal:** Every admin-editable ntdst model keeps WordPress revisions, its declared fields included, at most 5 per record — ntdst-core 5.6.0.
 
-**Architecture:** `NTDST_Data_Manager::register()` adds `revisions` support to a model's post type when that post type has `show_ui` and the model's config does not say `'revisions' => false`. The model then hooks three WordPress filters/actions for its own post type only: `wp_post_revision_meta_keys` (its field keys, so WordPress copies them into revisions, notices a field-only change and restores them), `wp_{type}_revisions_to_keep` (5), and a guard around `wp_restore_post_revision` that keeps a field's current value when the revision holds no copy of it. Nothing is registered with `register_post_meta()`, no sanitizer attaches, no stored value changes.
+**Architecture:** `NTDST_Data_Manager::register()` adds `revisions` support to a model's post type when the registered post type has `show_ui` and the model's config does not say `'revisions' => false`. A private manager method then hooks three WordPress filters/actions for its own post type only: `wp_post_revision_meta_keys` (its field keys, so WordPress copies them into revisions, notices a field-only change and restores them), `wp_{type}_revisions_to_keep` (5), and a guard around `wp_restore_post_revision` that keeps a field's current value when the revision holds no copy of it. Nothing is registered with `register_post_meta()`, no sanitizer attaches, no stored value changes.
 
 **First working version:** Task 1 — on the unit tier, a `show_ui` model registers with `revisions` support and its prefixed field keys in `wp_post_revision_meta_keys`; Task 2 shows it on real WordPress.
 
@@ -58,12 +58,12 @@
 The spec's own:
 
 - No `register_post_meta()` for revisions; no new sanitizer on any key; no migration of stored values (spec Approaches, Non-goals).
-- No new public method on `NTDST_Data_Manager` (field-types D1: Data is the ORM). The model gains one public method, `registerRevisions()`, read by the manager beside `registerRestMeta()` (INV-9: a public symbol has a reader).
+- No new public method in `api/Data.php` (field-types D1: Data is the ORM; INV-9; `tests/Unit/DataSurfaceTest.php:211-236` pins the model's surface). The work is one `private` method on `NTDST_Data_Manager`, reading the model through its existing public `getSchema()` and `getMetaPrefix()`.
 - The cap is exactly 5; the opt-out is exactly `'revisions' => false` in the model's config.
 - `callback` fields are not revisioned (their storage is the consumer's).
 - Base: `origin/main` `6a3b9df` (v5.5.0). Branch `feature/model-revisions`. Golden path: `content-type-feature` — the change is inside the model registration that slice uses; departure: none.
 
-No threat model: no security-boundary file is touched (no capability check, input parse, nonce or credential); restoring a revision stays behind WordPress's own `edit_post`. Four pillars: no new data flow — `n/a — the change hooks WordPress's revision lifecycle; no route, form or query is added`.
+No threat model: no security-boundary file is touched (no capability check, input parse, nonce or credential); restoring a revision stays behind WordPress's own `edit_post`. Four pillars: no new data flow of core's own — `n/a — the change hooks WordPress's revision lifecycle; core adds no route, form or query`. WordPress itself mounts `/revisions` and `/autosaves` for `show_in_rest` models (behind `edit_post`; only registered fields appear, INV-1 holds), and its autosave stores raw `$_POST[<key>]` for named keys (wp-admin/includes/post.php:2043-2077) — reachable only by a crafted request from a user who already has `edit_post` (plan-review Note).
 
 ## Review Focus
 
@@ -93,27 +93,53 @@ Mode: **Native** — no security-boundary unit; three tasks.
 ### Task 1: Model revisions in core
 
 **Files:**
-- Modify: `api/Data.php` — `NTDST_Data_Manager::register()` (`:2206`; the `array_diff_key` exclusion list `:2237-2244` gains `'revisions'`; after the successful `register_post_type()` `:2263-2273`), `NTDST_Data_Model` (new `registerRevisions()` beside `registerRestMeta()` `:176`)
+- Modify: `api/Data.php` — `NTDST_Data_Manager::register()` (`:2206`; the `array_diff_key` exclusion list `:2237-2244` gains `'revisions'`; after the successful `register_post_type()` `:2263-2273`) and a new private `NTDST_Data_Manager::registerRevisions()`
 - Test: `tests/Unit/DataModelRevisionsTest.php`
 
 **Interfaces — produces:**
-- `NTDST_Data_Model::registerRevisions(string $postType): void` — hooks, for `$postType` only: `wp_post_revision_meta_keys` (appends this model's prefixed keys of every declared field whose `NTDST_FieldTypes::declaredType()` is not `callback`), `"wp_{$postType}_revisions_to_keep"` → `self::REVISIONS_TO_KEEP`, `wp_restore_post_revision` at 9 and 11 (the guard).
-- `private const REVISIONS_TO_KEEP = 5;` on `NTDST_Data_Model`.
-- In `register()`: when `get_post_type_object($name)->show_ui` and `($config['revisions'] ?? true) !== false` → `add_post_type_support($name, 'revisions')` and `$model->registerRevisions($name)`.
+- `private function registerRevisions(string $name, NTDST_Data_Model $model): void` on `NTDST_Data_Manager` — hooks, for `$name` only: `wp_post_revision_meta_keys` (this model's prefixed keys of every declared field whose `NTDST_FieldTypes::declaredType()` is not `callback`, merged with `array_unique`), `"wp_{$name}_revisions_to_keep"` → `self::REVISIONS_TO_KEEP`, `wp_restore_post_revision` at 9 and 11 (the guard).
+- `private const REVISIONS_TO_KEEP = 5;` on `NTDST_Data_Manager`.
+- In `register()`, after the WP_Error check: when `($registered->show_ui ?? false) === true` (the `WP_Post_Type` `register_post_type()` returned; WordPress resolves an unset `show_ui` from `public`, `class-wp-post-type.php:576-577`) and `($config['revisions'] ?? true) !== false` → `add_post_type_support($name, 'revisions')` and `$this->registerRevisions($name, $model)`. The existing suites' `register_post_type` stubs return `stdClass` without `show_ui`, which reads as "no revisions" — no other suite changes.
 
-- [ ] **Step 1: Tests** in `DataModelRevisionsTest` (Brain Monkey; the stubs `tests/Support` already offer for `register_post_type`): `testAShowUiModelGetsRevisionSupport`; `testAnOwnSupportsListStillGainsRevisions` (`'supports' => ['title']`); `testRevisionsFalseGivesNone` (no support, no hooks); `testAModelWithoutShowUiGetsNone`; `testTheModelsFieldKeysAreRevisioned` (prefixed keys, a `callback` field absent, another post type's list unchanged); `testFiveRevisionsAreKept` (the per-type filter returns 5); `testRestoringARevisionWithoutAFieldKeepsItsValue` and `testRestoringARevisionWithTheFieldRestoresIt` (drive the 9/11 callbacks with `metadata_exists` stubbed); `testAnotherPostTypesRestoreIsUntouched`. Run; RED (method absent).
-- [ ] **Step 2:** Implement; `composer test -- --filter DataModelRevisionsTest` GREEN; `composer gate` exit 0; commit `feat(data): an editable model keeps revisions, its fields included`.
+- [ ] **Step 1: Tests** in `DataModelRevisionsTest` (Brain Monkey; `register_post_type` stubbed inline as `tests/Unit/DataRegistersRestMetaTest.php:652` does, returning an object that carries `show_ui`): `testAShowUiModelGetsRevisionSupport`; `testAnOwnSupportsListStillGainsRevisions` (`'supports' => ['title']`); `testRevisionsFalseGivesNone` (no support, no hooks); `testAModelWithoutShowUiGetsNone`; `testTheModelsFieldKeysAreRevisioned` (prefixed keys, a `callback` field absent, another post type's list unchanged); `testFiveRevisionsAreKept` (the per-type filter returns 5); `testRestoringARevisionWithoutAFieldKeepsItsValue` (the kept value holds a backslash, `{"a":"b\\c"}`, and comes back byte-identical) and `testRestoringARevisionWithTheFieldRestoresIt` (drive the 9/11 callbacks with `metadata_exists` stubbed); `testRegisteringTwiceNamesEachKeyOnce`; `testAnotherPostTypesRestoreIsUntouched`. Run; RED (method absent).
+- [ ] **Step 2:** Implement. The restore guard is the one part the tests do not determine:
+
+```php
+$kept = [];
+add_action('wp_restore_post_revision', static function (int $postId, int $revisionId) use ($name, $keys, &$kept): void {
+    $kept = [];
+    if (get_post_type($postId) !== $name) {
+        return;
+    }
+    foreach ($keys as $key) {
+        if (!metadata_exists('post', $revisionId, $key) && metadata_exists('post', $postId, $key)) {
+            $kept[$key] = get_post_meta($postId, $key);
+        }
+    }
+}, 9, 2);
+// WordPress's own step at 10 deletes every listed key and copies only what the revision holds.
+add_action('wp_restore_post_revision', static function (int $postId) use (&$kept): void {
+    foreach ($kept as $key => $values) {
+        foreach ($values as $value) {
+            add_post_meta($postId, $key, wp_slash($value));
+        }
+    }
+    $kept = [];
+}, 11, 1);
+```
+
+  `composer test -- --filter DataModelRevisionsTest` GREEN; `composer gate` exit 0 (`DataSurfaceTest` unchanged and green); commit `feat(data): an editable model keeps revisions, its fields included`.
 
 ### Task 2: The proof on real WordPress
 
 **Files (in `~/Sites/ntdst-baseline`, branch `chore/model-revisions-proof` from `origin/main`):** `composer.json`/`composer.lock` (`netdust/ntdst-core`: `dev-feature/model-revisions as 5.6.0`), Create `tests/Integration/ModelRevisionsProofTest.php`. Push core's `feature/model-revisions` first so Composer can resolve it.
 
-- [ ] **Step 1:** RED on baseline's current core (5.5.0), GREEN after the require: a throwaway model per test (`'proof_' . bin2hex(random_bytes(4))`, `show_ui => true`, a `text` field and a `callback`-free schema, as `tests/Integration/TextBundleRealTest.php:27-28` does): six saves → 5 revisions; a field-only change → a new revision; restore an older revision → the field's old value is back; a revision whose meta copy is deleted (simulating pre-5.6) → restore keeps the current field value; a page's restore unaffected. `ddev composer test:int -- --filter ModelRevisionsProofTest` RED then GREEN, quoted.
+- [ ] **Step 1:** RED on baseline's current core (5.5.0), GREEN after the require: a throwaway model per test registered **with a `label`** (`'proof_' . bin2hex(random_bytes(4))`, `show_ui => true`, a `text` field), as `tests/Integration/ChatTextTest.php:199` does — without `label` no post type is registered (`Data.php:2226`); baseline's global limit set to 50 for the test (`add_filter('wp_revisions_to_keep', fn() => 50, 99)`, removed after) so the cap can only come from core's per-type filter: six saves → 5 revisions; a field-only change → a new revision; restore an older revision → the field's old value is back (writes go through `wp_update_post` + `update_post_meta` in `save_post`, the wp-admin order; see S1 for the Data-API writer); a revision whose meta copy is deleted (simulating pre-5.6) → restore keeps the current field value; a page's restore unaffected. `ddev composer test:int -- --filter ModelRevisionsProofTest` RED then GREEN, quoted.
 - [ ] **Step 2:** Commit and push the proof branch (evidence; never merged, never promoted). Quote the commit.
 
 ### Task 3: Release notes
 
-**Files:** `ntdst-core.php` (`Version: 5.6.0`), `CHANGELOG.md` (`## 5.6.0`: what changes on update — revisions appear for every `show_ui` model, at most 5, fields included; `'revisions' => false` to opt out; `callback` fields not revisioned; a pre-5.6 revision restores without emptying fields; DB growth), `README.md` (the model config key `revisions`).
+**Files:** `ntdst-core.php` (`Version: 5.6.0`), `CHANGELOG.md` (`## 5.6.0`: what changes on update — revisions appear for every `show_ui` model, at most 5, fields included; `'revisions' => false` to opt out; `callback` fields not revisioned; models without a `label` register no post type and get none; a revision with no copy of a field (pre-5.6, or taken while the field was unset) restores without emptying it; DB growth; WordPress's own `/revisions` and `/autosaves` routes now mount for `show_in_rest` models, behind `edit_post`), `README.md` (the model config key `revisions`).
 
 - [ ] **Step 1:** Write them; `composer gate` exit 0; commit `release: 5.6.0 — an editable model keeps revisions`. Push the feature branch. Tag and merge are Stefan's.
 
