@@ -4,6 +4,23 @@ The migration tables live in `README.md` under `## Versions` — this file is th
 short answer to "what changed in this tag". Nothing here replaces reading that
 section before a MAJOR bump.
 
+## 5.6.0
+
+Additive. `^5.5` consumers upgrade without a code change; what changes on update is below.
+
+### Added
+- An editable model keeps WordPress revisions, its declared fields included. Every model whose registered post type has `show_ui` (an unset `show_ui` follows `public`, as WordPress resolves it) gains `revisions` support, at most 5 revisions per record. `'revisions' => false` in the model's config opts out.
+- A field-only change makes a revision, and restoring a revision restores the fields it holds. `callback` fields are not revisioned (their storage is the consumer's). Nothing is registered with `register_post_meta()`, no sanitizer attaches and no stored value changes.
+- A revision that holds no copy of a field (taken before 5.6, or while the field was unset) restores without emptying it: the field keeps its current value.
+
+### Changed
+- `NTDST_Data_Model::update()` writes the fields before the post, so the revision WordPress takes holds the new values, and a title + field update makes one revision, not two. A `save_post` listener now sees the new field values during a Data-API update. Rollback is unchanged: a failed field write or post write restores the fields written so far. A fields-only update takes its own revision.
+
+### Notes on update
+- Revisions appear for every `show_ui` model from the first save after the update; the database grows by up to 5 revisions (and their copied meta) per record.
+- Models without a `label` register no post type, so they get no revisions.
+- WordPress's own `/revisions` and `/autosaves` REST routes now mount for `show_in_rest` models, behind `edit_post`; only registered fields appear.
+
 ## 5.5.0
 
 Additive. `^5.4` consumers upgrade without a code change.

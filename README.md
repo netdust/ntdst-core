@@ -45,6 +45,14 @@ may also be a WordPress ability: `'ability' => [...]`, see `### 5.5.0`.
 
 ## Versions
 
+### 5.6.0 — model revisions
+
+A model registered with a `label` whose post type has `show_ui` keeps revisions: `register()` adds `revisions` support, caps the history at 5 per record and lists the model's declared fields (not `callback` ones) as revisioned meta, so a field-only change makes a revision and a restore brings the fields back. A revision with no copy of a field restores without emptying it. `update()` writes fields before the post, so its revision holds them.
+
+| Model config key | Effect |
+|---|---|
+| `'revisions' => false` | No revisions for this model (default: on when the post type has `show_ui`). The key is not passed to `register_post_type()`. |
+
 ### 5.5.0 — abilities
 
 Additive. `^5.4` consumers upgrade without a code change.
@@ -426,7 +434,7 @@ schema `format` would validate stored legacy values and read them back as
 
 | Was | Now |
 |---|---|
-| `public_fields` — the model constructor's fourth positional argument | `'show_in_rest' => true` on the field's own description. The constructor is `(string $post_type, array $schema, string $meta_prefix, array $scopes)`, so a subclass still passing five arguments drops its scopes and nothing reports it. Consumers also spell it as a `register('gig', ['public_fields' => [...]])` config key: 5.0.0 ignores that key silently — `register()` reads `fields`, `field_groups`, `meta_prefix`, `scopes`, `taxonomies` and `auto_metabox`, and hands the rest to `register_post_type()`, which drops what it does not know |
+| `public_fields` — the model constructor's fourth positional argument | `'show_in_rest' => true` on the field's own description. The constructor is `(string $post_type, array $schema, string $meta_prefix, array $scopes)`, so a subclass still passing five arguments drops its scopes and nothing reports it. Consumers also spell it as a `register('gig', ['public_fields' => [...]])` config key: 5.0.0 ignores that key silently — `register()` reads `fields`, `field_groups`, `meta_prefix`, `scopes`, `taxonomies`, `auto_metabox` and (5.6) `revisions`, and hands the rest to `register_post_type()`, which drops what it does not know |
 | a `public_shape` entry on the model | nothing. The shape an exposure emits belongs to the exposing service, not to the model |
 | `publicRows()` | `ntdst_data()->get('gig')->where(...)->withMeta()->get()` and project in the caller, or read WordPress's own collection at `/wp/v2/<rest_base>` |
 | `publicRow()` | `ntdst_data()->get('gig')->getMeta($id, null, null, $status)`, or `/wp/v2/<rest_base>/{id}`. `$status` is the FOURTH parameter (`$key`, `$default`, then `$status`) and defaults to `'publish'` — a caller that passed `'any'` or `['publish']` to `publicRow()` passes it here, or an unpublished row reads back as `$default` and nothing reports it |
