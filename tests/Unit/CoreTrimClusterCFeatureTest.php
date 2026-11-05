@@ -103,9 +103,15 @@ final class CoreTrimClusterCFeatureTest extends TestCase
     }
 
     /**
-     * services/ holds exactly one file. Asserted as the DIRECTORY LISTING
-     * rather than as two absences: a Scheduler that comes back under a new
-     * name (services/Cron.php) fails this and passes an absence check.
+     * services/ holds exactly these files. Asserted as the DIRECTORY LISTING
+     * rather than as absences: a Scheduler that comes back under a new name
+     * (services/Cron.php) fails this and passes an absence check.
+     *
+     * core-cron-seam (5.7.0) widened the list by RunLog and CronRegistry. The
+     * Scheduler FR-7 removed was a pass-through over wp_schedule_event with one
+     * reader; the registry and run log add what WordPress lacks (a run log, pause,
+     * redacted failure summaries) and have named consumers (Stride, baseline).
+     * Any other file still fails.
      */
     public function testTheServicesDirectoryHoldsOnlyTheLogger(): void
     {
@@ -113,9 +119,9 @@ final class CoreTrimClusterCFeatureTest extends TestCase
         sort($entries);
 
         $this->assertSame(
-            ['Logger.php'],
+            ['Logger.php', 'RunLog.php'],
             $entries,
-            'services/ is the built-in service list. After FR-7 and FR-9 the Logger is all of it.',
+            'services/ is the built-in service list: the Logger, and the cron run log (core-cron-seam). Nothing else.',
         );
 
         // The Mailer's asset directory left with the class (FR-9); a surviving

@@ -38,6 +38,7 @@ require_once NTDST_PATH . '/core/Container.php';
 // and error_log() only. The require order above is pinned by
 // BootstrapLoadsNothingByGuessingTest::testEveryRequiredFileThatCallsTheLogHelperIsRequiredAfterTheLogger.
 require_once NTDST_PATH . '/services/Logger.php';
+require_once NTDST_PATH . '/services/RunLog.php';
 
 require_once NTDST_PATH . '/core/Pages.php';
 require_once NTDST_PATH . '/core/Theme.php';
