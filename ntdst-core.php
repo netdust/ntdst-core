@@ -39,6 +39,7 @@ require_once NTDST_PATH . '/core/Container.php';
 // BootstrapLoadsNothingByGuessingTest::testEveryRequiredFileThatCallsTheLogHelperIsRequiredAfterTheLogger.
 require_once NTDST_PATH . '/services/Logger.php';
 require_once NTDST_PATH . '/services/RunLog.php';
+require_once NTDST_PATH . '/services/CronRegistry.php';
 
 require_once NTDST_PATH . '/core/Pages.php';
 require_once NTDST_PATH . '/core/Theme.php';

@@ -119,9 +119,9 @@ final class CoreTrimClusterCFeatureTest extends TestCase
         sort($entries);
 
         $this->assertSame(
-            ['Logger.php', 'RunLog.php'],
+            ['CronRegistry.php', 'Logger.php', 'RunLog.php'],
             $entries,
-            'services/ is the built-in service list: the Logger, and the cron run log (core-cron-seam). Nothing else.',
+            'services/ is the built-in service list: the Logger, and the cron registry with its run log (core-cron-seam). Nothing else.',
         );
 
         // The Mailer's asset directory left with the class (FR-9); a surviving
