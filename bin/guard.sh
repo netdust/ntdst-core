@@ -284,6 +284,17 @@ if [ -n "$ABILITY_DOORS" ]; then
     exit 1
 fi
 
+# INV-12: a recurring job registers through CronRegistry. services/CronRegistry.php
+# is the only caller of wp_schedule_event().
+CRON_DOORS=$(grep -rnE "wp_schedule_event" --include=*.php . \
+    | grep -vE "^(\./)?services/CronRegistry\.php|(^|/)vendor/|(^|/)tests/|(^|/)specs/" \
+    | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)" || true)
+if [ -n "$CRON_DOORS" ]; then
+    echo "A recurring job is scheduled outside services/CronRegistry.php (INV-12):"
+    echo "$CRON_DOORS"
+    exit 1
+fi
+
 # v5.0.0 core-trim: PER-FILE METHOD PINS. This table is the home for every
 # "this file must not declare this method again" rule — add a row here rather
 # than a new grep block. Each entry keeps its own rationale above it.

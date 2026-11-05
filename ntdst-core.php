@@ -2,7 +2,7 @@
 
 /**
  * Description: DI Container, Bootstrap, and Service System for WordPress
- * Version: 5.6.0
+ * Version: 5.7.0
  * Author: Stefan Vandermeulen
  *
  * Architecture:
@@ -10,7 +10,7 @@
  * - support/  → Shared primitives with no dependencies (ClientIp, Cidr, RateLimiter)
  * - api/      → Request flow (Rest, Data, Response)
  * - admin/    → Admin UI (MetaboxGenerator, RelationField)
- * - services/ → Built-in services (Logger)
+ * - services/ → Built-in services (Logger, and the cron registry with its run log)
  *
  * Loading is this explicit require_once list, NOT a directory scan — a file
  * that is not named here does not exist, and a stale path is an immediate
@@ -38,6 +38,8 @@ require_once NTDST_PATH . '/core/Container.php';
 // and error_log() only. The require order above is pinned by
 // BootstrapLoadsNothingByGuessingTest::testEveryRequiredFileThatCallsTheLogHelperIsRequiredAfterTheLogger.
 require_once NTDST_PATH . '/services/Logger.php';
+require_once NTDST_PATH . '/services/RunLog.php';
+require_once NTDST_PATH . '/services/CronRegistry.php';
 
 require_once NTDST_PATH . '/core/Pages.php';
 require_once NTDST_PATH . '/core/Theme.php';
