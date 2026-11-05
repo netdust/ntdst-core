@@ -45,6 +45,31 @@ may also be a WordPress ability: `'ability' => [...]`, see `### 5.5.0`.
 
 ## Versions
 
+### 5.7.0 — one door for scheduled jobs
+
+Additive. `^5.6` consumers upgrade without a code change.
+
+```php
+add_action( 'ntdst/features_ready', static function (): void {
+    ntdst_cron_register( 'my_plugin_nightly', [
+        'label'       => 'Nightly sync',
+        'description' => 'Pulls the day\'s changes.',
+        'recurrence'  => 'daily',
+        'callback'    => static fn (): string => '40 synced',
+    ] );
+} );
+```
+
+| Key | |
+|-|-|
+| `callback` | required callable; a registration without one is refused and logged. A returned non-empty string becomes the run's summary, anything else records `ok`; a throw is caught and recorded as a failure |
+| `label`, `description` | shown by a panel; `label` defaults to the hook |
+| `recurrence` | a WordPress schedule name (`hourly`, `twicedaily`, `daily`, `weekly`, or one a `cron_schedules` filter adds), default `daily`; a refusal is logged, not dropped |
+
+The registry is callable from `ntdst/features_ready` onward; before `ntdst/services_registered` nothing is bound. Runs live in the `ntdst_cron_runs` option (20 per hook, newest first) and paused hooks in `ntdst_cron_paused`; neither is autoloaded. A hook name is only an array key. A failure's stored summary has credentials and absolute paths removed and is capped at 500 characters; the logger gets the full message. `CronRegistry` offers `all()`, `has()`, `run()`, `pause()`, `resume()` and `isPaused()` for a panel; core ships none. A bare `wp_schedule_event()` is INV-12's bypass.
+
+Stride-side change: remove the `ntdst-cron` plugin's `CronRegistry`, `RunLog`, their two bindings, the `ntdst_cron_register()` helper and the PSR-4 entry, and require core `^5.7`; the panel stays.
+
 ### 5.6.0 — model revisions
 
 A model registered with a `label` whose post type has `show_ui` keeps revisions: `register()` adds `revisions` support, caps the history at 5 per record (a lower site setting wins) and lists the model's declared fields (not `callback` ones) as revisioned meta, so a field-only change makes a revision and a restore brings the fields back. A revision with no copy of a field restores without emptying it. `update()` writes fields before the post, so its revision holds them.

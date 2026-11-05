@@ -4,6 +4,21 @@ The migration tables live in `README.md` under `## Versions` — this file is th
 short answer to "what changed in this tag". Nothing here replaces reading that
 section before a MAJOR bump.
 
+## 5.7.0
+
+Additive. `^5.6` consumers upgrade without a code change.
+
+### Added
+- The scheduled-job registry and run log, moved from Stride's `ntdst-cron` plugin with their surface unchanged: `Ntdst\Cron\CronRegistry` and `Ntdst\Cron\RunLog` (`services/`), and `ntdst_cron_register( $hook, $config )`. Config keys `label`, `description`, `recurrence`, `callback`; options `ntdst_cron_runs` and `ntdst_cron_paused`, never autoloaded.
+- Registration schedules the event once, wraps the callback, records every fire (outcome, duration, summary), and supports pause and run-now. A thrown message is logged in full; the stored summary has the credential constants and `ABSPATH`/`WP_CONTENT_DIR` removed and is capped at 500 characters. At most 20 runs per hook are kept.
+- Core binds both classes on `ntdst/services_registered`; `ntdst_cron_register()` is callable from `ntdst/features_ready` onward.
+- INV-12 (a recurring job registers through `CronRegistry`) and its line in `bin/guard.sh`.
+
+### Notes on update
+- A site running the Stride `ntdst-cron` plugin keeps working: core loads first as a mu-plugin, its classes and helper win, and the plugin's copy is dead. A later Stride change removes the plugin's classes and bindings and requires core 5.7.
+- `services/` now holds `Logger.php`, `RunLog.php` and `CronRegistry.php`; the 5.0.0 Scheduler stays removed (the registry wraps `wp_schedule_event`, it is not a second scheduler).
+- baseline's `MaintenanceService` is the known open INV-12 hit until `baseline-vulnerability-check` migrates it.
+
 ## 5.6.0
 
 `^5.5` consumers upgrade without a code change, apart from the removed protected method below; what changes on update is listed here.
