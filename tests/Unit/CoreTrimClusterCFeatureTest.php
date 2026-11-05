@@ -113,7 +113,7 @@ final class CoreTrimClusterCFeatureTest extends TestCase
      * redacted failure summaries) and have named consumers (Stride, baseline).
      * Any other file still fails.
      */
-    public function testTheServicesDirectoryHoldsOnlyTheLogger(): void
+    public function testTheServicesDirectoryHoldsOnlyTheLoggerAndTheCronPair(): void
     {
         $entries = array_values(array_diff(scandir(self::ROOT . '/services') ?: [], ['.', '..']));
         sort($entries);

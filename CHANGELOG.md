@@ -11,7 +11,8 @@ Additive. `^5.6` consumers upgrade without a code change.
 ### Added
 - The scheduled-job registry and run log, moved from Stride's `ntdst-cron` plugin with their surface unchanged: `Ntdst\Cron\CronRegistry` and `Ntdst\Cron\RunLog` (`services/`), and `ntdst_cron_register( $hook, $config )`. Config keys `label`, `description`, `recurrence`, `callback`; options `ntdst_cron_runs` and `ntdst_cron_paused`, never autoloaded.
 - Registration schedules the event once, wraps the callback, records every fire (outcome, duration, summary), and supports pause and run-now. A thrown message is logged in full; the stored summary has the credential constants and `ABSPATH`/`WP_CONTENT_DIR` removed and is capped at 500 characters. At most 20 runs per hook are kept.
-- Core binds both classes on `ntdst/services_registered`; `ntdst_cron_register()` is callable from `ntdst/features_ready` onward.
+- Core binds both classes when it loads, so `ntdst_cron_register()` is callable from core load onward.
+- A returned summary is redacted like a failure message, secrets longest first; paths under the project root (two levels above `WP_CONTENT_DIR`, so `vendor/` too) are stripped; an anonymous exception class no longer puts its file path in the summary.
 - INV-12 (a recurring job registers through `CronRegistry`) and its line in `bin/guard.sh`.
 
 ### Notes on update

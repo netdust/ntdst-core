@@ -10,7 +10,7 @@
  * - support/  → Shared primitives with no dependencies (ClientIp, Cidr, RateLimiter)
  * - api/      → Request flow (Rest, Data, Response)
  * - admin/    → Admin UI (MetaboxGenerator, RelationField)
- * - services/ → Built-in services (Logger)
+ * - services/ → Built-in services (Logger, and the cron registry with its run log)
  *
  * Loading is this explicit require_once list, NOT a directory scan — a file
  * that is not named here does not exist, and a stale path is an immediate

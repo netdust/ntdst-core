@@ -237,7 +237,11 @@ Re-run verbatim at `824ef7c` (the abilities-bridge review's fix pass): TWENTY-ON
 Re-run verbatim at core-cron-seam Task 4: 23 hits (22 on the 5.6.0 tree, where the line above
 says twenty-one, plus one). The new one is `CronRegistry::SECRET_CONSTANTS` — the credential
 constant names whose values a stored failure summary must not carry, a list WordPress keeps
-no table for (the `ClientIp::DEFAULT_TRUSTED_PROXIES` kind).
+no table for (the `ClientIp::DEFAULT_TRUSTED_PROXIES` kind). The 22 on the 5.6.0 tree
+include `api/Data.php:2097` `$revisionKeys`, which the lines above counted but never
+named: the per-model list of field keys handed to `wp_post_revision_meta_keys` (the
+`$corsOrigins` kind, an input to a WordPress filter, not a second table). Re-run
+after the review's fix pass: still 23.
 
 ## INV-6 — One template resolver; page routes are rewrite rules; a template callback returns a path
 
@@ -652,9 +656,9 @@ reader checking a fixed order is checking the argument list. (2) is empty. (3) i
 `class_exists()` at `:408`; the other hits are `core/Container.php`'s own
 declaration and docblock examples, `core/Theme.php:58` registering an
 instance of itself, which guesses nothing, and the two in
-`services/CronRegistry.php` (the registry and the run log, bound on
-`ntdst/services_registered`), which name a class core itself requires one line
-earlier in `ntdst-core.php`.
+`services/CronRegistry.php` (`:285-286`, the registry and the run log, bound at
+file load), which name a class core itself requires one line earlier in
+`ntdst-core.php`.
 
 The PROOF of this invariant is the pair of autoload-recorder tests —
 `BootstrapRefusesMalformedServiceListsTest` and
@@ -686,7 +690,10 @@ file, `core/Bootstrap.php`; (4) has the single gated `ntdst_set($class)` at
 at core-cron-seam Task 4 (on `26447fc` plus the INV-12 guard line): (1) `0` and `0`;
 (2) EMPTY; (3) `core/Bootstrap.php`; (4) the gated `core/Bootstrap.php:501`, the
 `core/Theme.php:58` self-registration, the two `services/CronRegistry.php` binding
-calls, and `core/Container.php`'s declaration and docblock examples. Earlier pin `96560c5`,
+calls, and `core/Container.php`'s declaration and docblock examples. Re-run
+verbatim after the review's fix pass, which moved the two bindings from the
+`ntdst/services_registered` listener to file scope: the same four answers, the two
+`services/CronRegistry.php` calls now at `:285-286`. Earlier pin `96560c5`,
 with the same four answers. (2) was also run
 against a scratch file holding the exact line 5.0.0 deleted,
 `$relativePath = str_replace('\\', '/', $class) . '.php';` — one hit.
@@ -706,8 +713,8 @@ A scheduled, recurring job is registered through `ntdst_cron_register()` and now
 
 **Convergence point:** `services/CronRegistry.php::register()` (reached through `ntdst_cron_register()`) — the only caller of `wp_schedule_event()`. `RunLog` owns the ring buffer; `CronRegistry::failureSummary()` is the one place a failure becomes a stored string.
 **Bypass smell:** `wp_schedule_event(` in consumer or baseline code; a second class that wraps a callback and writes its own run history; a stored exception message that did not pass `failureSummary()`. Single-event offloads with per-call arguments (`wp_schedule_single_event`, Stride's `stride/mail/admin_notify_async`) are out of scope: the registry has no one-off API, and the substring `wp_schedule_event` does not occur in `wp_schedule_single_event`.
-**Mechanical check:** `grep -rnE "wp_schedule_event" --include=*.php . | grep -vE "^(\./)?services/CronRegistry\.php|(^|/)vendor/|(^|/)tests/|(^|/)specs/"` → EMPTY on core. `bin/guard.sh` runs the same line, so the gate fails on a second door. On a consumer root the same command lists the open hits below; `ntdst-drift-reviewer` reports them as known, not as a surprise.
-**Status:** established 5.7.0 (specs/core-cron-seam). Re-run verbatim at core-cron-seam Task 4: EMPTY on core, one hit with a scratch `services/ScratchPlant.php` holding a bare `wp_schedule_event(`, EMPTY again once removed; `bash bin/guard.sh` exits 1 naming the plant and 0 without it. Known open hits on the consumer roots, each to be migrated: `MaintenanceService` in ntdst-baseline (until `baseline-vulnerability-check` moves it, plus its vendored copy in Stride's `mu-plugins/ntdst-baseline`); and, for core-cron-seam plan 2 (Stride), `stride-core/Support/cron.php:31`, `ntdst-audit/src/cron-fallback.php:34` (a fallback the spec's Risks call dead code once core is loaded) and `ntdst-assistant/ntdst-assistant.php:62` (a bare hourly cleanup).
+**Mechanical check:** `grep -rnE "wp_schedule_event" --include=*.php . | grep -vE "^(\./)?services/CronRegistry\.php|(^|/)vendor/|(^|/)tests/|(^|/)specs/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → EMPTY on core (the trailing filter drops COMMENT lines, as INV-11's does: a docblock naming the function is prose, not a second door). `bin/guard.sh` runs the same line, so the gate fails on a second door. On a consumer root the same command lists the open hits below; the drift reviewer picks the check up from the vendored doc.
+**Status:** established 5.7.0 (specs/core-cron-seam). Re-run verbatim at core-cron-seam Task 4: EMPTY on core, one hit with a scratch `services/ScratchPlant.php` holding a bare `wp_schedule_event(`, EMPTY again once removed; `bash bin/guard.sh` exits 1 naming the plant and 0 without it. After the review's fix pass added the comment filter: with a bare call AND a comment naming the function in scratch files, `bash bin/guard.sh` exits 1 naming only the bare call; with the comment alone it exits 0. Known open hits on the consumer roots, each to be migrated: `MaintenanceService` in ntdst-baseline (until `baseline-vulnerability-check` moves it); its vendored copy in Stride's `mu-plugins/ntdst-baseline`, which is gitignored on a Bedrock root, so the command lists it only with `--no-ignore-files`; two in ludoluykx's theme, `themes/ntdstheme/services/infrastructure/DatabaseMaintenanceService.php:84` and `services/artist/ExhibitionService.php:526`; and, for core-cron-seam plan 2 (Stride), `stride-core/Support/cron.php:31`, `ntdst-audit/src/cron-fallback.php:34` (a fallback the spec's Risks call dead code once core is loaded), `ntdst-assistant/ntdst-assistant.php:62` (a bare hourly cleanup) and Stride's own `plugins/ntdst-cron/src/CronRegistry.php:167` (the plugin's copy, until plan 2 removes it).
 
 ---
 

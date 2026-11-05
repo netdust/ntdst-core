@@ -13,7 +13,7 @@ use PHPUnit\Framework\TestCase;
 use RuntimeException;
 
 // Stand-in credentials, never real ones; the harness defines none of them.
-defined('WP_CONTENT_DIR') || define('WP_CONTENT_DIR', sys_get_temp_dir() . '/wp-content');
+defined('WP_CONTENT_DIR') || define('WP_CONTENT_DIR', sys_get_temp_dir() . '/ntdst-cron-' . getmypid() . '-' . uniqid());
 defined('DB_PASSWORD') || define('DB_PASSWORD', 'unit-test-DB_PASSWORD');
 defined('DB_USER') || define('DB_USER', 'unit-test-DB_USER');
 defined('AUTH_KEY') || define('AUTH_KEY', 'unit-test-AUTH_KEY');
@@ -597,66 +597,112 @@ final class CronRegistryTest extends TestCase
         $this->assertArrayHasKey($hook, $this->options['ntdst_cron_runs']);
     }
 
-    public function testTheBindingResolvesOneRegistryFromServicesRegistered(): void
+    public function testTheBindingResolvesOneRegistryAtLoad(): void
     {
         $r = $this->runIsolated(<<<'PHP'
-            $callbacks = $GLOBALS['hooks']['ntdst/services_registered'] ?? [];
-            foreach ($callbacks as $cb) { $cb(); }
             $first = ntdst_get(Ntdst\Cron\CronRegistry::class);
             $log = (new ReflectionProperty($first, 'log'))->getValue($first);
             return [
-                'mounted' => count($callbacks),
-                'same' => $first === ntdst_get(Ntdst\Cron\CronRegistry::class),
                 'isRegistry' => $first instanceof Ntdst\Cron\CronRegistry,
+                'same' => $first === ntdst_get(Ntdst\Cron\CronRegistry::class),
                 'boundLog' => $log === ntdst_get(Ntdst\Cron\RunLog::class),
             ];
         PHP);
 
-        $this->assertSame(1, $r['mounted'], 'one callback is mounted on ntdst/services_registered');
         $this->assertTrue($r['isRegistry']);
         $this->assertTrue($r['same'], 'a second resolution is the same instance');
         $this->assertTrue($r['boundLog'], 'the registry is built with the bound RunLog');
     }
 
-    public function testTheHelperRegistersThroughTheBoundRegistry(): void
+    public function testAnEarlyHelperCallStillReachesTheRegistryEveryoneResolves(): void
     {
         $r = $this->runIsolated(<<<'PHP'
-            foreach ($GLOBALS['hooks']['ntdst/services_registered'] as $cb) { $cb(); }
             ntdst_cron_register('h', ['callback' => static fn () => 'ok']);
+            foreach ($GLOBALS['hooks']['ntdst/services_registered'] ?? [] as $cb) { $cb(); }
             return ['has' => array_keys(ntdst_get(Ntdst\Cron\CronRegistry::class)->all())];
         PHP);
 
-        $this->assertSame(['h'], $r['has']);
+        $this->assertSame(['h'], $r['has'], 'a job registered before any hook fired is not lost');
+    }
+
+    public function testASuccessSummaryHasTheDatabasePasswordRedacted(): void
+    {
+        $secret = constant('DB_PASSWORD');
+        $this->registry->register('h', $this->config(static fn (): string => 'synced with ' . $secret));
+
+        $this->fire('h');
+
+        $summary = $this->log->runsFor('h')[0]['summary'];
+        $this->assertStringNotContainsString($secret, $summary, 'a returned string is stored like a failure is');
+        $this->assertStringContainsString('[REDACTED]', $summary);
+    }
+
+    public function testOverlappingSecretsLeaveNoFragment(): void
+    {
+        $r = $this->runIsolated(<<<'PHP'
+            ntdst_get(Ntdst\Cron\CronRegistry::class)->register('h', ['callback' => static function () {
+                throw new RuntimeException('login dbsecret-long-tail failed');
+            }]);
+            ntdst_get(Ntdst\Cron\CronRegistry::class)->run('h', false);
+            return ['summary' => ntdst_get(Ntdst\Cron\RunLog::class)->runsFor('h')[0]['summary']];
+        PHP, "define('DB_PASSWORD', 'dbsecret'); define('AUTH_KEY', 'dbsecret-long-tail');");
+
+        $this->assertStringNotContainsString('long-tail', $r['summary'], 'the longer secret goes first, so no tail survives');
+        $this->assertStringNotContainsString('dbsecret', $r['summary']);
+    }
+
+    public function testAnAnonymousExceptionClassPutsNoPathOrNulByteInTheSummary(): void
+    {
+        $this->registry->register('h', $this->config(static function (): string {
+            throw new class ('boom') extends RuntimeException {
+            };
+        }));
+
+        $this->fire('h');
+
+        $summary = $this->log->runsFor('h')[0]['summary'];
+        $this->assertStringNotContainsString("\0", $summary);
+        $this->assertStringNotContainsString('CronRegistryTest', $summary, 'the anonymous class name carries the file path');
+        $this->assertStringContainsString('boom', $summary);
+    }
+
+    public function testAProjectPathOutsideBothConstantsIsStripped(): void
+    {
+        $r = $this->runIsolated(<<<'PHP'
+            ntdst_get(Ntdst\Cron\CronRegistry::class)->register('h', ['callback' => static function () {
+                throw new RuntimeException('Fatal in /srv/site/vendor/acme/lib/Client.php');
+            }]);
+            ntdst_get(Ntdst\Cron\CronRegistry::class)->run('h', false);
+            return ['summary' => ntdst_get(Ntdst\Cron\RunLog::class)->runsFor('h')[0]['summary']];
+        PHP, "define('WP_CONTENT_DIR', '/srv/site/web/app');");
+
+        $this->assertStringNotContainsString('/srv/site', $r['summary'], 'the project root is stripped, vendor/ included');
+        $this->assertStringContainsString('Client.php', $r['summary']);
     }
 
     /**
      * Loads core's cron files in a bare process (no Brain Monkey) with the WordPress
      * and container calls recorded, runs $code in it and returns its JSON result.
      */
-    private function runIsolated(string $code): array
+    private function runIsolated(string $code, string $preamble = ''): array
     {
         $root = dirname(__DIR__, 3);
         $script = tempnam(sys_get_temp_dir(), 'cron-iso-') . '.php';
         file_put_contents($script, <<<PHP
             <?php
             define('ABSPATH', '/tmp/wordpress/');
-            define('WP_CONTENT_DIR', '/tmp/wp-content');
-            \$GLOBALS['hooks'] = []; \$GLOBALS['defs'] = []; \$GLOBALS['made'] = [];
+            \$GLOBALS['hooks'] = []; \$GLOBALS['opts'] = [];
             function add_action(\$h, \$cb) { \$GLOBALS['hooks'][\$h][] = \$cb; }
-            function get_option(\$n, \$d = false) { return \$d; }
+            function get_option(\$n, \$d = false) { return \$GLOBALS['opts'][\$n] ?? \$d; }
+            function update_option(\$n, \$v, \$a = null) { \$GLOBALS['opts'][\$n] = \$v; return true; }
+            \$GLOBALS['wpdb'] = new class { public function prepare(\$q) { return \$q; } public function get_var(\$q) { return null; } };
+            {$preamble}
+            defined('WP_CONTENT_DIR') || define('WP_CONTENT_DIR', '/tmp/wp-content');
             function wp_next_scheduled(\$h) { return false; }
             function wp_schedule_event() { return true; }
             function is_wp_error(\$v) { return false; }
             function ntdst_log(\$c = 'app') { return new class { public function __call(\$m, \$a) {} }; }
-            function ntdst_set(string \$id, mixed \$value = null) { \$GLOBALS['defs'][\$id] = func_num_args() < 2 ? null : \$value; }
-            function ntdst_get(string \$id) {
-                if (!array_key_exists(\$id, \$GLOBALS['made'])) {
-                    \$def = \$GLOBALS['defs'][\$id];
-                    \$c = new class { public function get(string \$i) { return ntdst_get(\$i); } };
-                    \$GLOBALS['made'][\$id] = \$def instanceof Closure ? \$def(\$c) : new \$id();
-                }
-                return \$GLOBALS['made'][\$id];
-            }
+            require '{$root}/core/Container.php';
             require '{$root}/services/RunLog.php';
             require '{$root}/services/CronRegistry.php';
             \$result = (static function () { {$code} })();

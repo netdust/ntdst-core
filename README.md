@@ -66,7 +66,7 @@ add_action( 'ntdst/features_ready', static function (): void {
 | `label`, `description` | shown by a panel; `label` defaults to the hook |
 | `recurrence` | a WordPress schedule name (`hourly`, `twicedaily`, `daily`, `weekly`, or one a `cron_schedules` filter adds), default `daily`; a refusal is logged, not dropped |
 
-The registry is callable from `ntdst/features_ready` onward; before `ntdst/services_registered` nothing is bound. Runs live in the `ntdst_cron_runs` option (20 per hook, newest first) and paused hooks in `ntdst_cron_paused`; neither is autoloaded. A hook name is only an array key. A failure's stored summary has credentials and absolute paths removed and is capped at 500 characters; the logger gets the full message. `CronRegistry` offers `all()`, `has()`, `run()`, `pause()`, `resume()` and `isPaused()` for a panel; core ships none. A bare `wp_schedule_event()` is INV-12's bypass.
+The registry is bound when core loads, so `ntdst_cron_register()` is callable from core load onward; registering on `ntdst/features_ready` is still the habit, because a job's callback usually needs the services that boot by then. The full, unredacted exception message goes to the logger, which writes `WP_CONTENT_DIR/logs`: your server must deny that directory. Runs live in the `ntdst_cron_runs` option (20 per hook, newest first) and paused hooks in `ntdst_cron_paused`; neither is autoloaded. A hook name is only an array key. A failure's stored summary has credentials and absolute paths removed and is capped at 500 characters; the logger gets the full message. `CronRegistry` offers `all()`, `has()`, `run()`, `pause()`, `resume()` and `isPaused()` for a panel; core ships none. A bare `wp_schedule_event()` is INV-12's bypass.
 
 Stride-side change: remove the `ntdst-cron` plugin's `CronRegistry`, `RunLog`, their two bindings, the `ntdst_cron_register()` helper and the PSR-4 entry, and require core `^5.7`; the panel stays.
 
@@ -809,8 +809,8 @@ on two of the renamed ones.
 
 | Was | Now |
 |---|---|
-| `NTDST_Scheduler`, `ntdst_scheduler()` | `wp_next_scheduled()` + `wp_schedule_event()` + `add_action()` |
-| `ntdst_schedule_recurring($hook, $recurrence)` | `if (!wp_next_scheduled($hook)) { wp_schedule_event(time(), $recurrence, $hook); }` |
+| `NTDST_Scheduler`, `ntdst_scheduler()` | `wp_next_scheduled()` + `wp_schedule_event()` + `add_action()` (since 5.7.0 use `ntdst_cron_register()`, INV-12) |
+| `ntdst_schedule_recurring($hook, $recurrence)` | `if (!wp_next_scheduled($hook)) { wp_schedule_event(time(), $recurrence, $hook); }` (since 5.7.0 use `ntdst_cron_register()`, INV-12) |
 | `ntdst_clear_recurring($hook)` | `wp_clear_scheduled_hook($hook)` |
 
 **Theme (FR-8, FR-12).** `on()` and `filter()` stay — they are the chainable

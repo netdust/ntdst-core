@@ -189,7 +189,7 @@ namespace Ntdst\Cron {
             try {
                 $result = ($this->jobs[$hook]['callback'])();
                 $summary = is_string($result) && $result !== ''
-                    ? mb_substr($result, 0, self::MAX_SUMMARY)
+                    ? mb_substr($this->redact($result), 0, self::MAX_SUMMARY)
                     : 'ok';
             } catch (Throwable $e) {
                 $ok = false;
@@ -225,10 +225,25 @@ namespace Ntdst\Cron {
          */
         private function failureSummary(Throwable $e): string
         {
-            $message = str_replace([ABSPATH, WP_CONTENT_DIR], '', $e->getMessage());
-            $message = str_replace($this->secrets(), '[REDACTED]', $message);
+            // An anonymous class name carries a NUL byte and the declaring file's path.
+            $text = strtok($e::class, "\0") . ': ' . $e->getMessage();
 
-            return $e::class . ': ' . mb_substr($message, 0, self::MAX_SUMMARY);
+            return mb_substr($this->redact($text), 0, self::MAX_SUMMARY);
+        }
+
+        /**
+         * Paths and credentials out, before the cap: a secret cut by the cap would no longer match.
+         * The project root (two levels above WP_CONTENT_DIR on Bedrock) covers vendor/ paths.
+         */
+        private function redact(string $text): string
+        {
+            $roots = array_filter(
+                [ABSPATH, WP_CONTENT_DIR, dirname(WP_CONTENT_DIR, 2)],
+                static fn (string $path): bool => strlen($path) > 1,
+            );
+            $text = str_replace($roots, '', $text);
+
+            return str_replace($this->secrets(), '[REDACTED]', $text);
         }
 
         /** @return array<int, string> the non-empty credential constants defined here */
@@ -244,6 +259,9 @@ namespace Ntdst\Cron {
                     $secrets[] = $value;
                 }
             }
+
+            // Longest first: a secret that contains another must not be left as a fragment.
+            usort($secrets, static fn (string $x, string $y): int => strlen($y) <=> strlen($x));
 
             return $secrets;
         }
@@ -262,11 +280,10 @@ namespace Ntdst\Cron {
         }
     }
 
-    // The container gives every consumer the same registry and run log.
-    add_action('ntdst/services_registered', static function (): void {
-        ntdst_set(RunLog::class);
-        ntdst_set(CronRegistry::class, static fn ($c): CronRegistry => new CronRegistry($c->get(RunLog::class)));
-    });
+    // Bound at load, not on a hook: core/Container.php is required first and the container is
+    // lazy, so a call made before ntdst/services_registered still reaches the one registry.
+    ntdst_set(RunLog::class);
+    ntdst_set(CronRegistry::class, static fn ($c): CronRegistry => new CronRegistry($c->get(RunLog::class)));
 }
 
 namespace {
@@ -274,7 +291,7 @@ namespace {
     /**
      * Register a recurring job: schedules it once, wraps the callback, records every fire.
      * Config keys: label, description, recurrence (a WordPress schedule name, default daily), callback.
-     * Callable from `ntdst/features_ready` onward; earlier, the registry is not bound yet.
+     * Callable from core load onward: the registry is bound at file load.
      *
      * Declared UNCONDITIONALLY, as ntdst_log() is: a !function_exists() wrapper would let an
      * older copy win the declaration silently, a redeclare fatal names the collision instead.
