@@ -8,7 +8,7 @@ rulings in `docs/plans/2026-08-23-core-shape-brief.md` and
 
 Each entry says whether it **holds today** or is **established by** a phase of
 `specs/core-shape`, `specs/field-types` or `specs/core-trim` — INV-9 and INV-10
-are core-trim's, INV-11 is abilities-bridge's, and core-trim re-ran INV-8's two commands at its own merge
+are core-trim's, INV-11 is abilities-bridge's, INV-12 is core-cron-seam's, and core-trim re-ran INV-8's two commands at its own merge
 commit; the mechanical check is what `invariant-auditor` runs verbatim.
 The governing rule behind all of them is `docs/philosophy.md` §1: wrap WordPress,
 never replace it — where WordPress has a word, core uses it.
@@ -234,6 +234,10 @@ Re-run verbatim at `85b54cb` (T14): TWENTY hits, unchanged from `2fbde3d` — th
 same twenty names above, nothing new and nothing named here gone. Re-run verbatim at
 `409bb34` (abilities-bridge): TWENTY-ONE hits — the twenty, plus `Rest::$abilities`.
 Re-run verbatim at `824ef7c` (the abilities-bridge review's fix pass): TWENTY-ONE, the same names.
+Re-run verbatim at core-cron-seam Task 4: 23 hits (22 on the 5.6.0 tree, where the line above
+says twenty-one, plus one). The new one is `CronRegistry::SECRET_CONSTANTS` — the credential
+constant names whose values a stored failure summary must not carry, a list WordPress keeps
+no table for (the `ClientIp::DEFAULT_TRUSTED_PROXIES` kind).
 
 ## INV-6 — One template resolver; page routes are rewrite rules; a template callback returns a path
 
@@ -467,7 +471,7 @@ Every part of (A)'s form is load-bearing:
 - The last filter drops COMMENT lines, the way INV-1's does. A docblock reading
   `@param string $field Field to match (term_id, …)` is prose, not a switch.
 
-(A) returns **56 lines** and (B) returns **2** (measured at 5.6.0; (B) was 1 at
+(A) returns **57 lines** and (B) returns **2** (measured at 5.7.0, core-cron-seam; 56 at 5.6.0; (B) was 1 at
 `73d01db`, and (A) 55 at `0d62394` too). Every one of them is named in
 `## Deliberate exceptions` below, grouped by WHAT it is rather than by where it
 sits. Anything else is a bypass. (It was 59 while `services/Logger.php` still
@@ -646,8 +650,11 @@ reader checking a fixed order is checking the argument list. (2) is empty. (3) i
 `core/Bootstrap.php`, one file. (4) has one call that takes a class —
 `core/Bootstrap.php:501` — and the only gate reached before it is
 `class_exists()` at `:408`; the other hits are `core/Container.php`'s own
-declaration and docblock examples, and `core/Theme.php:58` registering an
-instance of itself, which guesses nothing.
+declaration and docblock examples, `core/Theme.php:58` registering an
+instance of itself, which guesses nothing, and the two in
+`services/CronRegistry.php` (the registry and the run log, bound on
+`ntdst/services_registered`), which name a class core itself requires one line
+earlier in `ntdst-core.php`.
 
 The PROOF of this invariant is the pair of autoload-recorder tests —
 `BootstrapRefusesMalformedServiceListsTest` and
@@ -675,7 +682,11 @@ file, `core/Bootstrap.php`; (4) has the single gated `ntdst_set($class)` at
 `core/Bootstrap.php:501` behind `class_exists()` at `:408`, beside
 `core/Container.php`'s own declaration and docblock examples and
 `core/Theme.php:58` registering an instance of itself. Re-run verbatim at
-`85b54cb` (T14): identical — same four answers at the same lines. Earlier pin `96560c5`,
+`85b54cb` (T14): identical — same four answers at the same lines. Re-run verbatim
+at core-cron-seam Task 4 (on `26447fc` plus the INV-12 guard line): (1) `0` and `0`;
+(2) EMPTY; (3) `core/Bootstrap.php`; (4) the gated `core/Bootstrap.php:501`, the
+`core/Theme.php:58` self-registration, the two `services/CronRegistry.php` binding
+calls, and `core/Container.php`'s declaration and docblock examples. Earlier pin `96560c5`,
 with the same four answers. (2) was also run
 against a scratch file holding the exact line 5.0.0 deleted,
 `$relativePath = str_replace('\\', '/', $class) . '.php';` — one hit.
@@ -688,6 +699,15 @@ A WordPress ability exists in this package and its consumers only as the `abilit
 **Bypass smell:** `wp_register_ability(` or `wp_register_ability_category(` outside `api/Rest.php`; an `execute_callback` that is not a REST dispatch; a consumer class named `*AbilityRegistrar`; a `permission_callback` that is the limiter guard.
 **Mechanical check:** `grep -rn "wp_register_ability" --include=*.php . | grep -vE "^(\./)?api/Rest\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → EMPTY. `bin/guard.sh` runs the same line, so the gate fails on a second door. The comment filter drops nothing today (EMPTY with and without it). On a consumer the bare word also matches a `function_exists('wp_register_ability')` version guard (Stride `ntdst-assistant.php:26`); drop that shape by content — `| grep -vE "function_exists\(['\"]wp_register_ability"` — rather than switching to the call shape, which loses a string-callable registration. Drift check #16 runs the call shape plus `AbilityRegistrar`.
 **Status:** established 2026-10 (specs/abilities-bridge). Re-run verbatim at `409bb34`: EMPTY. Re-run verbatim at `824ef7c`: EMPTY — with the calibration filter, without the comment filter, and as written.
+
+## INV-12 — A recurring job registers through `CronRegistry`
+
+A scheduled, recurring job is registered through `ntdst_cron_register()` and nowhere else. Registration schedules the event once, wraps the callback, records every fire (outcome, duration, redacted summary) in the run log and supports pause. A bare `wp_schedule_event()` in consumer or baseline code gets none of that: no run log, no "did it run" answer, no pause.
+
+**Convergence point:** `services/CronRegistry.php::register()` (reached through `ntdst_cron_register()`) — the only caller of `wp_schedule_event()`. `RunLog` owns the ring buffer; `CronRegistry::failureSummary()` is the one place a failure becomes a stored string.
+**Bypass smell:** `wp_schedule_event(` in consumer or baseline code; a second class that wraps a callback and writes its own run history; a stored exception message that did not pass `failureSummary()`. Single-event offloads with per-call arguments (`wp_schedule_single_event`, Stride's `stride/mail/admin_notify_async`) are out of scope: the registry has no one-off API, and the substring `wp_schedule_event` does not occur in `wp_schedule_single_event`.
+**Mechanical check:** `grep -rnE "wp_schedule_event" --include=*.php . | grep -vE "^(\./)?services/CronRegistry\.php|(^|/)vendor/|(^|/)tests/|(^|/)specs/"` → EMPTY on core. `bin/guard.sh` runs the same line, so the gate fails on a second door. On a consumer root the same command lists the open hits below; `ntdst-drift-reviewer` reports them as known, not as a surprise.
+**Status:** established 5.7.0 (specs/core-cron-seam). Re-run verbatim at core-cron-seam Task 4: EMPTY on core, one hit with a scratch `services/ScratchPlant.php` holding a bare `wp_schedule_event(`, EMPTY again once removed; `bash bin/guard.sh` exits 1 naming the plant and 0 without it. Known open hits on the consumer roots, each to be migrated: `MaintenanceService` in ntdst-baseline (until `baseline-vulnerability-check` moves it, plus its vendored copy in Stride's `mu-plugins/ntdst-baseline`); and, for core-cron-seam plan 2 (Stride), `stride-core/Support/cron.php:31`, `ntdst-audit/src/cron-fallback.php:34` (a fallback the spec's Risks call dead code once core is loaded) and `ntdst-assistant/ntdst-assistant.php:62` (a bare hourly cleanup).
 
 ---
 
@@ -782,7 +802,7 @@ Things core does that WordPress also does, kept on purpose. Each names why.
 
 ### INV-8 — every hit the field-type check returns
 
-(A) returns 56 lines and (B) returns 2 (measured at 5.6.0). Each group below says WHAT the hits are,
+(A) returns 57 lines and (B) returns 2 (measured at 5.7.0; core-cron-seam added one, below). Each group below says WHAT the hits are,
 not which line they sit on: a line number is stale after the next edit, and a
 reader matching 59 greps against stale numbers stops reading. Where a group has
 a test that holds it, the test is named — that is its mechanical home.
@@ -853,8 +873,10 @@ a test that holds it, the test is named — that is its mechanical home.
   exists to make possible. core-trim FR-5 removed the `log_entry` post type, so
   the example is gone; the shape it named is still the one to recognise, and a
   reader comparing this list to an older run needs to know why eight hits left.
-- **MAP KEYS that are not type names** — 10 hits, all from the map-key
-  alternative, in five shapes. WordPress's `meta_query` `relation` key in
+- **MAP KEYS that are not type names** — 11 hits, all from the map-key
+  alternative, in six shapes. The job's `callback` key in
+  `services/CronRegistry.php` (1, `register()`'s stored job config): the registered
+  job's callable, the same shape as WordPress's own `callback` argument key below. WordPress's `meta_query` `relation` key in
   `api/Data.php`'s `whereGroup()` (1) — `AND`/`OR`, never a field type. WordPress's own `callback` ARGUMENT key
   (`api/Rest.php`, `core/Pages.php` — 3; `api/Actions.php` carried two more
   until T08 deleted it). WordPress POST
