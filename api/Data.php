@@ -444,7 +444,7 @@ class NTDST_Data_Model
         try {
             return NTDST_FieldTypes::get($type);
         } catch (InvalidArgumentException $e) {
-            throw new InvalidArgumentException($where . ': ' . $e->getMessage(), 0, $e);
+            throw new InvalidArgumentException($where . ': ' . $e->getMessage(), 0, $e); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- $where names the model's field declaration; the inner message is NTDST_FieldTypes::get()'s, annotated there.
         }
     }
 
@@ -1136,11 +1136,13 @@ class NTDST_Data_Model
         $scope = $this->scopes[$name] ?? NTDST_Data_Manager::getScope($name);
 
         if (!is_callable($scope)) {
+            // phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- the caller's $name is esc_html()'d; $this->post_type is the model's registered name.
             throw new InvalidArgumentException(
-                "Unknown query scope '{$name}' on '{$this->post_type}'. Declare it in the "
+                "Unknown query scope '" . esc_html($name) . "' on '{$this->post_type}'. Declare it in the "
                 . "model's 'scopes' config, or register it globally via "
                 . 'NTDST_Data_Manager::addScope().',
             );
+            // phpcs:enable WordPress.Security.EscapeOutput.ExceptionNotEscaped
         }
 
         $scope($this, ...$args);
@@ -1168,7 +1170,7 @@ class NTDST_Data_Model
         } else {
             // Custom meta field - use meta_query with prefix
             if (!isset($this->query_args['meta_query'])) {
-                $this->query_args['meta_query'] = [];
+                $this->query_args['meta_query'] = []; // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- by design: where() is the data layer's meta query door; WP_Query runs it. Not security.
             }
 
             $metaKey = $this->prefixMetaKey($field);
@@ -1212,16 +1214,18 @@ class NTDST_Data_Model
                 // Other core fields - WP_Query doesn't support != for these
                 // Throw exception to fail loudly rather than silently returning wrong results
                 $this->query_args = [];
+                // phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- $field is esc_html()'d (it is also one of $core_fields above).
                 throw new \InvalidArgumentException(
-                    "whereNot() does not support negation for core field '{$field}'. "
+                    "whereNot() does not support negation for core field '" . esc_html($field) . "'. "
                     . "Supported fields: post_status, post_author, post_parent. "
                     . "For other fields, use a custom meta field or filter results in PHP.",
                 );
+                // phpcs:enable WordPress.Security.EscapeOutput.ExceptionNotEscaped
             }
         } else {
             // Custom meta field - use meta_query with != compare
             if (!isset($this->query_args['meta_query'])) {
-                $this->query_args['meta_query'] = [];
+                $this->query_args['meta_query'] = []; // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- by design: whereNot() is the data layer's meta query door; WP_Query runs it. Not security.
             }
 
             $this->query_args['meta_query'][] = [
@@ -1251,7 +1255,7 @@ class NTDST_Data_Model
         } else {
             // For meta fields, use meta_query with IN comparison and prefix
             if (!isset($this->query_args['meta_query'])) {
-                $this->query_args['meta_query'] = [];
+                $this->query_args['meta_query'] = []; // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- by design: whereIn() is the data layer's meta query door; WP_Query runs it. Not security.
             }
 
             $this->query_args['meta_query'][] = [
@@ -1284,7 +1288,7 @@ class NTDST_Data_Model
             $this->query_args['post__not_in'] = array_map('intval', $values);
         } else {
             if (!isset($this->query_args['meta_query'])) {
-                $this->query_args['meta_query'] = [];
+                $this->query_args['meta_query'] = []; // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- by design: whereNotIn() is the data layer's meta query door; WP_Query runs it. Not security.
             }
 
             $this->query_args['meta_query'][] = [
@@ -1327,7 +1331,7 @@ class NTDST_Data_Model
     public function whereMissing(string $field): self
     {
         if (!isset($this->query_args['meta_query'])) {
-            $this->query_args['meta_query'] = [];
+            $this->query_args['meta_query'] = []; // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- by design: whereMissing() is the data layer's meta query door; WP_Query runs it. Not security.
         }
 
         $this->query_args['meta_query'][] = [
@@ -1377,9 +1381,11 @@ class NTDST_Data_Model
         $relation = strtoupper($relation);
 
         if (!in_array($relation, ['AND', 'OR'], true)) {
+            // phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- the caller's $relation is esc_html()'d.
             throw new InvalidArgumentException(
-                "whereGroup() relation must be AND or OR, '{$relation}' given.",
+                "whereGroup() relation must be AND or OR, '" . esc_html($relation) . "' given.",
             );
+            // phpcs:enable WordPress.Security.EscapeOutput.ExceptionNotEscaped
         }
 
         $child = new static($this->post_type, $this->schema, $this->meta_prefix, $this->scopes);
@@ -1392,7 +1398,7 @@ class NTDST_Data_Model
         }
 
         if (!isset($this->query_args['meta_query'])) {
-            $this->query_args['meta_query'] = [];
+            $this->query_args['meta_query'] = []; // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_query -- by design: whereGroup() is the data layer's meta query door; WP_Query runs it. Not security.
         }
 
         $this->query_args['meta_query'][] = ['relation' => $relation] + $clauses;
@@ -1449,7 +1455,7 @@ class NTDST_Data_Model
             $this->query_args['orderby'] = $orderByField;
         } else {
             // Custom meta field - set up meta ordering with prefix
-            $this->query_args['meta_key'] = $this->prefixMetaKey($field);
+            $this->query_args['meta_key'] = $this->prefixMetaKey($field); // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_meta_key -- by design: orderBy() on a meta field is the data layer's meta ordering; WP_Query runs it. Not security.
             $this->query_args['orderby'] = $numeric ? 'meta_value_num' : 'meta_value';
         }
 
@@ -1473,7 +1479,7 @@ class NTDST_Data_Model
     public function whereTax(string $taxonomy, $terms, string $field = 'slug', string $operator = 'IN'): self
     {
         if (!isset($this->query_args['tax_query'])) {
-            $this->query_args['tax_query'] = [];
+            $this->query_args['tax_query'] = []; // phpcs:ignore WordPress.DB.SlowDBQuery.slow_db_query_tax_query -- by design: whereTax() is the data layer's taxonomy query door; WP_Query runs it. Not security.
         }
 
         $this->query_args['tax_query'][] = [
@@ -1853,6 +1859,7 @@ class NTDST_Data_Model
         }
 
         global $wpdb;
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- the cold-cache fallback behind core's post_meta cache read above; prepared with %d. Not cached, by T04's rule (docblock above): the layer stores nothing of its own and leaves WordPress's caches as WordPress primes them, so update_meta_cache('post', [$post_id]) is deliberately not called.
         $results = $wpdb->get_results($wpdb->prepare(
             "SELECT meta_key, meta_value FROM {$wpdb->postmeta} WHERE post_id = %d",
             $post_id,
@@ -1922,6 +1929,7 @@ class NTDST_Data_Model
         }
 
         global $wpdb;
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- the cold-cache fallback behind core's {$taxonomy}_relationships cache read above; prepared with %d. Not cached, by T04's rule (docblock above): the layer stores nothing of its own and leaves WordPress's caches as WordPress primes them, so update_object_term_cache([$post_id], $post_type) is deliberately not called.
         $results = $wpdb->get_results($wpdb->prepare(
             "SELECT t.term_id, t.name, t.slug, tt.taxonomy
              FROM {$wpdb->term_relationships} tr

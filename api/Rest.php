@@ -1503,11 +1503,13 @@ final class NTDST_Rest
 
         self::$reported[$id] = true;
 
+        // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $from, $why and $since are core's own refusal text about a route DECLARATION (the refuse() call sites in this file), with at most a callSite() file:line; never request data. WP >= 6.4: wp_trigger_error() kses-filters the message.
         _doing_it_wrong(
             self::class . '::' . $from,
             $fatal ? sprintf('Route was not registered — %s.', $why) : $why,
             $since ?? '3.0.0',
         );
+        // phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
 
         if (!$log) {
             return;

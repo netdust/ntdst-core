@@ -56,6 +56,7 @@ class RunLog
     {
         global $wpdb;
 
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- a MySQL advisory lock: touches no table, and a lock answer must never be cached.
         return (int) $wpdb->get_var($wpdb->prepare(
             'SELECT GET_LOCK(%s, %d)',
             self::LOCK,
@@ -67,6 +68,6 @@ class RunLog
     {
         global $wpdb;
 
-        $wpdb->get_var($wpdb->prepare('SELECT RELEASE_LOCK(%s)', self::LOCK));
+        $wpdb->get_var($wpdb->prepare('SELECT RELEASE_LOCK(%s)', self::LOCK)); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- releases the advisory lock above; touches no table, never cacheable.
     }
 }

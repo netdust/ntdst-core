@@ -316,16 +316,19 @@ class NTDST_Bootstrap
     private function listedClassName(mixed $entry, string $sector): ?string
     {
         if (!is_string($entry) || trim($entry) === '') {
+            // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $sector is a services.* key of plugin-config.php, never request data; WP >= 6.4: wp_trigger_error() kses-filters the message.
             _doing_it_wrong(
                 __CLASS__ . '::register',
                 "services.{$sector} contains a non-string entry — list fully-qualified class names only",
                 '5.0.0',
             );
+            // phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
 
             return null;
         }
 
         if (preg_match(self::CLASS_NAME_SHAPE, $entry) !== 1) {
+            // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $sector and $entry are a services.* key and a listed entry of plugin-config.php, never request data; WP >= 6.4: wp_trigger_error() kses-filters the message.
             _doing_it_wrong(
                 __CLASS__ . '::register',
                 "services.{$sector} lists \"{$entry}\", which is not a legal PHP class name. It is refused "
@@ -333,6 +336,7 @@ class NTDST_Bootstrap
                     . 'name into a file path.',
                 '5.0.0',
             );
+            // phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
 
             return null;
         }
@@ -415,11 +419,13 @@ class NTDST_Bootstrap
             // was a file nobody opens, so a service went missing in silence.
             // The function named is the PUBLIC entry the consumer called, not
             // this private helper, because that is what WordPress prints.
+            // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $class and $sector come from plugin-config.php's services list, never request data; WP >= 6.4: wp_trigger_error() kses-filters the message.
             _doing_it_wrong(
                 __CLASS__ . '::register',
                 "Service class {$class} (services.{$sector}) is not loaded — require it or autoload it before register()",
                 '5.0.0',
             );
+            // phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
 
             // The notice above is for a developer at their desk: WordPress
             // decides whether _doing_it_wrong() prints, and with WP_DEBUG off it
@@ -465,6 +471,7 @@ class NTDST_Bootstrap
             // class is the same defect and says nothing new.
             $this->refusedClasses[$class] = true;
 
+            // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $slug, $class and $sector derive from plugin-config.php's services list and the classes' metadata(), never request data; WP >= 6.4: wp_trigger_error() kses-filters the message.
             _doing_it_wrong(
                 __CLASS__ . '::register',
                 "Two services answer to the slug \"{$slug}\": {$this->registeredSlugs[$slug]} holds it, so "
@@ -473,6 +480,7 @@ class NTDST_Bootstrap
                     . "override to the other. Declare a metadata()['name'] on one of them.",
                 '5.0.0',
             );
+            // phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
 
             return;
         }
@@ -574,6 +582,7 @@ class NTDST_Bootstrap
                 }
 
                 if (!isset($listedSlugs[$key])) {
+                    // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $key is a services.overrides key of plugin-config.php, never request data; WP >= 6.4: wp_trigger_error() kses-filters the message.
                     _doing_it_wrong(
                         __CLASS__ . '::register',
                         "Config key services.overrides.{$key} matches no registered service — no class listed "
@@ -582,18 +591,21 @@ class NTDST_Bootstrap
                             . 'lies to its reader.',
                         '5.0.0',
                     );
+                    // phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
 
                     continue;
                 }
             }
 
             if (!is_array($value)) {
+                // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $key is a services.overrides key of plugin-config.php and gettype() a PHP type name, never request data; WP >= 6.4: wp_trigger_error() kses-filters the message.
                 _doing_it_wrong(
                     __CLASS__ . '::register',
                     "Config key services.overrides.{$key} must be an array of config values, and this one is "
                         . gettype($value) . '. It is not applied: the service boots on its own defaults.',
                     '5.0.0',
                 );
+                // phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
             }
         }
     }
@@ -793,6 +805,7 @@ class NTDST_Bootstrap
                 $value = $class::metadata();
                 $declared = is_array($value) ? $value : null;
             } else {
+                // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $class comes from plugin-config.php's services list, never request data; WP >= 6.4: wp_trigger_error() kses-filters the message.
                 _doing_it_wrong(
                     __CLASS__ . '::register',
                     "Service class {$class} declares metadata() as an instance method. metadata() is a "
@@ -800,6 +813,7 @@ class NTDST_Bootstrap
                         . 'service registers with core\'s defaults.',
                     '5.0.0',
                 );
+                // phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
             }
         }
 

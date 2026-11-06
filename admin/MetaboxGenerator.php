@@ -355,6 +355,7 @@ final class NTDST_MetaboxGenerator
             $tab_title = $group_config['title'] ?? ucwords(str_replace('_', ' ', $group_key));
             $active_class = $first_tab ? ' nav-tab-active' : '';
 
+            // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $active_class is a literal (:356).
             echo '<a href="#tab-' . esc_attr($group_key) . '" class="nav-tab' . $active_class . '" data-tab="' . esc_attr($group_key) . '">';
             echo esc_html($tab_title);
             echo '</a>';
@@ -374,6 +375,7 @@ final class NTDST_MetaboxGenerator
 
             $display_style = $first_tab ? '' : ' style="display:none;"';
 
+            // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $display_style is a literal (:376).
             echo '<div id="tab-' . esc_attr($group_key) . '" class="ntdst-tab-content"' . $display_style . '>';
 
             // Render fields for this group
@@ -848,8 +850,10 @@ final class NTDST_MetaboxGenerator
             ? ' <span class="ntdst-required" aria-hidden="true">*</span>'
             : '';
 
+        // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $wrapper_attrs and $label_marker are literals (:848-851), $field_id_attr is esc_attr()'d (:785).
         echo '<div class="ntdst-field"' . $wrapper_attrs . '>';
         echo '<label for="' . $field_id_attr . '">' . esc_html($label) . $label_marker . '</label>';
+        // phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
 
         // A readonly field displays as text — except where the control is
         // already its own readonly display: a disabled `select` keeps its
@@ -864,6 +868,7 @@ final class NTDST_MetaboxGenerator
 
             echo '<div class="ntdst-readonly-value" style="padding: 8px 0; font-size: 14px;">';
             echo '<strong>' . esc_html($display) . '</strong>';
+            // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $field_name_attr is esc_attr()'d (:786).
             echo '<input type="hidden" name="' . $field_name_attr . '" value="' . esc_attr($safe_value) . '">';
             echo '<p class="description">This value is automatically calculated and cannot be edited.</p>';
             echo '</div>';
@@ -958,6 +963,7 @@ final class NTDST_MetaboxGenerator
             'relation' => $this->render_relation_field($field_id, $input_name, $data_field_name, $value, $config),
             'gallery'  => $this->render_gallery_field($field_id, $input_name, $data_field_name, $value, $config),
             'repeater' => $this->render_repeater_field($field_id, $input_name, $data_field_name, $value, $config),
+            // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- $control is the registry entry's control name, never request data; a developer fault, not a page.
             default    => throw new \LogicException("Unknown control '{$control}'."),
         };
     }
@@ -972,10 +978,12 @@ final class NTDST_MetaboxGenerator
         mixed $value,
         string $required_attrs,
     ): void {
+        // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $input_type, $class and $extra are literals of render_control()'s match arms, $required_attrs a literal (render_control(), `$attrs`); the stored value is esc_attr()'d inline.
         echo '<input type="' . $input_type . '" id="' . esc_attr($field_id) . '" name="'
             . esc_attr($input_name) . '" value="' . esc_attr($value ?? '') . '"'
             . ($class !== '' ? ' class="' . $class . '"' : '')
             . $extra . $required_attrs . '>';
+        // phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
     }
 
     private function control_textarea(string $field_id, string $input_name, mixed $value, bool $inCell, string $required_attrs): void
@@ -983,8 +991,10 @@ final class NTDST_MetaboxGenerator
         $rows = $inCell ? '2' : '5';
         $class = $inCell ? 'ntdst-repeater-textarea' : 'large-text';
 
+        // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $rows and $class are literals (the two lines above), $required_attrs a literal (render_control(), `$attrs`); the stored value is esc_textarea()'d inline.
         echo '<textarea id="' . esc_attr($field_id) . '" name="' . esc_attr($input_name) . '" rows="' . $rows
             . '" class="' . $class . '"' . $required_attrs . '>' . esc_textarea($value ?? '') . '</textarea>';
+        // phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
     }
 
     /**
@@ -1001,6 +1011,7 @@ final class NTDST_MetaboxGenerator
         $id = esc_attr($field_id);
         $nm = esc_attr($input_name);
 
+        // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $id and $nm are esc_attr()'d, $checked a literal (the three lines above).
         echo '<input type="hidden" name="' . $nm . '" value="0">';
 
         // In a row the column header is the label, so the box renders bare.
@@ -1011,6 +1022,7 @@ final class NTDST_MetaboxGenerator
         }
 
         echo '<label><input type="checkbox" id="' . $id . '" name="' . $nm . '" value="1"' . $checked . '> Yes</label>';
+        // phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
     }
 
     /** @param array<string, mixed> $config */
@@ -1023,6 +1035,7 @@ final class NTDST_MetaboxGenerator
         $id = esc_attr($field_id);
         $nm = esc_attr($input_name);
 
+        // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $id and $nm are esc_attr()'d and $class a literal (above), $required_attrs a literal (render_control(), `$attrs`), $selected a literal; option values, labels and the stored value are escaped inline.
         echo '<select id="' . $id . '" name="' . $nm . '" class="' . $class . '"'
             . ($readonly ? ' disabled' : '') . $required_attrs . '>';
 
@@ -1037,6 +1050,7 @@ final class NTDST_MetaboxGenerator
         if ($readonly) {
             echo '<input type="hidden" name="' . $nm . '" value="' . esc_attr($safe_value) . '">';
         }
+        // phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
     }
 
     /**
@@ -1063,6 +1077,7 @@ final class NTDST_MetaboxGenerator
         $id = esc_attr($field_id);
         $nm = esc_attr($input_name);
 
+        // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $id and $nm are esc_attr()'d (above), $required_attrs a literal (render_control(), `$attrs`); the stored value is esc_textarea()'d inline.
         if ($inCell) {
             echo '<textarea id="' . $id . '" name="' . $nm . '" rows="2" class="ntdst-repeater-textarea"'
                 . $required_attrs . '>' . esc_textarea($json_value) . '</textarea>';
@@ -1073,6 +1088,7 @@ final class NTDST_MetaboxGenerator
         echo '<div class="ntdst-field-array">';
         echo '<textarea id="' . $id . '" name="' . $nm . '" rows="8" class="large-text code"'
             . $required_attrs . '>' . esc_textarea($json_value) . '</textarea>';
+        // phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
         echo '<p class="description">Enter valid JSON array. Example: ["value1", "value2"]</p>';
         echo '</div>';
     }
@@ -1135,6 +1151,7 @@ final class NTDST_MetaboxGenerator
             $data_attrs[] = 'data-user-role="' . esc_attr($options['user_role']) . '"';
         }
 
+        // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- every $data_attrs item is esc_attr()'d or a literal where it is built (above).
         echo '<div class="ntdst-relation-field" ' . implode(' ', $data_attrs) . '>';
 
         // Selected items display
@@ -1617,10 +1634,12 @@ final class NTDST_MetaboxGenerator
             // past it — a `fields` filter, a cached registration — and the row
             // must fault rather than draw a single-line box holding markup.
             if (!$entry->cell) {
+                // phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- the field key, sub-field key and type name are the developer's declaration, never request data.
                 throw new \LogicException(
                     "Field '{$name}' sub-field '{$sub_field_name}': '{$sub_type}' cannot be drawn "
                     . 'in a repeater row — it has no cell control.',
                 );
+                // phpcs:enable WordPress.Security.EscapeOutput.ExceptionNotEscaped
             }
 
             echo '<td>';
@@ -1686,6 +1705,7 @@ final class NTDST_MetaboxGenerator
         $button_text = $config['button_text'] ?? ($is_image ? 'Select Image' : 'Select File');
 
         echo '<div class="ntdst-repeater-media" data-media-type="' . ($is_image ? 'image' : 'file') . '">';
+        // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- $id and $nm are esc_attr()'d (top of this method).
         echo '<input type="hidden" id="' . $id . '" name="' . $nm . '" value="' . esc_attr($is_attachment ? (string) $attachment_id : '') . '" class="ntdst-repeater-media-input">';
 
         echo '<div class="ntdst-repeater-media-preview">';
@@ -1868,6 +1888,7 @@ final class NTDST_MetaboxGenerator
             return;
         }
 
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- a nonce is only compared (hash_equals() in WordPress's check on the next line); refusal pinned by MetaboxGeneratorSaveTest 'a forged nonce' / 'no nonce at all'.
         if (!wp_verify_nonce(wp_unslash($_POST[$nonce_name]), $this->nonce_action($model_name, $post_id))) {
             return;
         }
@@ -1887,6 +1908,7 @@ final class NTDST_MetaboxGenerator
         // narrowed to the declared set before a single field is looked at. A
         // non-array `ntdst_fields` (`?ntdst_fields=x`) is a submission with a
         // hostile shape, not a reason to skip the clearing rule below.
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- unslashed and narrowed to the declared fields on the next statement; each value is cleaned once by the field registry, in the model (api/Data.php:203) or here (the NTDST_FieldTypes sanitize call below).
         $submitted = $_POST['ntdst_fields'] ?? [];
         $posted = is_array($submitted)
             ? array_intersect_key(wp_unslash($submitted), $fields_config)
@@ -2098,7 +2120,7 @@ final class NTDST_MetaboxGenerator
     public function render_save_error_notice(): void
     {
         $post_id = 0;
-        if (isset($_GET['post'])) {
+        if (isset($_GET['post'])) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- the presence check of the read below, same display-only reason.
             $post_id = absint(wp_unslash($_GET['post'])); // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- display-only, read-once notice keyed to the current edit screen.
         } elseif (isset($GLOBALS['post']) && $GLOBALS['post'] instanceof \WP_Post) {
             $post_id = (int) $GLOBALS['post']->ID;

@@ -14,6 +14,7 @@ enum LogLevel: int
 
     public function label(): string
     {
+        // phpcs:ignore PHPCompatibility.Variables.ForbiddenThisUseContexts.OutsideObjectContext -- an instance method of enum LogLevel (:7), so $this is the case; PHPCompatibility 9.3.5 predates enums.
         return match ($this) {
             self::Debug => 'DEBUG',
             self::Info => 'INFO',

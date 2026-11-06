@@ -8,7 +8,7 @@ rulings in `docs/plans/2026-08-23-core-shape-brief.md` and
 
 Each entry says whether it **holds today** or is **established by** a phase of
 `specs/core-shape`, `specs/field-types` or `specs/core-trim` — INV-9 and INV-10
-are core-trim's, INV-11 is abilities-bridge's, INV-12 is core-cron-seam's, and core-trim re-ran INV-8's two commands at its own merge
+are core-trim's, INV-11 is abilities-bridge's, INV-12 is core-cron-seam's, INV-13 is core-lint-gate's, and core-trim re-ran INV-8's two commands at its own merge
 commit; the mechanical check is what `invariant-auditor` runs verbatim.
 The governing rule behind all of them is `docs/philosophy.md` §1: wrap WordPress,
 never replace it — where WordPress has a word, core uses it.
@@ -49,7 +49,7 @@ field, and `registerRestMeta()` needs no per-field `try/catch`.
 `api/Data.php`; a route handler returning a row or `getMeta()` bag without
 projecting through `restFields()`; any `public_fields` / `public_shape` /
 `PUBLIC_SHAPE`-style allow-list; a `private`, `hidden` or `exposed` key on a field.
-**Mechanical check:** `grep -rn "register_post_meta\|register_meta(" --include=*.php . | grep -vE "^(\./)?api/Data\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → empty. (The trailing filter drops COMMENT lines: prose may name `register_post_meta()` — `api/FieldTypes.php` says the sanitizer must be idempotent because that function runs it again — and a docblock is not a second caller.) (The `-E` form and the optional `./` are load-bearing: GNU grep prints `./api/Data.php` but ugrep prints `api/Data.php`, so an anchored `^./` exclusion silently matched nothing and the check passed for the wrong reason.) Second: `grep -rn "show_in_rest" --include=*.php api/Data.php` → ten hits, and every one is `declaresRest()` itself (`:122`, the ONE reader), a docblock (`:128`, `:1932`), a WARNING STRING that names the key it is telling the author about (`:223`, `:266`, `:1955`, `:2075` — four literals, none of them a test), or an ARG being written to `register_post_meta()` / `register_taxonomy()` (`:206`, `:2127`). The tenth is `:2071`, the post-type read named under exceptions. No second READER of the declaration. `grep -rn "public_fields\|public_shape\|publicRow" --include=*.php . | grep -vE "(^|/)vendor/|(^|/)tests/"` → empty. (`tests/` is excluded for a reason, not for convenience: `tests/Unit/DataDropsExposureTest.php` is the test that ENFORCES this ban, and it has to name the banned vocabulary in order to forbid it. Without the exclusion the check reports its own enforcement as the violation.) The `show_in_rest` check has one hit that is NOT about a field: `NTDST_Data_Manager::register()` reads `$args['show_in_rest']` of the POST TYPE, to warn when a declaration can reach no route. That is a different key on a different thing, not a second reader.
+**Mechanical check:** `grep -rn "register_post_meta\|register_meta(" --include=*.php . | grep -vE "^(\./)?api/Data\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → empty. (The trailing filter drops COMMENT lines: prose may name `register_post_meta()` — `api/FieldTypes.php` says the sanitizer must be idempotent because that function runs it again — and a docblock is not a second caller.) (The `-E` form and the optional `./` are load-bearing: GNU grep prints `./api/Data.php` but ugrep prints `api/Data.php`, so an anchored `^./` exclusion silently matched nothing and the check passed for the wrong reason.) Second: `grep -rn "show_in_rest" --include=*.php api/Data.php` → ten hits, and every one is `declaresRest()` itself (`:122`, the ONE reader), a docblock (`:128`, `:2245`), a WARNING STRING that names the key it is telling the author about (`:232`, `:275`, `:2268`, `:2395` — four literals, none of them a test), or an ARG being written to `register_post_meta()` / `register_taxonomy()` (`:215`, `:2447`). The tenth is `:2391`, the post-type read named under exceptions. No second READER of the declaration. `grep -rn "public_fields\|public_shape\|publicRow" --include=*.php . | grep -vE "(^|/)vendor/|(^|/)tests/"` → empty. (`tests/` is excluded for a reason, not for convenience: `tests/Unit/DataDropsExposureTest.php` is the test that ENFORCES this ban, and it has to name the banned vocabulary in order to forbid it. Without the exclusion the check reports its own enforcement as the violation.) The `show_in_rest` check has one hit that is NOT about a field: `NTDST_Data_Manager::register()` reads `$args['show_in_rest']` of the POST TYPE, to warn when a declaration can reach no route. That is a different key on a different thing, not a second reader.
 **Deliberate exceptions:**
 - A model with no `label` registers no post type and therefore no meta, and warns once per model.
 - A post type that is not itself in REST (`show_in_rest` absent or false) still registers its meta — WordPress emits none of it — and warns once per model.
@@ -63,7 +63,11 @@ All three commands re-run verbatim at `9fdad3d`, the code this doc describes:
 them; (3) EMPTY — no `public_fields`, `public_shape` or `publicRow` survives
 outside the test that forbids the vocabulary. Earlier pins: `42d7090` (the code),
 `96560c5` (the checks). Re-run verbatim at `85b54cb` (T14, pre-tag release
-commit): identical — EMPTY, TEN hits at the same ten lines, EMPTY.
+commit): identical — EMPTY, TEN hits at the same ten lines, EMPTY. Re-run verbatim
+at 5.7.1 (core-lint-gate, after its review fixes; the enumeration had drifted
+before that branch): EMPTY; TEN hits with the same roles at `:122`, `:128`,
+`:215`, `:232`, `:275`, `:2245`, `:2268`, `:2391`, `:2395`, `:2447`, no second
+READER; EMPTY.
 
 ## INV-2 — One HTTP surface: every route registers through `ntdst_rest()`
 
@@ -152,19 +156,21 @@ that is the invariant.
 in `api/`, `core/` or `admin/`; a route that mints or returns a nonce; a `fetch()`
 to `/wp-json/` in core's own JS that is not `wp.apiFetch`; an `Origin`/`Referer`
 check standing in for the nonce.
-**Mechanical check:** `grep -rn "wp_create_nonce\|wp_verify_nonce\|check_ajax_referer\|wp_nonce_field\|get_nonce\|HTTP_ORIGIN\|HTTP_REFERER" --include=*.php --include=*.js api core admin assets` → THREE hits, all in `admin/MetaboxGenerator.php` and all named below: `:342` and `:712` (`wp_nonce_field()`) and `:1864` (`wp_verify_nonce()`). `wp_nonce_field` joins the pattern because a MINTING call is the half that was missing: the check hunted for verification and for `wp_create_nonce()`, and a route that emitted a token through `wp_nonce_field()` instead would not have been seen. `grep -rn "fetch(" assets/js` → EMPTY: core's only JS reaches the REST API through `wp.apiFetch`, which the grep does not match because it is capitalised, and there is no raw `fetch()` left to find.
+**Mechanical check:** `grep -rn "wp_create_nonce\|wp_verify_nonce\|check_ajax_referer\|wp_nonce_field\|get_nonce\|HTTP_ORIGIN\|HTTP_REFERER" --include=*.php --include=*.js api core admin assets` → THREE hits, all in `admin/MetaboxGenerator.php` and all named below: `:342` and `:714` (`wp_nonce_field()`) and `:1892` (`wp_verify_nonce()`). `wp_nonce_field` joins the pattern because a MINTING call is the half that was missing: the check hunted for verification and for `wp_create_nonce()`, and a route that emitted a token through `wp_nonce_field()` instead would not have been seen. `grep -rn "fetch(" assets/js` → EMPTY: core's only JS reaches the REST API through `wp.apiFetch`, which the grep does not match because it is capitalised, and there is no raw `fetch()` left to find.
 **Status:** holds (established 2026-08-23, specs/core-shape — Cluster 3, T08),
 with the widened pattern the cluster-3 fix wave added. Both commands re-run
 verbatim at `9fdad3d`: THREE hits, all in `admin/MetaboxGenerator.php` —
 `:342`, `:712`, `:1864` — and `grep -rn "fetch(" assets/js` is EMPTY. Re-run
-verbatim at `85b54cb` (T14): identical — same three lines, still EMPTY. Core mints no nonce and reads no `Origin` or `Referer`
+verbatim at `85b54cb` (T14): identical — same three lines, still EMPTY. Re-run verbatim on
+core-lint-gate (5.7.1), whose source annotations moved the lines: THREE hits, `:342`, `:714`,
+`:1892`, and `grep -rn "fetch(" assets/js` is EMPTY. Core mints no nonce and reads no `Origin` or `Referer`
 anywhere on its HTTP surface. `api/Actions.php` carried all eight of the hits recorded at
 `96560c5` and is deleted; `assets/js/ntdst-api.js` carried the ninth and its
 four raw `fetch()` calls, and is deleted too. The `wp_rest` nonce that
 `wp.apiFetch` sends and `rest_cookie_check_errors()` checks is the whole gate.
 The three hits are NOT a violation and never were: they are ONE pair —
-`wp_nonce_field()` at `:342` and `:712` minting, `wp_verify_nonce(
-wp_unslash($_POST[$nonce_name]), …)` at `:1864` checking. A classic-editor metabox is a
+`wp_nonce_field()` at `:342` and `:714` minting, `wp_verify_nonce(
+wp_unslash($_POST[$nonce_name]), …)` at `:1892` checking. A classic-editor metabox is a
 WordPress ADMIN FORM POST, and that pair IS WordPress's own CSRF gate for one —
 core mints nothing of its own there and invents no second token. This invariant is
 about core's HTTP surface, where the token is `wp_rest` and
@@ -391,7 +397,11 @@ identical — same NINE hits at the same lines, and the guard-order pair
 throttle converges on it (`ntdst-baseline` `51f7e2e`). Re-run verbatim at 5.5.0
 (`824ef7c`, abilities-bridge): the same NINE hits (MetaboxGenerator's three now at
 `:2071`, `:2113`, `:2123`), and in `guard()` `$permission($request)` at
-`api/Rest.php:1314` precedes `NTDST_RateLimiter::attempt` at `:1335`.
+`api/Rest.php:1314` precedes `NTDST_RateLimiter::attempt` at `:1335`. Re-run
+verbatim at 5.7.1 (core-lint-gate, after its review fixes; its source annotations
+moved the lines): the same NINE hits — `support/RateLimiter.php` `:161`, `:216`,
+`:223`, `:226`, `:244`, `:251` unchanged, MetaboxGenerator's three now at
+`:2093`, `:2135`, `:2145` — and the guard-order pair (`:1314`, `:1335`) unchanged.
 
 ## INV-8 — One field-type vocabulary; a type name resolves in one table
 
@@ -615,7 +625,7 @@ namespace to build a path, `require_once`'d a `*Service.php` glob under
 writable directory on that list was code execution.
 
 **Convergence point:** `core/Bootstrap.php::registerService()`. `class_exists()`
-is the whole admission test (`:408`), after a legal-class-name check that runs
+is the whole admission test (`:412`), after a legal-class-name check that runs
 BEFORE it because `class_exists()` hands the string it was given to every
 registered autoloader. A refusal is one `_doing_it_wrong()` naming the class and
 the sector, plus an error-level log line — `_doing_it_wrong()` is `WP_DEBUG`-
@@ -652,8 +662,8 @@ grep -rn "ntdst_set(" --include=*.php api core admin services support ntdst-core
 unordered pair; grep prints the files in the order it was given them, and a
 reader checking a fixed order is checking the argument list. (2) is empty. (3) is
 `core/Bootstrap.php`, one file. (4) has one call that takes a class —
-`core/Bootstrap.php:501` — and the only gate reached before it is
-`class_exists()` at `:408`; the other hits are `core/Container.php`'s own
+`core/Bootstrap.php:509` — and the only gate reached before it is
+`class_exists()` at `:412`; the other hits are `core/Container.php`'s own
 declaration and docblock examples, `core/Theme.php:58` registering an
 instance of itself, which guesses nothing, and the two in
 `services/CronRegistry.php` (`:285-286`, the registry and the run log, bound at
@@ -669,7 +679,7 @@ checkout with no vendor/ and no PHP run, and it names the shape in a line a
 reviewer can read.
 
 **Deliberate exceptions:**
-- **`basename(str_replace('\\', '/', $class))`** (`core/Bootstrap.php:835`)
+- **`basename(str_replace('\\', '/', $class))`** (`core/Bootstrap.php:849`)
   derives the short NAME for the slug, never a path. It is fed to the config
   filter key, not to `require`.
 - **`core/Container.php`'s `new $class`** is a variable class name and it is
@@ -693,7 +703,12 @@ at core-cron-seam Task 4 (on `26447fc` plus the INV-12 guard line): (1) `0` and 
 calls, and `core/Container.php`'s declaration and docblock examples. Re-run
 verbatim after the review's fix pass, which moved the two bindings from the
 `ntdst/services_registered` listener to file scope: the same four answers, the two
-`services/CronRegistry.php` calls now at `:285-286`. Earlier pin `96560c5`,
+`services/CronRegistry.php` calls now at `:285-286`. Re-run verbatim at 5.7.1
+(core-lint-gate, after its review fixes; its source annotations moved the lines):
+(1) `0` and `0`; (2) EMPTY; (3) `core/Bootstrap.php`; (4) the gated
+`ntdst_set($class)` now at `core/Bootstrap.php:509` behind `class_exists()` at
+`:412`, `core/Theme.php:58`, `services/CronRegistry.php:285-286`, and
+`core/Container.php`'s declaration and docblock examples. Earlier pin `96560c5`,
 with the same four answers. (2) was also run
 against a scratch file holding the exact line 5.0.0 deleted,
 `$relativePath = str_replace('\\', '/', $class) . '.php';` — one hit.
@@ -715,6 +730,22 @@ A scheduled, recurring job is registered through `ntdst_cron_register()` and now
 **Bypass smell:** `wp_schedule_event(` in consumer or baseline code; a second class that wraps a callback and writes its own run history; a stored exception message that did not pass `failureSummary()`. Single-event offloads with per-call arguments (`wp_schedule_single_event`, Stride's `stride/mail/admin_notify_async`) are out of scope: the registry has no one-off API, and the substring `wp_schedule_event` does not occur in `wp_schedule_single_event`.
 **Mechanical check:** `grep -rnE "wp_schedule_event" --include=*.php . | grep -vE "^(\./)?services/CronRegistry\.php|(^|/)vendor/|(^|/)tests/|(^|/)specs/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → EMPTY on core (the trailing filter drops COMMENT lines, as INV-11's does: a docblock naming the function is prose, not a second door). `bin/guard.sh` runs the same line, so the gate fails on a second door. On a consumer root the same command lists the open hits below; the drift reviewer picks the check up from the vendored doc.
 **Status:** established 5.7.0 (specs/core-cron-seam). Re-run verbatim at core-cron-seam Task 4: EMPTY on core, one hit with a scratch `services/ScratchPlant.php` holding a bare `wp_schedule_event(`, EMPTY again once removed; `bash bin/guard.sh` exits 1 naming the plant and 0 without it. After the review's fix pass added the comment filter: with a bare call AND a comment naming the function in scratch files, `bash bin/guard.sh` exits 1 naming only the bare call; with the comment alone it exits 0. Known open hits on the consumer roots, each to be migrated: `MaintenanceService` in ntdst-baseline (until `baseline-vulnerability-check` moves it); its vendored copy in Stride's `mu-plugins/ntdst-baseline`, which is gitignored on a Bedrock root, so the command lists it only with `--no-ignore-files`; two in ludoluykx's theme, `themes/ntdstheme/services/infrastructure/DatabaseMaintenanceService.php:84` and `services/artist/ExhibitionService.php:526`; and, for core-cron-seam plan 2 (Stride), `stride-core/Support/cron.php:31`, `ntdst-audit/src/cron-fallback.php:34` (a fallback the spec's Risks call dead code once core is loaded), `ntdst-assistant/ntdst-assistant.php:62` (a bare hourly cleanup) and Stride's own `plugins/ntdst-cron/src/CronRegistry.php:167` (the plugin's copy, until plan 2 removes it).
+
+## INV-13 — The lint is never widened to get green
+
+`composer lint` (phpcs) is part of `composer gate` and runs a security-only ruleset: `WordPress.Security`, `WordPress.DB` and `PHPCompatibilityWP`. A finding is fixed, or it is a false positive annotated IN THE SOURCE with its reason — `// phpcs:ignore <Full.Sniff.Code> -- <reason>`, or a statement- or method-scoped `// phpcs:disable <Full.Sniff.Code> -- <reason>` … `// phpcs:enable <Full.Sniff.Code>` — where a reviewer reads it beside the code. It is never excluded in the ruleset, where nobody reads it again.
+
+**Convergence point:** `phpcs.xml`.
+**Bypass smell:** in `phpcs.xml` an `<exclude-pattern>`, an `<exclude name=`, any `<severity>` (`<severity> 0 </severity>` included), a `<properties>` block (e.g. `customEscapingFunctions`), an `<arg name=` of `exclude`, `sniffs`, `severity`, `error-severity` or `warning-severity`, an `<arg value=` carrying `n` (hides warnings); a removed or swapped `<rule ref=`, `<file>` or `testVersion`; a second ruleset at the root (`.phpcs.xml`, `phpcs.xml.dist`, `.phpcs.xml.dist` — bare `phpcs` reads one of those first, `vendor/squizlabs/php_codesniffer/src/Config.php:412-415`); a `lint` script that is not bare `phpcs` (`--severity`, `--standard`, `--exclude`, `--sniffs`); a `phpcs:ignoreFile`, or a `phpcs:ignore`/`phpcs:disable` naming no sniff.
+**Mechanical check:** all from the root, `-E`:
+1. `grep -cE '<exclude|<severity>|<properties>|<arg name="(exclude|sniffs|severity|error-severity|warning-severity)"|<arg value="[^"]*n[^"]*"' phpcs.xml` → `0`.
+2. `grep -oE '<rule ref="[^"]+"|<file>[^<]+</file>|<config name="[^"]+" value="[^"]+"' phpcs.xml | sort` → exactly `<config name="testVersion" value="8.1-"`, the six `<file>` lines (`admin`, `api`, `core`, `ntdst-core.php`, `services`, `support`) and `<rule ref="PHPCompatibilityWP"`, `<rule ref="WordPress.DB"`, `<rule ref="WordPress.Security"`.
+3. `ls -a | grep -cE '^\.?phpcs\.xml(\.dist)?$'` → `1`.
+4. `grep -oE '"lint": *"phpcs[^"]*"' composer.json` → `"lint": "phpcs"`.
+5. `grep -rnE 'phpcs:(ignoreFile|(ignore|disable)( *$| *--))' --include=*.php api core admin services support ntdst-core.php` → EMPTY.
+
+`bin/guard.sh` runs the same five, so the gate fails on a widened lint.
+**Status:** established by core-lint-gate (5.7.1; Stefan, 2026-11-06: "add the invariant"); widened at its review (Should fix 1). Run verbatim: `0`; the ten lines; `1`; `"lint": "phpcs"`; EMPTY; `bash bin/guard.sh` exits 0. Each proven to bite, `bash bin/guard.sh` exiting 1 and naming it: (1) six planted lines — `<arg name="severity" value="6"/>`, `<arg name="exclude" …/>`, `<arg value="spn"/>`, `<exclude-pattern>`, `<severity> 0 </severity>`, a `<properties>` block — each matched on its own line, count `6`; (2) `<file>admin</file>` removed, and `<rule ref="WordPress.DB"/>` removed; (3) a scratch `.phpcs.xml` → `2`; (4) `"lint": "phpcs --severity=6"`; (5) a scratch `// phpcs:disable` in `core/`. Every plant removed; `phpcs.xml` and `composer.json` match their commit. The review's own commands for (2) and (4) were corrected here: `<(rule ref|file|config name)="` cannot see a `<file>core</file>` element, and `"lint": *"[^"]+"` also matches the `scripts-descriptions` entry. The 109 findings the ruleset reported when PSR12 was dropped are triaged one row each in `specs/core-lint-gate/triage.md`.
 
 ---
 

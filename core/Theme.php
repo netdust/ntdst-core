@@ -165,9 +165,11 @@ class NTDST_Theme
         // instead of crashing inside a foreach with a confusing message.
         foreach (['theme_support', 'image_sizes', 'menus', 'sidebars', 'excerpt'] as $arrayKey) {
             if (isset($config[$arrayKey]) && !is_array($config[$arrayKey])) {
+                // phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- $arrayKey is one of the literal keys of the foreach above.
                 throw new InvalidArgumentException(
                     "NTDST_Theme config['{$arrayKey}'] must be an array",
                 );
+                // phpcs:enable WordPress.Security.EscapeOutput.ExceptionNotEscaped
             }
         }
 

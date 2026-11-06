@@ -235,6 +235,7 @@ class NTDST_Pages
         // the body is sent, so the route only has to be reachable — a GET
         // route that 404s HEAD tells every crawler and monitor the page is
         // gone. A genuinely wrong verb still 404s.
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- only ever compared byte-exactly (!==) to the route's declared verb below; any other value, slashed or not, 404s (NtdstPagesTest::testPathDoesNotMatchADifferentMethod).
         $method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
 
         if ($method === 'HEAD') {
@@ -297,17 +298,18 @@ class NTDST_Pages
                 return;
             }
 
+            // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $route['pattern'] is the developer's path() declaration; $result is esc_html()'d below.
             _doing_it_wrong(
                 __CLASS__ . '::path',
-                // Raw: _doing_it_wrong() runs wp_kses_post() on the message
-                // itself, and every other call site in this package hands it
-                // the raw string. Escaping first double-escapes the one path
-                // the developer has to recognise (A3).
-                'the route for "' . $route['pattern'] . '" returned "' . $result
+                // $result may carry a URL :param, so it is escaped. WordPress's
+                // wp_kses() (notice allow-list: a[href], br, code, em, strong)
+                // keeps valid entities, so a plain path still reads as itself.
+                'the route for "' . $route['pattern'] . '" returned "' . esc_html($result)
                     . '", which is not a file that exists. Build the path with '
                     . 'NTDST_Template_Loader::page() / ::locate(), which return null when the template is missing.',
                 '5.0.0',
             );
+            // phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
         } elseif ($result !== false) {
             // An object (the retired NTDST_Response return), an int, an array.
             // README has always promised a warning here; without it the one
@@ -441,6 +443,7 @@ class NTDST_Pages
         $path = trim($pattern, '/');
 
         if ($path === '' || preg_match('#^:[a-zA-Z_][a-zA-Z0-9_]*(/|$)#', $path) === 1) {
+            // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $pattern is the developer's path() declaration, never request data; WP >= 6.4: wp_trigger_error() kses-filters the message.
             _doing_it_wrong(
                 __CLASS__ . '::path',
                 "\"{$pattern}\" is refused: a page route's first segment must be literal text. A rule for the site "
@@ -448,6 +451,7 @@ class NTDST_Pages
                     . 'every URL of that shape on the site.',
                 '5.0.0',
             );
+            // phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
 
             return null;
         }
@@ -501,12 +505,14 @@ class NTDST_Pages
         }
 
         if (!$this->sameParams($variants)) {
+            // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- the pattern is the developer's path() declaration, never request data; WP >= 6.4: wp_trigger_error() kses-filters the message.
             _doing_it_wrong(
                 __CLASS__ . '::path',
                 'the language variants of "' . $variants[0]['pattern'] . '" name different placeholders. Every '
                     . 'language must carry the same :params, because the callback receives one params array.',
                 '5.4.0',
             );
+            // phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
 
             return null;
         }
@@ -761,6 +767,7 @@ class NTDST_Pages
      */
     protected function warnNotAPath(string $function, mixed $result): void
     {
+        // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $function is a core method name and get_debug_type() a PHP type name, never request data; WP >= 6.4: wp_trigger_error() kses-filters the message.
         _doing_it_wrong(
             $function,
             'a callback returned ' . get_debug_type($result) . '. Since 5.0.0 it must return a template PATH — '
@@ -769,6 +776,7 @@ class NTDST_Pages
                 . 'nothing renders or exits from inside a template filter.',
             '5.0.0',
         );
+        // phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
     }
 
     /**

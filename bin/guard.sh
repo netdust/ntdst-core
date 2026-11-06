@@ -17,8 +17,8 @@ if [ -n "$BAD" ]; then
 fi
 
 # Symbols removed across v3.0.0 and v5.0.0. A deleted symbol with a surviving
-# caller is a RUNTIME fatal that no other gate step can see: `composer lint` is
-# php -l (syntax only, never resolves a name) and the unit suite does not load
+# caller is a RUNTIME fatal that no other gate step can see: `syntax` is
+# php -l (never resolves a name), `lint` is security sniffs only, and the unit suite does not load
 # every shipped file. Cluster A shipped two such fatals with a 155/155 green
 # suite — admin/RelationField.php called ntdst_api_action(), and core/Theme.php
 # guarded on ntdst_router() so a required mixin silently stopped registering.
@@ -292,6 +292,25 @@ CRON_DOORS=$(grep -rnE "wp_schedule_event" --include=*.php . \
 if [ -n "$CRON_DOORS" ]; then
     echo "A recurring job is scheduled outside services/CronRegistry.php (INV-12):"
     echo "$CRON_DOORS"
+    exit 1
+fi
+
+# INV-13: the lint is never widened to get green. phpcs.xml is the one ruleset;
+# a false positive is annotated in the source, never silenced here.
+LINT_WIDENED=$(grep -nE '<exclude|<severity>|<properties>|<arg name="(exclude|sniffs|severity|error-severity|warning-severity)"|<arg value="[^"]*n[^"]*"' phpcs.xml || true)
+LINT_SHAPE=$(grep -oE '<rule ref="[^"]+"|<file>[^<]+</file>|<config name="[^"]+" value="[^"]+"' phpcs.xml | sort | tr '\n' ' ')
+LINT_SHAPE_WANT='<config name="testVersion" value="8.1-" <file>admin</file> <file>api</file> <file>core</file> <file>ntdst-core.php</file> <file>services</file> <file>support</file> <rule ref="PHPCompatibilityWP" <rule ref="WordPress.DB" <rule ref="WordPress.Security" '
+LINT_RULESETS=$(ls -a | grep -cE '^\.?phpcs\.xml(\.dist)?$' || true)
+LINT_SCRIPT=$(grep -oE '"lint": *"phpcs[^"]*"' composer.json || true)
+LINT_BARE=$(grep -rnE 'phpcs:(ignoreFile|(ignore|disable)( *$| *--))' --include=*.php api core admin services support ntdst-core.php || true)
+if [ -n "$LINT_WIDENED" ] || [ "$LINT_SHAPE" != "$LINT_SHAPE_WANT" ] || [ "$LINT_RULESETS" != "1" ] \
+    || [ "$LINT_SCRIPT" != '"lint": "phpcs"' ] || [ -n "$LINT_BARE" ]; then
+    echo "The lint is widened or silenced (INV-13):"
+    [ -n "$LINT_WIDENED" ] && echo "phpcs.xml: $LINT_WIDENED"
+    [ "$LINT_SHAPE" != "$LINT_SHAPE_WANT" ] && echo "phpcs.xml rules/files/testVersion: $LINT_SHAPE"
+    [ "$LINT_RULESETS" != "1" ] && echo "rulesets at the root: $LINT_RULESETS (phpcs.xml only)"
+    [ "$LINT_SCRIPT" != '"lint": "phpcs"' ] && echo "composer.json lint script: ${LINT_SCRIPT:-missing}"
+    [ -n "$LINT_BARE" ] && echo "an annotation with no sniff or no reason: $LINT_BARE"
     exit 1
 fi
 

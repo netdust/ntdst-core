@@ -92,6 +92,7 @@ final class NTDST_FieldTypes
             return $table[$name];
         }
 
+        // phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- $name is a DECLARED field type (every caller reads a model or metabox declaration), the rest are this class's own tables; never request data.
         if (isset(self::RETIRED[$name])) {
             throw new InvalidArgumentException(
                 "Unknown field type '{$name}'. Use '" . self::RETIRED[$name] . "'.",
@@ -101,6 +102,7 @@ final class NTDST_FieldTypes
         throw new InvalidArgumentException(
             "Unknown field type '{$name}'. Known: " . implode(', ', array_keys($table)) . '.',
         );
+        // phpcs:enable WordPress.Security.EscapeOutput.ExceptionNotEscaped
     }
 
     /** @return list<string> The whole vocabulary, in declaration order. */
@@ -248,6 +250,7 @@ final class NTDST_FieldTypes
             $key = self::rowKey($name);
             $where = "{$prefix}Field '{$field}' sub-field '{$name}'";
 
+            // phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- $where, $name, $key, $seen and $type all come from the repeater's sub_fields DECLARATION, never request data.
             if (is_array($declaration) && array_key_exists('sanitizer', $declaration)) {
                 throw new InvalidArgumentException(
                     "{$where}: a sub-field cannot declare a 'sanitizer'.",
@@ -272,6 +275,7 @@ final class NTDST_FieldTypes
                     . "Use 'textarea' for a cell, or declare '{$type}' as a top-level field.",
                 );
             }
+            // phpcs:enable WordPress.Security.EscapeOutput.ExceptionNotEscaped
         }
     }
 
@@ -285,7 +289,7 @@ final class NTDST_FieldTypes
         try {
             return self::get($type);
         } catch (InvalidArgumentException $e) {
-            throw new InvalidArgumentException($where . ': ' . $e->getMessage(), 0, $e);
+            throw new InvalidArgumentException($where . ': ' . $e->getMessage(), 0, $e); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- $where names the declaration; the inner message is get()'s, annotated there.
         }
     }
 

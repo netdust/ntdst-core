@@ -159,11 +159,13 @@ class NTDST_Response
     public function redirect(string $url, int $status = 302): never
     {
         if ($status < 300 || $status > 308) {
+            // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $status is an int (signature) printed with %d.
             _doing_it_wrong(
                 __METHOD__,
                 sprintf('%d is not a redirect status. Pass a 3xx (300-308); falling back to 302.', $status),
                 '5.0.0'
             );
+            // phpcs:enable WordPress.Security.EscapeOutput.OutputNotEscaped
 
             $status = 302;
         }
@@ -264,6 +266,7 @@ class NTDST_Response
             header($header);
         }
 
+        // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- a file-download body sent after fileHeaders() (attachment/inline, nosniff): bytes, not HTML; escaping would corrupt the file.
         echo $content;
         exit;
     }
