@@ -4,6 +4,16 @@ The migration tables live in `README.md` under `## Versions` — this file is th
 short answer to "what changed in this tag". Nothing here replaces reading that
 section before a MAJOR bump.
 
+## 5.7.1
+
+No behaviour change. `^5.7` consumers upgrade without a code change.
+
+### Changed
+- Security lint is part of `composer gate`: `syntax`, `lint`, `test`, `guard`, `audit:deps`. `phpcs.xml` is security-only — `WordPress.Security`, `WordPress.DB`, `PHPCompatibilityWP`; PSR-12 is dropped.
+- The 109 findings it reported are triaged one row each in `specs/core-lint-gate/triage.md`: no real hole, 109 false positives annotated in the source with their reason (`phpcs:ignore` / scoped `phpcs:disable`, each naming its sniff). No escaping fix was needed.
+- INV-13: the lint is never widened to get green — a false positive is annotated in the source, never excluded in `phpcs.xml`.
+- A render test pins that a hostile stored value (`<b>&"x`) renders escaped exactly once on every metabox control that prints a stored string.
+
 ## 5.7.0
 
 Additive. `^5.6` consumers upgrade without a code change.

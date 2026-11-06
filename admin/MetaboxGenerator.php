@@ -1888,7 +1888,7 @@ final class NTDST_MetaboxGenerator
             return;
         }
 
-        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- a nonce is only compared, by hash_equals() inside wp_verify_nonce(); refusal pinned by MetaboxGeneratorSaveTest 'a forged nonce' / 'no nonce at all'.
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- a nonce is only compared (hash_equals() in WordPress's check on the next line); refusal pinned by MetaboxGeneratorSaveTest 'a forged nonce' / 'no nonce at all'.
         if (!wp_verify_nonce(wp_unslash($_POST[$nonce_name]), $this->nonce_action($model_name, $post_id))) {
             return;
         }

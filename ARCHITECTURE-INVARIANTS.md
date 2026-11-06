@@ -8,7 +8,7 @@ rulings in `docs/plans/2026-08-23-core-shape-brief.md` and
 
 Each entry says whether it **holds today** or is **established by** a phase of
 `specs/core-shape`, `specs/field-types` or `specs/core-trim` — INV-9 and INV-10
-are core-trim's, INV-11 is abilities-bridge's, INV-12 is core-cron-seam's, and core-trim re-ran INV-8's two commands at its own merge
+are core-trim's, INV-11 is abilities-bridge's, INV-12 is core-cron-seam's, INV-13 is core-lint-gate's, and core-trim re-ran INV-8's two commands at its own merge
 commit; the mechanical check is what `invariant-auditor` runs verbatim.
 The governing rule behind all of them is `docs/philosophy.md` §1: wrap WordPress,
 never replace it — where WordPress has a word, core uses it.
@@ -152,19 +152,21 @@ that is the invariant.
 in `api/`, `core/` or `admin/`; a route that mints or returns a nonce; a `fetch()`
 to `/wp-json/` in core's own JS that is not `wp.apiFetch`; an `Origin`/`Referer`
 check standing in for the nonce.
-**Mechanical check:** `grep -rn "wp_create_nonce\|wp_verify_nonce\|check_ajax_referer\|wp_nonce_field\|get_nonce\|HTTP_ORIGIN\|HTTP_REFERER" --include=*.php --include=*.js api core admin assets` → THREE hits, all in `admin/MetaboxGenerator.php` and all named below: `:342` and `:712` (`wp_nonce_field()`) and `:1864` (`wp_verify_nonce()`). `wp_nonce_field` joins the pattern because a MINTING call is the half that was missing: the check hunted for verification and for `wp_create_nonce()`, and a route that emitted a token through `wp_nonce_field()` instead would not have been seen. `grep -rn "fetch(" assets/js` → EMPTY: core's only JS reaches the REST API through `wp.apiFetch`, which the grep does not match because it is capitalised, and there is no raw `fetch()` left to find.
+**Mechanical check:** `grep -rn "wp_create_nonce\|wp_verify_nonce\|check_ajax_referer\|wp_nonce_field\|get_nonce\|HTTP_ORIGIN\|HTTP_REFERER" --include=*.php --include=*.js api core admin assets` → THREE hits, all in `admin/MetaboxGenerator.php` and all named below: `:342` and `:714` (`wp_nonce_field()`) and `:1892` (`wp_verify_nonce()`). `wp_nonce_field` joins the pattern because a MINTING call is the half that was missing: the check hunted for verification and for `wp_create_nonce()`, and a route that emitted a token through `wp_nonce_field()` instead would not have been seen. `grep -rn "fetch(" assets/js` → EMPTY: core's only JS reaches the REST API through `wp.apiFetch`, which the grep does not match because it is capitalised, and there is no raw `fetch()` left to find.
 **Status:** holds (established 2026-08-23, specs/core-shape — Cluster 3, T08),
 with the widened pattern the cluster-3 fix wave added. Both commands re-run
 verbatim at `9fdad3d`: THREE hits, all in `admin/MetaboxGenerator.php` —
 `:342`, `:712`, `:1864` — and `grep -rn "fetch(" assets/js` is EMPTY. Re-run
-verbatim at `85b54cb` (T14): identical — same three lines, still EMPTY. Core mints no nonce and reads no `Origin` or `Referer`
+verbatim at `85b54cb` (T14): identical — same three lines, still EMPTY. Re-run verbatim on
+core-lint-gate (5.7.1), whose source annotations moved the lines: THREE hits, `:342`, `:714`,
+`:1892`, and `grep -rn "fetch(" assets/js` is EMPTY. Core mints no nonce and reads no `Origin` or `Referer`
 anywhere on its HTTP surface. `api/Actions.php` carried all eight of the hits recorded at
 `96560c5` and is deleted; `assets/js/ntdst-api.js` carried the ninth and its
 four raw `fetch()` calls, and is deleted too. The `wp_rest` nonce that
 `wp.apiFetch` sends and `rest_cookie_check_errors()` checks is the whole gate.
 The three hits are NOT a violation and never were: they are ONE pair —
-`wp_nonce_field()` at `:342` and `:712` minting, `wp_verify_nonce(
-wp_unslash($_POST[$nonce_name]), …)` at `:1864` checking. A classic-editor metabox is a
+`wp_nonce_field()` at `:342` and `:714` minting, `wp_verify_nonce(
+wp_unslash($_POST[$nonce_name]), …)` at `:1892` checking. A classic-editor metabox is a
 WordPress ADMIN FORM POST, and that pair IS WordPress's own CSRF gate for one —
 core mints nothing of its own there and invents no second token. This invariant is
 about core's HTTP surface, where the token is `wp_rest` and
@@ -715,6 +717,15 @@ A scheduled, recurring job is registered through `ntdst_cron_register()` and now
 **Bypass smell:** `wp_schedule_event(` in consumer or baseline code; a second class that wraps a callback and writes its own run history; a stored exception message that did not pass `failureSummary()`. Single-event offloads with per-call arguments (`wp_schedule_single_event`, Stride's `stride/mail/admin_notify_async`) are out of scope: the registry has no one-off API, and the substring `wp_schedule_event` does not occur in `wp_schedule_single_event`.
 **Mechanical check:** `grep -rnE "wp_schedule_event" --include=*.php . | grep -vE "^(\./)?services/CronRegistry\.php|(^|/)vendor/|(^|/)tests/|(^|/)specs/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → EMPTY on core (the trailing filter drops COMMENT lines, as INV-11's does: a docblock naming the function is prose, not a second door). `bin/guard.sh` runs the same line, so the gate fails on a second door. On a consumer root the same command lists the open hits below; the drift reviewer picks the check up from the vendored doc.
 **Status:** established 5.7.0 (specs/core-cron-seam). Re-run verbatim at core-cron-seam Task 4: EMPTY on core, one hit with a scratch `services/ScratchPlant.php` holding a bare `wp_schedule_event(`, EMPTY again once removed; `bash bin/guard.sh` exits 1 naming the plant and 0 without it. After the review's fix pass added the comment filter: with a bare call AND a comment naming the function in scratch files, `bash bin/guard.sh` exits 1 naming only the bare call; with the comment alone it exits 0. Known open hits on the consumer roots, each to be migrated: `MaintenanceService` in ntdst-baseline (until `baseline-vulnerability-check` moves it); its vendored copy in Stride's `mu-plugins/ntdst-baseline`, which is gitignored on a Bedrock root, so the command lists it only with `--no-ignore-files`; two in ludoluykx's theme, `themes/ntdstheme/services/infrastructure/DatabaseMaintenanceService.php:84` and `services/artist/ExhibitionService.php:526`; and, for core-cron-seam plan 2 (Stride), `stride-core/Support/cron.php:31`, `ntdst-audit/src/cron-fallback.php:34` (a fallback the spec's Risks call dead code once core is loaded), `ntdst-assistant/ntdst-assistant.php:62` (a bare hourly cleanup) and Stride's own `plugins/ntdst-cron/src/CronRegistry.php:167` (the plugin's copy, until plan 2 removes it).
+
+## INV-13 — The lint is never widened to get green
+
+`composer lint` (phpcs) is part of `composer gate` and runs a security-only ruleset: `WordPress.Security`, `WordPress.DB` and `PHPCompatibilityWP`. A finding is fixed, or it is a false positive annotated IN THE SOURCE with its reason — `// phpcs:ignore <Full.Sniff.Code> -- <reason>`, or a statement- or method-scoped `// phpcs:disable <Full.Sniff.Code> -- <reason>` … `// phpcs:enable <Full.Sniff.Code>` — where a reviewer reads it beside the code. It is never excluded in the ruleset, where nobody reads it again.
+
+**Convergence point:** `phpcs.xml`.
+**Bypass smell:** an `<exclude-pattern>`, an `<exclude name=` or a `<severity>0</severity>` in `phpcs.xml`; a removed or swapped `<rule ref=`; a ruleset or sniff list passed on the command line (`--standard`, `--exclude`, `--sniffs` in the `lint` script); a bare `phpcs:disable` naming no sniff, or one with no reason.
+**Mechanical check:** `grep -cE '<exclude|<severity>0' phpcs.xml` → `0`, and `grep -oE '<rule ref="[^"]+"' phpcs.xml | sort` → exactly `<rule ref="PHPCompatibilityWP"`, `<rule ref="WordPress.DB"`, `<rule ref="WordPress.Security"`.
+**Status:** established by core-lint-gate (5.7.1; Stefan, 2026-11-06: "add the invariant"). Run verbatim on the branch: `0` and the three refs. With a scratch `<exclude-pattern>` line added the count is `1`; removed, `0` again. The 109 findings the ruleset reported when PSR12 was dropped are triaged one row each in `specs/core-lint-gate/triage.md`.
 
 ---
 

@@ -28,6 +28,7 @@
         "guard": "bash bin/guard.sh",
         "gate": [
             "@syntax",
+            "@lint",
             "@test",
             "@guard",
             "@audit:deps"
@@ -46,9 +47,9 @@
     },
     "scripts-descriptions": {
         "syntax": "php -l over every shipped file. Catches a parse error, nothing else.",
-        "lint": "Security-only: WordPress.Security + WordPress.DB + PHPCompatibilityWP. NOT yet in `gate` \u2014 see docs/gate.md.",
+        "lint": "Security-only: WordPress.Security + WordPress.DB + PHPCompatibilityWP. Part of `gate` \u2014 see docs/gate.md.",
         "guard": "ABSPATH guards + removed-symbol grep.",
-        "gate": "What must be green to ship: syntax, unit suite, guards, dependency audit.",
+        "gate": "What must be green to ship: syntax, security lint, unit suite, guards, dependency audit.",
         "audit:deps": "composer audit against the advisories database."
     }
 }

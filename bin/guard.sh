@@ -17,8 +17,8 @@ if [ -n "$BAD" ]; then
 fi
 
 # Symbols removed across v3.0.0 and v5.0.0. A deleted symbol with a surviving
-# caller is a RUNTIME fatal that no other gate step can see: `composer lint` is
-# php -l (syntax only, never resolves a name) and the unit suite does not load
+# caller is a RUNTIME fatal that no other gate step can see: `syntax` is
+# php -l (never resolves a name), `lint` is security sniffs only, and the unit suite does not load
 # every shipped file. Cluster A shipped two such fatals with a 155/155 green
 # suite — admin/RelationField.php called ntdst_api_action(), and core/Theme.php
 # guarded on ntdst_router() so a required mixin silently stopped registering.
