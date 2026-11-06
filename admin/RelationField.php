@@ -509,6 +509,7 @@ final class NTDST_RelationField
         );
 
         // phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $key_placeholders is built from array_fill('%s'), never from input.
+        // phpcs:ignore WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber -- $params carries 1 + count($meta_keys) + 5 values, one per %s; the IN list's count is only known at run time.
         $sql = $wpdb->prepare(
             "SELECT DISTINCT p.* FROM {$wpdb->posts} p
             INNER JOIN {$wpdb->postmeta} pm ON p.ID = pm.post_id
@@ -526,6 +527,7 @@ final class NTDST_RelationField
             $params,
         );
         // phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- $sql is the $wpdb->prepare() result above; no WP API expresses a LIKE over serialized meta, and an edit-screen reverse lookup must read live rows.
         $candidates = $wpdb->get_results($sql) ?: [];
 
         // Exact verification — guards against a LIKE false positive (ID 6

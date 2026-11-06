@@ -235,6 +235,7 @@ class NTDST_Pages
         // the body is sent, so the route only has to be reachable — a GET
         // route that 404s HEAD tells every crawler and monitor the page is
         // gone. A genuinely wrong verb still 404s.
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- only ever compared byte-exactly (!==) to the route's declared verb below; any other value, slashed or not, 404s (NtdstPagesTest::testPathDoesNotMatchADifferentMethod).
         $method = strtoupper((string) ($_SERVER['REQUEST_METHOD'] ?? 'GET'));
 
         if ($method === 'HEAD') {

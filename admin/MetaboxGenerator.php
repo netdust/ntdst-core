@@ -1868,6 +1868,7 @@ final class NTDST_MetaboxGenerator
             return;
         }
 
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- a nonce is only compared, by hash_equals() inside wp_verify_nonce(); refusal pinned by MetaboxGeneratorSaveTest 'a forged nonce' / 'no nonce at all'.
         if (!wp_verify_nonce(wp_unslash($_POST[$nonce_name]), $this->nonce_action($model_name, $post_id))) {
             return;
         }
@@ -1887,6 +1888,7 @@ final class NTDST_MetaboxGenerator
         // narrowed to the declared set before a single field is looked at. A
         // non-array `ntdst_fields` (`?ntdst_fields=x`) is a submission with a
         // hostile shape, not a reason to skip the clearing rule below.
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.MissingUnslash, WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- unslashed and narrowed to the declared fields on the next statement; each value is cleaned once by the field registry, in the model (api/Data.php:203) or here (the NTDST_FieldTypes sanitize call below).
         $submitted = $_POST['ntdst_fields'] ?? [];
         $posted = is_array($submitted)
             ? array_intersect_key(wp_unslash($submitted), $fields_config)
@@ -2098,7 +2100,7 @@ final class NTDST_MetaboxGenerator
     public function render_save_error_notice(): void
     {
         $post_id = 0;
-        if (isset($_GET['post'])) {
+        if (isset($_GET['post'])) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- the presence check of the read below, same display-only reason.
             $post_id = absint(wp_unslash($_GET['post'])); // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- display-only, read-once notice keyed to the current edit screen.
         } elseif (isset($GLOBALS['post']) && $GLOBALS['post'] instanceof \WP_Post) {
             $post_id = (int) $GLOBALS['post']->ID;

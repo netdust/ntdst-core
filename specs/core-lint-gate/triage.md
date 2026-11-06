@@ -1,7 +1,7 @@
 # core-lint-gate — triage ledger
 
 One row per finding of `vendor/bin/phpcs --report=json` with the security-only ruleset (Task 1), grouped by the task that clears it.
-`file:line` is the line at the start of the triage (295d28d plus the ruleset change); annotations added later shift lines below them.
+`file:line` is the line at the start of the triage (295d28d plus the ruleset change); annotations added later shift lines below them. A `file:line` cited in a **reason** is the source as of the commit that filled that row.
 
 - **verdict:** `real` (a hole, fixed with a failing test first) or `false positive`. A finding that cannot be classified is `real`.
 - **action:** `fixed` + the test name, or `annotated`.
@@ -13,17 +13,17 @@ Start: `A TOTAL OF 89 ERRORS AND 20 WARNINGS WERE FOUND IN 12 FILES` · `A TOTAL
 
 | # | file:line | sniff | verdict | action | reason |
 |---|---|---|---|---|---|
-| 1 | `core/LogLevel.php:17` | `PHPCompatibility.Variables.ForbiddenThisUseContexts.OutsideObjectContext` | | | |
-| 2 | `core/Pages.php:238` | `WordPress.Security.ValidatedSanitizedInput.MissingUnslash` | | | |
-| 3 | `core/Pages.php:238` | `WordPress.Security.ValidatedSanitizedInput.InputNotSanitized` | | | |
-| 4 | `admin/MetaboxGenerator.php:1871` | `WordPress.Security.ValidatedSanitizedInput.InputNotSanitized` | | | |
-| 5 | `admin/MetaboxGenerator.php:1890` | `WordPress.Security.ValidatedSanitizedInput.MissingUnslash` | | | |
-| 6 | `admin/MetaboxGenerator.php:1890` | `WordPress.Security.ValidatedSanitizedInput.InputNotSanitized` | | | |
-| 7 | `admin/MetaboxGenerator.php:2101` | `WordPress.Security.NonceVerification.Recommended` | | | |
-| 8 | `admin/RelationField.php:512` | `WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber` | | | |
-| 9 | `admin/RelationField.php:529` | `WordPress.DB.DirectDatabaseQuery.DirectQuery` | | | |
-| 10 | `admin/RelationField.php:529` | `WordPress.DB.DirectDatabaseQuery.NoCaching` | | | |
-| 11 | `admin/RelationField.php:529` | `WordPress.DB.PreparedSQL.NotPrepared` | | | |
+| 1 | `core/LogLevel.php:17` | `PHPCompatibility.Variables.ForbiddenThisUseContexts.OutsideObjectContext` | false positive | annotated | `match ($this)` inside an instance method of `enum LogLevel` (`core/LogLevel.php:7`): `$this` is the case. PHPCompatibility 9.3.5 predates enums. |
+| 2 | `core/Pages.php:238` | `WordPress.Security.ValidatedSanitizedInput.MissingUnslash` | false positive | annotated | `REQUEST_METHOD` is only compared byte-exactly (`!==`) to the route's declared verb (`core/Pages.php:245`); any other value, slashed or not, 404s (`NtdstPagesTest::testPathDoesNotMatchADifferentMethod`). Validate: the `!==` compare; sanitize: n/a, never stored or echoed; escape: n/a, never output; authorize: n/a, a public page route by design. |
+| 3 | `core/Pages.php:238` | `WordPress.Security.ValidatedSanitizedInput.InputNotSanitized` | false positive | annotated | Same value and reason as #2, one annotation. |
+| 4 | `admin/MetaboxGenerator.php:1871` | `WordPress.Security.ValidatedSanitizedInput.InputNotSanitized` | false positive | annotated | The nonce is unslashed and only compared (`hash_equals()` inside `wp_verify_nonce()`), never stored or output. The refusal is pinned by `MetaboxGeneratorSaveTest.php:952-961` ('a forged nonce', 'no nonce at all'). Save-flow pillars: validate = nonce `:1872` + declared-field narrowing `:1893-1895`; sanitize = field registry (`api/Data.php:203` for a model, `admin/MetaboxGenerator.php:1937` otherwise); escape = n/a on save (Task 3 covers the render); authorize = `current_user_can('edit_post')` `:1880`. |
+| 5 | `admin/MetaboxGenerator.php:1890` | `WordPress.Security.ValidatedSanitizedInput.MissingUnslash` | false positive | annotated | `$_POST['ntdst_fields']` is unslashed and narrowed to the declared fields on the next statement (`:1893-1895`); each value is cleaned once by the field registry, in the model (`api/Data.php:203`, INV-8) or directly (`:1937`). Pinned by `MetaboxGeneratorSaveTest::testADataModelFieldIsSanitizedExactlyOnceOnTheWayIn` and `::testANonDataPostTypeStoresTheRegistrySanitizedValueOncePerField`. Pillars as #4. |
+| 6 | `admin/MetaboxGenerator.php:1890` | `WordPress.Security.ValidatedSanitizedInput.InputNotSanitized` | false positive | annotated | Same value and reason as #5, one annotation. |
+| 7 | `admin/MetaboxGenerator.php:2101` | `WordPress.Security.NonceVerification.Recommended` | false positive | annotated | `isset($_GET['post'])`, the presence check of the already-annotated display-only read on the next line (`:2104`, `absint(wp_unslash())`); the notice is authorized by `current_user_can('edit_post')` (`:2120`). No state changes, so no nonce. |
+| 8 | `admin/RelationField.php:512` | `WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber` | false positive | annotated | `$params` (`:499-509`) carries 1 + count($meta_keys) + 5 values, one per `%s`; the `IN` list's placeholders come from `array_fill('%s')` (`:494`), so the count is only known at run time. Values: `int $post_id`, the declared post type and field name — no request input. |
+| 9 | `admin/RelationField.php:529` | `WordPress.DB.DirectDatabaseQuery.DirectQuery` | false positive | annotated | No WordPress API expresses a `LIKE` over serialized meta; the query only narrows candidates, verified exactly after it (`:533-`). Not security. |
+| 10 | `admin/RelationField.php:529` | `WordPress.DB.DirectDatabaseQuery.NoCaching` | false positive | annotated | An edit-screen reverse lookup must read live rows; not security. |
+| 11 | `admin/RelationField.php:529` | `WordPress.DB.PreparedSQL.NotPrepared` | false positive | annotated | `$sql` is the `$wpdb->prepare()` result of `:513`; the sniff cannot follow the variable (`docs/gate.md` read it the same way). |
 
 ## Task 3 — `MetaboxGenerator` output (37)
 
