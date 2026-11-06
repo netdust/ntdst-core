@@ -71,29 +71,29 @@ Start: `A TOTAL OF 89 ERRORS AND 20 WARNINGS WERE FOUND IN 12 FILES` · `A TOTAL
 
 | # | file:line | sniff | verdict | action | reason |
 |---|---|---|---|---|---|
-| 49 | `core/Bootstrap.php:321` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 50 | `core/Bootstrap.php:331` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 51 | `core/Bootstrap.php:420` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 52 | `core/Bootstrap.php:470` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 53 | `core/Bootstrap.php:471` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 54 | `core/Bootstrap.php:472` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 55 | `core/Bootstrap.php:579` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 56 | `core/Bootstrap.php:581` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 57 | `core/Bootstrap.php:593` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 58 | `core/Bootstrap.php:594` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 59 | `core/Bootstrap.php:798` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 60 | `core/Pages.php:306` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 61 | `core/Pages.php:306` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 62 | `core/Pages.php:446` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 63 | `core/Pages.php:506` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 64 | `core/Pages.php:765` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 65 | `core/Pages.php:766` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 66 | `api/Rest.php:1507` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 67 | `api/Rest.php:1508` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 68 | `api/Rest.php:1508` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 69 | `api/Rest.php:1509` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 70 | `api/Response.php:164` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 71 | `api/Response.php:267` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
+| 49 | `core/Bootstrap.php:321` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `_doing_it_wrong()` message; `$sector` is a `services.*` key of `plugin-config.php`. WP >= 6.4: `wp_trigger_error()` kses-filters the message (verified WP 6.8.2 `wp-includes/functions.php:6081,6105`). Statement-scoped block at `:319`. |
+| 50 | `core/Bootstrap.php:331` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | Same; `$sector`, `$entry` a listed `services.*` entry of `plugin-config.php`. Block at `:331`. |
+| 51 | `core/Bootstrap.php:420` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | Same; `$class`, `$sector` from the services list. Block at `:422`. |
+| 52 | `core/Bootstrap.php:470` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | Same; `$slug` is derived from the class name or its `metadata()['name']`, `$class`/`$sector` from the services list. Block at `:474`. |
+| 53 | `core/Bootstrap.php:471` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | Same call as #52. |
+| 54 | `core/Bootstrap.php:472` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | Same call as #52. |
+| 55 | `core/Bootstrap.php:579` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | Same; `$key` is a `services.overrides` key of `plugin-config.php`. Block at `:585`. |
+| 56 | `core/Bootstrap.php:581` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | Same call as #55. |
+| 57 | `core/Bootstrap.php:593` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | Same; `$key` as #55, `gettype()` a PHP type name. Block at `:601`. |
+| 58 | `core/Bootstrap.php:594` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | Same call as #57. |
+| 59 | `core/Bootstrap.php:798` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | Same; `$class` from the services list. Block at `:808`. |
+| 60 | `core/Pages.php:306` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive (by condition) | annotated | `$route['pattern']` is the developer's declaration. Statement-scoped block at `:301`. Ruled by the reviewer (t31), 2026-11-06. |
+| 61 | `core/Pages.php:306` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive (by condition) | annotated | `$result` is a consumer callback's return (`:280`) and MAY carry a URL `:param`, so it is safe by condition, not provenance: WP >= 6.4 `wp_trigger_error()` kses-filters the message (no script, no handlers). Exploiting it needs WP < 6.4 AND `WP_DEBUG` with display AND a callback that builds the path from a param AND a missing file; the oldest fleet site runs 6.8.2. Raw on purpose: A3 (`5a32ae1`), pinned by `NtdstPagesTest::testABadTemplatePathIsNamedRawInTheWarning`. **residual: WP < 6.4 with WP_DEBUG_DISPLAY** — for Stefan, who may overturn it to escape `$result`. Ruled by the reviewer (t31), 2026-11-06. |
+| 62 | `core/Pages.php:446` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `_doing_it_wrong()` message; `$pattern` is the developer's `path()` declaration; WP >= 6.4 kses as #49. Block at `:447`. |
+| 63 | `core/Pages.php:506` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | Same; `$variants[0]['pattern']` is the developer's declaration. Block at `:509`. |
+| 64 | `core/Pages.php:765` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | Same; `$function` is a core method name (`:320`, `:754`). Block at `:771`. |
+| 65 | `core/Pages.php:766` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | Same call; `get_debug_type()` returns a PHP type name. |
+| 66 | `api/Rest.php:1507` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `_doing_it_wrong()` in `refuse()`: `$from` is a core method name. Block at `:1506`. WP >= 6.4 kses as #49. |
+| 67 | `api/Rest.php:1508` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$why` is core's refusal text about a route DECLARATION (the 24 `refuse()` call sites in `api/Rest.php`), at most with a `callSite()` `file:line`; never request data. |
+| 68 | `api/Rest.php:1508` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | Same as #67 (the `sprintf()` branch). |
+| 69 | `api/Rest.php:1509` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$since` is a version literal of the call sites. |
+| 70 | `api/Response.php:164` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$status` is `int` by signature, printed with `%d`. Block at `:162`. |
+| 71 | `api/Response.php:267` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | A file-download body after `fileHeaders()` (`:363`; `send_nosniff_header()` `:343`, `Content-Disposition` `:350`): bytes, not HTML; escaping would corrupt the file. |
 
 ## Task 5 — exceptions and database (38)
 
