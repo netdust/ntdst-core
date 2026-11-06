@@ -29,43 +29,43 @@ Start: `A TOTAL OF 89 ERRORS AND 20 WARNINGS WERE FOUND IN 12 FILES` · `A TOTAL
 
 | # | file:line | sniff | verdict | action | reason |
 |---|---|---|---|---|---|
-| 12 | `admin/MetaboxGenerator.php:358` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 13 | `admin/MetaboxGenerator.php:377` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 14 | `admin/MetaboxGenerator.php:851` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 15 | `admin/MetaboxGenerator.php:852` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 16 | `admin/MetaboxGenerator.php:852` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 17 | `admin/MetaboxGenerator.php:867` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 18 | `admin/MetaboxGenerator.php:961` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 19 | `admin/MetaboxGenerator.php:975` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 20 | `admin/MetaboxGenerator.php:977` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 21 | `admin/MetaboxGenerator.php:978` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 22 | `admin/MetaboxGenerator.php:978` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 23 | `admin/MetaboxGenerator.php:986` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 24 | `admin/MetaboxGenerator.php:987` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 25 | `admin/MetaboxGenerator.php:987` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 26 | `admin/MetaboxGenerator.php:1004` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 27 | `admin/MetaboxGenerator.php:1008` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 28 | `admin/MetaboxGenerator.php:1008` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 29 | `admin/MetaboxGenerator.php:1008` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 30 | `admin/MetaboxGenerator.php:1013` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 31 | `admin/MetaboxGenerator.php:1013` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 32 | `admin/MetaboxGenerator.php:1013` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 33 | `admin/MetaboxGenerator.php:1026` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 34 | `admin/MetaboxGenerator.php:1026` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 35 | `admin/MetaboxGenerator.php:1026` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 36 | `admin/MetaboxGenerator.php:1027` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 37 | `admin/MetaboxGenerator.php:1031` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 38 | `admin/MetaboxGenerator.php:1038` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 39 | `admin/MetaboxGenerator.php:1067` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 40 | `admin/MetaboxGenerator.php:1067` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 41 | `admin/MetaboxGenerator.php:1068` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 42 | `admin/MetaboxGenerator.php:1074` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 43 | `admin/MetaboxGenerator.php:1074` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 44 | `admin/MetaboxGenerator.php:1075` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 45 | `admin/MetaboxGenerator.php:1138` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 46 | `admin/MetaboxGenerator.php:1621` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 47 | `admin/MetaboxGenerator.php:1689` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
-| 48 | `admin/MetaboxGenerator.php:1689` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | | | |
+| 12 | `admin/MetaboxGenerator.php:358` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$active_class` is the literal `' nav-tab-active'` or `''` (`:356`). |
+| 13 | `admin/MetaboxGenerator.php:377` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$display_style` is the literal `''` or `' style="display:none;"'` (`:376`). |
+| 14 | `admin/MetaboxGenerator.php:851` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$wrapper_attrs` is the literal `' aria-required="true"'` or `''` (`:848`). Statement-scoped block over `:854-855`. |
+| 15 | `admin/MetaboxGenerator.php:852` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$field_id_attr = esc_attr($field_id)` (`:785`). Same block as #14. |
+| 16 | `admin/MetaboxGenerator.php:852` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$label_marker` is a literal `<span>` or `''` (`:849-851`). Same block as #14. |
+| 17 | `admin/MetaboxGenerator.php:867` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$field_name_attr = esc_attr($field_name)` (`:786`); the stored value is `esc_attr()`'d inline; `LintTriageMetaboxRenderTest` 'readonly text'. |
+| 18 | `admin/MetaboxGenerator.php:961` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | `$control` is the registry entry's control name (`NTDST_FieldTypes::get()->control`), never request data; the `default` arm is a developer fault no declaration reaches. |
+| 19 | `admin/MetaboxGenerator.php:975` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$input_type` is a literal of `render_control()`'s match arms (`:951-956`: the arm keys `text`/`email`/`url`, or `'date'`/`'number'`). Method-scoped block in `control_input()` (`:981-986`). The stored value is `esc_attr()`'d inline (`:983`); `LintTriageMetaboxRenderTest` text/email/url/date/int/float/repeater cell, RED proven by removing that `esc_attr`. |
+| 20 | `admin/MetaboxGenerator.php:977` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$class` is a literal of the match arms (`:950-956`, `$line` `:948`). Same block as #19. |
+| 21 | `admin/MetaboxGenerator.php:978` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$extra` is `''`, `' step="1"'` or `' step="0.01"'` (`:951-956`). Same block as #19. |
+| 22 | `admin/MetaboxGenerator.php:978` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$required_attrs` is `render_control()`'s `$attrs`, the literal `' required aria-required="true"'` or `''` (`:944`). Same block as #19. |
+| 23 | `admin/MetaboxGenerator.php:986` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$rows` is `'2'` or `'5'` (`:991`). Statement-scoped block in `control_textarea()` (`:994-997`). Stored value `esc_textarea()`'d inline; test case 'textarea'. |
+| 24 | `admin/MetaboxGenerator.php:987` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$class` is a literal (`:992`). Same block as #23. |
+| 25 | `admin/MetaboxGenerator.php:987` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$required_attrs` literal (`:944`). Same block as #23. |
+| 26 | `admin/MetaboxGenerator.php:1004` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$nm = esc_attr($input_name)` (`:1012`). Method-scoped block in `control_checkbox()` (`:1014-1025`). No stored string is printed (`$checked` is a literal). |
+| 27 | `admin/MetaboxGenerator.php:1008` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$id = esc_attr($field_id)` (`:1011`). Same block as #26. |
+| 28 | `admin/MetaboxGenerator.php:1008` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$nm` (`:1012`). Same block as #26. |
+| 29 | `admin/MetaboxGenerator.php:1008` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$checked` is `' checked'` or `''` (`:1010`). Same block as #26. |
+| 30 | `admin/MetaboxGenerator.php:1013` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$id` (`:1011`). Same block as #26. |
+| 31 | `admin/MetaboxGenerator.php:1013` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$nm` (`:1012`). Same block as #26. |
+| 32 | `admin/MetaboxGenerator.php:1013` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$checked` (`:1010`). Same block as #26. |
+| 33 | `admin/MetaboxGenerator.php:1026` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$id = esc_attr($field_id)` (`:1035`). Method-scoped block in `control_select()` (`:1038-1053`). |
+| 34 | `admin/MetaboxGenerator.php:1026` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$nm = esc_attr($input_name)` (`:1036`). Same block as #33. |
+| 35 | `admin/MetaboxGenerator.php:1026` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$class` is a literal (`:1033`). Same block as #33. |
+| 36 | `admin/MetaboxGenerator.php:1027` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$required_attrs` literal (`:944`). Same block as #33. |
+| 37 | `admin/MetaboxGenerator.php:1031` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$selected` is `' selected'` or `''` (`:1043`); option value and label escaped inline. Same block as #33. |
+| 38 | `admin/MetaboxGenerator.php:1038` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$nm` (`:1036`); the stored value is `esc_attr()`'d inline; test case 'readonly select'. Same block as #33. |
+| 39 | `admin/MetaboxGenerator.php:1067` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$id = esc_attr($field_id)` (`:1077`). Method-scoped block in `control_json()` (`:1080-1091`). Stored value `esc_textarea()`'d inline; test case 'json'. |
+| 40 | `admin/MetaboxGenerator.php:1067` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$nm = esc_attr($input_name)` (`:1078`). Same block as #39. |
+| 41 | `admin/MetaboxGenerator.php:1068` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$required_attrs` literal (`:944`). Same block as #39. |
+| 42 | `admin/MetaboxGenerator.php:1074` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$id` (`:1077`). Same block as #39. |
+| 43 | `admin/MetaboxGenerator.php:1074` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$nm` (`:1078`). Same block as #39. |
+| 44 | `admin/MetaboxGenerator.php:1075` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$required_attrs` literal (`:944`). Same block as #39. |
+| 45 | `admin/MetaboxGenerator.php:1138` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | Every `$data_attrs` item is `esc_attr()`'d or a literal where it is built (`:1144-1151`). |
+| 46 | `admin/MetaboxGenerator.php:1621` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | `$name`, `$sub_field_name`, `$sub_type` are the developer's field declaration, never request data. Statement-scoped block around the `throw` (`:1637-1642`). |
+| 47 | `admin/MetaboxGenerator.php:1689` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$id = esc_attr($field_id)` (`:1700`). |
+| 48 | `admin/MetaboxGenerator.php:1689` | `WordPress.Security.EscapeOutput.OutputNotEscaped` | false positive | annotated | `$nm = esc_attr($input_name)` (`:1701`). |
 
 ## Task 4 — Bootstrap, Pages, Rest, Response output (23)
 
