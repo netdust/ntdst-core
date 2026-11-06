@@ -117,7 +117,7 @@ class NTDST_Container
     {
         if (isset($this->resolving[$id])) {
             $chain = implode(' -> ', array_keys($this->resolving)) . " -> {$id}";
-            throw new RuntimeException("Circular dependency detected: {$chain}");
+            throw new RuntimeException("Circular dependency detected: {$chain}"); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- $chain is the container ids being resolved (class names in code), never request data.
         }
 
         $this->resolving[$id] = true;
@@ -208,7 +208,7 @@ class NTDST_Container
         $reflection = $this->getReflection($class);
 
         if (!$reflection->isInstantiable()) {
-            throw new RuntimeException("Class {$class} is not instantiable");
+            throw new RuntimeException("Class {$class} is not instantiable"); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- $class is a container id / class name in code, never request data.
         }
 
         $constructor = $reflection->getConstructor();
@@ -256,7 +256,7 @@ class NTDST_Container
 
             $where = $parameter->getDeclaringClass()?->getName() ?? '<global>';
             $typeLabel = $type ? (string) $type : 'untyped';
-            throw new RuntimeException("Cannot resolve parameter: {$name} ({$typeLabel}) in {$where}");
+            throw new RuntimeException("Cannot resolve parameter: {$name} ({$typeLabel}) in {$where}"); // phpcs:ignore WordPress.Security.EscapeOutput.ExceptionNotEscaped -- parameter, type and class names come from Reflection of code, never request data.
         }
 
         return $dependencies;

@@ -99,41 +99,46 @@ Start: `A TOTAL OF 89 ERRORS AND 20 WARNINGS WERE FOUND IN 12 FILES` · `A TOTAL
 
 | # | file:line | sniff | verdict | action | reason |
 |---|---|---|---|---|---|
-| 72 | `core/Container.php:120` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 73 | `core/Container.php:211` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 74 | `core/Container.php:259` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 75 | `core/Theme.php:169` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 76 | `api/FieldTypes.php:97` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 77 | `api/FieldTypes.php:97` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 78 | `api/FieldTypes.php:102` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 79 | `api/FieldTypes.php:102` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 80 | `api/FieldTypes.php:253` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 81 | `api/FieldTypes.php:259` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 82 | `api/FieldTypes.php:260` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 83 | `api/FieldTypes.php:271` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 84 | `api/FieldTypes.php:272` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 85 | `api/FieldTypes.php:288` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 86 | `api/FieldTypes.php:288` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 87 | `api/FieldTypes.php:288` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 88 | `api/Data.php:447` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 89 | `api/Data.php:447` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 90 | `api/Data.php:447` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 91 | `api/Data.php:1140` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 92 | `api/Data.php:1171` | `WordPress.DB.SlowDBQuery.slow_db_query_meta_query` | | | |
-| 93 | `api/Data.php:1216` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 94 | `api/Data.php:1224` | `WordPress.DB.SlowDBQuery.slow_db_query_meta_query` | | | |
-| 95 | `api/Data.php:1254` | `WordPress.DB.SlowDBQuery.slow_db_query_meta_query` | | | |
-| 96 | `api/Data.php:1287` | `WordPress.DB.SlowDBQuery.slow_db_query_meta_query` | | | |
-| 97 | `api/Data.php:1330` | `WordPress.DB.SlowDBQuery.slow_db_query_meta_query` | | | |
-| 98 | `api/Data.php:1381` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | | | |
-| 99 | `api/Data.php:1395` | `WordPress.DB.SlowDBQuery.slow_db_query_meta_query` | | | |
-| 100 | `api/Data.php:1452` | `WordPress.DB.SlowDBQuery.slow_db_query_meta_key` | | | |
-| 101 | `api/Data.php:1476` | `WordPress.DB.SlowDBQuery.slow_db_query_tax_query` | | | |
-| 102 | `api/Data.php:1856` | `WordPress.DB.DirectDatabaseQuery.DirectQuery` | | | |
-| 103 | `api/Data.php:1856` | `WordPress.DB.DirectDatabaseQuery.NoCaching` | | | |
-| 104 | `api/Data.php:1925` | `WordPress.DB.DirectDatabaseQuery.DirectQuery` | | | |
-| 105 | `api/Data.php:1925` | `WordPress.DB.DirectDatabaseQuery.NoCaching` | | | |
-| 106 | `services/RunLog.php:59` | `WordPress.DB.DirectDatabaseQuery.DirectQuery` | | | |
-| 107 | `services/RunLog.php:59` | `WordPress.DB.DirectDatabaseQuery.NoCaching` | | | |
-| 108 | `services/RunLog.php:70` | `WordPress.DB.DirectDatabaseQuery.DirectQuery` | | | |
-| 109 | `services/RunLog.php:70` | `WordPress.DB.DirectDatabaseQuery.NoCaching` | | | |
+| 72 | `core/Container.php:120` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | `$chain` is the container ids being resolved in `resolve()` (`:116`): class names and ids in code, never request data. |
+| 73 | `core/Container.php:211` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | `$class` is a container id / class name in `resolveClass()` (`:206`). |
+| 74 | `core/Container.php:259` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | Parameter, type and class names come from Reflection of code. |
+| 75 | `core/Theme.php:169` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | `$arrayKey` is one of the literal keys of the `foreach` above it. Statement-scoped block at `:168`. |
+| 76 | `api/FieldTypes.php:97` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | `get()` (`:87`): `$name` is a DECLARED field type — every caller reads a model or metabox declaration (`admin/MetaboxGenerator.php:817,1417,1629,1957,1980`, `api/Data.php:445,1827`); the retired/known lists are the class's own tables. Block at `:95`. |
+| 77 | `api/FieldTypes.php:97` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | Same throw as #76 (`self::RETIRED[$name]`). |
+| 78 | `api/FieldTypes.php:102` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | Same block as #76. |
+| 79 | `api/FieldTypes.php:102` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | Same block as #76 (`implode()` of the table's keys). |
+| 80 | `api/FieldTypes.php:253` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | Sub-field validation: `$where`, `$name`, `$key`, `$seen`, `$type` all come from the repeater's `sub_fields` declaration. Loop-body block at `:253`. |
+| 81 | `api/FieldTypes.php:259` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | Same block as #80. |
+| 82 | `api/FieldTypes.php:260` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | Same block as #80. |
+| 83 | `api/FieldTypes.php:271` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | Same block as #80. |
+| 84 | `api/FieldTypes.php:272` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | Same block as #80. |
+| 85 | `api/FieldTypes.php:288` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | `entry()` (`:287`) rethrows `get()`'s message (#76) prefixed with `$where`, the declaration's own name. One-line ignore at `:292`. |
+| 86 | `api/FieldTypes.php:288` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | Same as #85. |
+| 87 | `api/FieldTypes.php:288` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | Same as #85. |
+| 88 | `api/Data.php:447` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | `typeFor()` (`:442`) rethrows `NTDST_FieldTypes::get()`'s message prefixed with the model's field declaration. |
+| 89 | `api/Data.php:447` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | Same as #88. |
+| 90 | `api/Data.php:447` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive | annotated | Same as #88. |
+| 91 | `api/Data.php:1140` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive (by condition) | annotated | `scope($name)` (`:1134`): `$name` is the CALLER's argument and may carry request input a consumer forwards. Safe by condition: an uncaught exception is shown only with `display_errors` on, and PHP escapes it unless `html_errors` is off (reviewer verified on PHP 8.3, `php -S`). **residual: display_errors on with html_errors off + consumer forwards request input** — for Stefan. Block at `:1139`. Ruled by the reviewer (t31), 2026-11-06. |
+| 92 | `api/Data.php:1171` | `WordPress.DB.SlowDBQuery.slow_db_query_meta_query` | false positive | annotated | By design: `where()` (`:1156`) is the data layer's meta query door; `WP_Query` runs it. Performance, not security. |
+| 93 | `api/Data.php:1216` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive (by condition) | annotated | `whereNot($field)` (`:1191`): same as #91. **residual: display_errors on with html_errors off + consumer forwards request input.** Block at `:1217`. Ruled by the reviewer (t31). |
+| 94 | `api/Data.php:1224` | `WordPress.DB.SlowDBQuery.slow_db_query_meta_query` | false positive | annotated | By design: `whereNot()` (`:1191`). As #92. |
+| 95 | `api/Data.php:1254` | `WordPress.DB.SlowDBQuery.slow_db_query_meta_query` | false positive | annotated | By design: `whereIn()` (`:1251`). As #92. |
+| 96 | `api/Data.php:1287` | `WordPress.DB.SlowDBQuery.slow_db_query_meta_query` | false positive | annotated | By design: `whereNotIn()` (`:1285`). As #92. |
+| 97 | `api/Data.php:1330` | `WordPress.DB.SlowDBQuery.slow_db_query_meta_query` | false positive | annotated | By design: `whereMissing()` (`:1331`). As #92. |
+| 98 | `api/Data.php:1381` | `WordPress.Security.EscapeOutput.ExceptionNotEscaped` | false positive (by condition) | annotated | `whereGroup($relation)` (`:1379`): same as #91. **residual: display_errors on with html_errors off + consumer forwards request input.** Block at `:1384`. Ruled by the reviewer (t31). |
+| 99 | `api/Data.php:1395` | `WordPress.DB.SlowDBQuery.slow_db_query_meta_query` | false positive | annotated | By design: `whereGroup()` (`:1379`). As #92. |
+| 100 | `api/Data.php:1452` | `WordPress.DB.SlowDBQuery.slow_db_query_meta_key` | false positive | annotated | By design: `orderBy()` (`:1429`) on a meta field is the data layer's meta ordering. |
+| 101 | `api/Data.php:1476` | `WordPress.DB.SlowDBQuery.slow_db_query_tax_query` | false positive | annotated | By design: `whereTax()` (`:1479`) is the data layer's taxonomy query door. |
+| 102 | `api/Data.php:1856` | `WordPress.DB.DirectDatabaseQuery.DirectQuery` | false positive | annotated | `readPostMeta()` (`:1848`): the cold-cache fallback behind core's `post_meta` cache (`:1850`); prepared with `%d`. Ignore at `:1862`. |
+| 103 | `api/Data.php:1856` | `WordPress.DB.DirectDatabaseQuery.NoCaching` | false positive | annotated | Same; caching it would be a second cache core does not invalidate (T04). |
+| 104 | `api/Data.php:1925` | `WordPress.DB.DirectDatabaseQuery.DirectQuery` | false positive | annotated | `readPostTerms()` (`:1887`): the cold-cache fallback behind core's `{$taxonomy}_relationships` cache (`:1900`); prepared with `%d`. Ignore at `:1932`. |
+| 105 | `api/Data.php:1925` | `WordPress.DB.DirectDatabaseQuery.NoCaching` | false positive | annotated | Same as #103. |
+| 106 | `services/RunLog.php:59` | `WordPress.DB.DirectDatabaseQuery.DirectQuery` | false positive | annotated | `acquireLock()` (`:55`): `SELECT GET_LOCK()`, a MySQL advisory lock — touches no table. |
+| 107 | `services/RunLog.php:59` | `WordPress.DB.DirectDatabaseQuery.NoCaching` | false positive | annotated | A lock answer must never be cached. |
+| 108 | `services/RunLog.php:70` | `WordPress.DB.DirectDatabaseQuery.DirectQuery` | false positive | annotated | `releaseLock()` (`:67`): `SELECT RELEASE_LOCK()`, touches no table. |
+| 109 | `services/RunLog.php:70` | `WordPress.DB.DirectDatabaseQuery.NoCaching` | false positive | annotated | Never cacheable. |
+
+## Totals
+
+109 findings: **0 real**, **109 annotated** — 104 false positives by provenance or design, 5 false positives by condition (#60/#61 — one statement, #91/#93/#98), ruled by the reviewer (t31) and carried to Stefan as residuals.
+End: `composer lint` exit 0, `errors=0 warnings=0` (`vendor/bin/phpcs --report=json`).
