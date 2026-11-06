@@ -41,10 +41,11 @@ would have buried the diffs that mattered. It wanted its own pass, and got it in
 5.7.1 (`specs/core-lint-gate`): PSR-12 was dropped (style, never security; core's
 global `NTDST_*` class names are deliberate), which left **109** findings (89
 errors, 20 warnings, 12 files). Each has one row in
-`specs/core-lint-gate/triage.md`: **0 real, 109 annotated** — 104 false positives
-by provenance or design (pre-escaped locals, literals, developer declarations,
-the data layer's meta queries, the advisory lock), 5 false positives by
-condition (a consumer value that reaches a debug-only message; named as residuals).
+`specs/core-lint-gate/triage.md`: **5 real, fixed** — a consumer value reaching a
+debug-only message raw (the page router's bad-path warning, the query builder's
+refusals), now `esc_html()`'d — and **104 false positives, annotated** by
+provenance or design (pre-escaped locals, literals, developer declarations,
+the data layer's meta queries, the advisory lock).
 Lint then joined `gate`. The 2026-08-20 first look, kept for the record:
 
 - `WordPress.Security.ValidatedSanitizedInput` ×17 — mostly `$_SERVER` reads

@@ -45,6 +45,10 @@ may also be a WordPress ability: `'ability' => [...]`, see `### 5.5.0`.
 
 ## Versions
 
+### 5.7.1 — security lint in the gate
+
+Patch. `^5.7` consumers upgrade without a code change. `composer gate` now runs a security-only phpcs lint (INV-13: a false positive is annotated in the source, never excluded). Two messages now escape a value a consumer may fill from a request: the page router's bad-path warning names the returned path escaped (a path holding `<>&"'` shows entities, an ordinary path reads as before), and the query builder's `scope()`, `whereGroup()` and `whereNot()` refusals escape the argument they name.
+
 ### 5.7.0 — one door for scheduled jobs
 
 Additive. `^5.6` consumers upgrade without a code change.

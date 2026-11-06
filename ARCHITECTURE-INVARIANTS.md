@@ -49,7 +49,7 @@ field, and `registerRestMeta()` needs no per-field `try/catch`.
 `api/Data.php`; a route handler returning a row or `getMeta()` bag without
 projecting through `restFields()`; any `public_fields` / `public_shape` /
 `PUBLIC_SHAPE`-style allow-list; a `private`, `hidden` or `exposed` key on a field.
-**Mechanical check:** `grep -rn "register_post_meta\|register_meta(" --include=*.php . | grep -vE "^(\./)?api/Data\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → empty. (The trailing filter drops COMMENT lines: prose may name `register_post_meta()` — `api/FieldTypes.php` says the sanitizer must be idempotent because that function runs it again — and a docblock is not a second caller.) (The `-E` form and the optional `./` are load-bearing: GNU grep prints `./api/Data.php` but ugrep prints `api/Data.php`, so an anchored `^./` exclusion silently matched nothing and the check passed for the wrong reason.) Second: `grep -rn "show_in_rest" --include=*.php api/Data.php` → ten hits, and every one is `declaresRest()` itself (`:122`, the ONE reader), a docblock (`:128`, `:1932`), a WARNING STRING that names the key it is telling the author about (`:223`, `:266`, `:1955`, `:2075` — four literals, none of them a test), or an ARG being written to `register_post_meta()` / `register_taxonomy()` (`:206`, `:2127`). The tenth is `:2071`, the post-type read named under exceptions. No second READER of the declaration. `grep -rn "public_fields\|public_shape\|publicRow" --include=*.php . | grep -vE "(^|/)vendor/|(^|/)tests/"` → empty. (`tests/` is excluded for a reason, not for convenience: `tests/Unit/DataDropsExposureTest.php` is the test that ENFORCES this ban, and it has to name the banned vocabulary in order to forbid it. Without the exclusion the check reports its own enforcement as the violation.) The `show_in_rest` check has one hit that is NOT about a field: `NTDST_Data_Manager::register()` reads `$args['show_in_rest']` of the POST TYPE, to warn when a declaration can reach no route. That is a different key on a different thing, not a second reader.
+**Mechanical check:** `grep -rn "register_post_meta\|register_meta(" --include=*.php . | grep -vE "^(\./)?api/Data\.php|(^|/)vendor/|(^|/)tests/" | grep -vE "^[^:]+:[0-9]+: *(\*|//|/\*)"` → empty. (The trailing filter drops COMMENT lines: prose may name `register_post_meta()` — `api/FieldTypes.php` says the sanitizer must be idempotent because that function runs it again — and a docblock is not a second caller.) (The `-E` form and the optional `./` are load-bearing: GNU grep prints `./api/Data.php` but ugrep prints `api/Data.php`, so an anchored `^./` exclusion silently matched nothing and the check passed for the wrong reason.) Second: `grep -rn "show_in_rest" --include=*.php api/Data.php` → ten hits, and every one is `declaresRest()` itself (`:122`, the ONE reader), a docblock (`:128`, `:2245`), a WARNING STRING that names the key it is telling the author about (`:232`, `:275`, `:2268`, `:2395` — four literals, none of them a test), or an ARG being written to `register_post_meta()` / `register_taxonomy()` (`:215`, `:2447`). The tenth is `:2391`, the post-type read named under exceptions. No second READER of the declaration. `grep -rn "public_fields\|public_shape\|publicRow" --include=*.php . | grep -vE "(^|/)vendor/|(^|/)tests/"` → empty. (`tests/` is excluded for a reason, not for convenience: `tests/Unit/DataDropsExposureTest.php` is the test that ENFORCES this ban, and it has to name the banned vocabulary in order to forbid it. Without the exclusion the check reports its own enforcement as the violation.) The `show_in_rest` check has one hit that is NOT about a field: `NTDST_Data_Manager::register()` reads `$args['show_in_rest']` of the POST TYPE, to warn when a declaration can reach no route. That is a different key on a different thing, not a second reader.
 **Deliberate exceptions:**
 - A model with no `label` registers no post type and therefore no meta, and warns once per model.
 - A post type that is not itself in REST (`show_in_rest` absent or false) still registers its meta — WordPress emits none of it — and warns once per model.
@@ -63,7 +63,11 @@ All three commands re-run verbatim at `9fdad3d`, the code this doc describes:
 them; (3) EMPTY — no `public_fields`, `public_shape` or `publicRow` survives
 outside the test that forbids the vocabulary. Earlier pins: `42d7090` (the code),
 `96560c5` (the checks). Re-run verbatim at `85b54cb` (T14, pre-tag release
-commit): identical — EMPTY, TEN hits at the same ten lines, EMPTY.
+commit): identical — EMPTY, TEN hits at the same ten lines, EMPTY. Re-run verbatim
+at 5.7.1 (core-lint-gate, after its review fixes; the enumeration had drifted
+before that branch): EMPTY; TEN hits with the same roles at `:122`, `:128`,
+`:215`, `:232`, `:275`, `:2245`, `:2268`, `:2391`, `:2395`, `:2447`, no second
+READER; EMPTY.
 
 ## INV-2 — One HTTP surface: every route registers through `ntdst_rest()`
 
@@ -393,7 +397,11 @@ identical — same NINE hits at the same lines, and the guard-order pair
 throttle converges on it (`ntdst-baseline` `51f7e2e`). Re-run verbatim at 5.5.0
 (`824ef7c`, abilities-bridge): the same NINE hits (MetaboxGenerator's three now at
 `:2071`, `:2113`, `:2123`), and in `guard()` `$permission($request)` at
-`api/Rest.php:1314` precedes `NTDST_RateLimiter::attempt` at `:1335`.
+`api/Rest.php:1314` precedes `NTDST_RateLimiter::attempt` at `:1335`. Re-run
+verbatim at 5.7.1 (core-lint-gate, after its review fixes; its source annotations
+moved the lines): the same NINE hits — `support/RateLimiter.php` `:161`, `:216`,
+`:223`, `:226`, `:244`, `:251` unchanged, MetaboxGenerator's three now at
+`:2093`, `:2135`, `:2145` — and the guard-order pair (`:1314`, `:1335`) unchanged.
 
 ## INV-8 — One field-type vocabulary; a type name resolves in one table
 
@@ -617,7 +625,7 @@ namespace to build a path, `require_once`'d a `*Service.php` glob under
 writable directory on that list was code execution.
 
 **Convergence point:** `core/Bootstrap.php::registerService()`. `class_exists()`
-is the whole admission test (`:408`), after a legal-class-name check that runs
+is the whole admission test (`:412`), after a legal-class-name check that runs
 BEFORE it because `class_exists()` hands the string it was given to every
 registered autoloader. A refusal is one `_doing_it_wrong()` naming the class and
 the sector, plus an error-level log line — `_doing_it_wrong()` is `WP_DEBUG`-
@@ -654,8 +662,8 @@ grep -rn "ntdst_set(" --include=*.php api core admin services support ntdst-core
 unordered pair; grep prints the files in the order it was given them, and a
 reader checking a fixed order is checking the argument list. (2) is empty. (3) is
 `core/Bootstrap.php`, one file. (4) has one call that takes a class —
-`core/Bootstrap.php:501` — and the only gate reached before it is
-`class_exists()` at `:408`; the other hits are `core/Container.php`'s own
+`core/Bootstrap.php:509` — and the only gate reached before it is
+`class_exists()` at `:412`; the other hits are `core/Container.php`'s own
 declaration and docblock examples, `core/Theme.php:58` registering an
 instance of itself, which guesses nothing, and the two in
 `services/CronRegistry.php` (`:285-286`, the registry and the run log, bound at
@@ -671,7 +679,7 @@ checkout with no vendor/ and no PHP run, and it names the shape in a line a
 reviewer can read.
 
 **Deliberate exceptions:**
-- **`basename(str_replace('\\', '/', $class))`** (`core/Bootstrap.php:835`)
+- **`basename(str_replace('\\', '/', $class))`** (`core/Bootstrap.php:849`)
   derives the short NAME for the slug, never a path. It is fed to the config
   filter key, not to `require`.
 - **`core/Container.php`'s `new $class`** is a variable class name and it is
@@ -695,7 +703,12 @@ at core-cron-seam Task 4 (on `26447fc` plus the INV-12 guard line): (1) `0` and 
 calls, and `core/Container.php`'s declaration and docblock examples. Re-run
 verbatim after the review's fix pass, which moved the two bindings from the
 `ntdst/services_registered` listener to file scope: the same four answers, the two
-`services/CronRegistry.php` calls now at `:285-286`. Earlier pin `96560c5`,
+`services/CronRegistry.php` calls now at `:285-286`. Re-run verbatim at 5.7.1
+(core-lint-gate, after its review fixes; its source annotations moved the lines):
+(1) `0` and `0`; (2) EMPTY; (3) `core/Bootstrap.php`; (4) the gated
+`ntdst_set($class)` now at `core/Bootstrap.php:509` behind `class_exists()` at
+`:412`, `core/Theme.php:58`, `services/CronRegistry.php:285-286`, and
+`core/Container.php`'s declaration and docblock examples. Earlier pin `96560c5`,
 with the same four answers. (2) was also run
 against a scratch file holding the exact line 5.0.0 deleted,
 `$relativePath = str_replace('\\', '/', $class) . '.php';` — one hit.

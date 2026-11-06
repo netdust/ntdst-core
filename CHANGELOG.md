@@ -6,12 +6,16 @@ section before a MAJOR bump.
 
 ## 5.7.1
 
-No behaviour change. `^5.7` consumers upgrade without a code change.
+`^5.7` consumers upgrade without a code change.
+
+### Fixed
+- The page router's bad-path warning (`_doing_it_wrong()` when a `path()` callback returns a string that is not a file) now escapes the returned path. A callback may build that path from a URL `:param`. What you see: a path holding `<`, `>`, `&`, `"` or `'` now shows those characters as entities; an ordinary path reads exactly as before.
+- The query builder's refusals escape the caller's argument they name: an unknown `scope()` name, a `whereGroup()` relation that is not AND/OR, and a `whereNot()` core field. A consumer may forward request input into these, and an uncaught exception is printed by `display_errors`.
 
 ### Changed
 - Security lint is part of `composer gate`: `syntax`, `lint`, `test`, `guard`, `audit:deps`. `phpcs.xml` is security-only — `WordPress.Security`, `WordPress.DB`, `PHPCompatibilityWP`; PSR-12 is dropped.
-- The 109 findings it reported are triaged one row each in `specs/core-lint-gate/triage.md`: no real hole, 109 false positives annotated in the source with their reason (`phpcs:ignore` / scoped `phpcs:disable`, each naming its sniff). No escaping fix was needed.
-- INV-13: the lint is never widened to get green — a false positive is annotated in the source, never excluded in `phpcs.xml`.
+- The 109 findings it reported are triaged one row each in `specs/core-lint-gate/triage.md`: 5 real (the two fixes above), 104 false positives annotated in the source with their reason (`phpcs:ignore` / scoped `phpcs:disable`, each naming its sniff).
+- INV-13: the lint is never widened to get green — a false positive is annotated in the source, never excluded or silenced in `phpcs.xml`, a second ruleset or the `lint` script. `bin/guard.sh` runs its five checks.
 - A render test pins that a hostile stored value (`<b>&"x`) renders escaped exactly once on every metabox control that prints a stored string.
 
 ## 5.7.0
