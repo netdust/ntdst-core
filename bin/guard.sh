@@ -295,6 +295,25 @@ if [ -n "$CRON_DOORS" ]; then
     exit 1
 fi
 
+# INV-13: the lint is never widened to get green. phpcs.xml is the one ruleset;
+# a false positive is annotated in the source, never silenced here.
+LINT_WIDENED=$(grep -nE '<exclude|<severity>|<properties>|<arg name="(exclude|sniffs|severity|error-severity|warning-severity)"|<arg value="[^"]*n[^"]*"' phpcs.xml || true)
+LINT_SHAPE=$(grep -oE '<rule ref="[^"]+"|<file>[^<]+</file>|<config name="[^"]+" value="[^"]+"' phpcs.xml | sort | tr '\n' ' ')
+LINT_SHAPE_WANT='<config name="testVersion" value="8.1-" <file>admin</file> <file>api</file> <file>core</file> <file>ntdst-core.php</file> <file>services</file> <file>support</file> <rule ref="PHPCompatibilityWP" <rule ref="WordPress.DB" <rule ref="WordPress.Security" '
+LINT_RULESETS=$(ls -a | grep -cE '^\.?phpcs\.xml(\.dist)?$' || true)
+LINT_SCRIPT=$(grep -oE '"lint": *"phpcs[^"]*"' composer.json || true)
+LINT_BARE=$(grep -rnE 'phpcs:(ignoreFile|(ignore|disable)( *$| *--))' --include=*.php api core admin services support ntdst-core.php || true)
+if [ -n "$LINT_WIDENED" ] || [ "$LINT_SHAPE" != "$LINT_SHAPE_WANT" ] || [ "$LINT_RULESETS" != "1" ] \
+    || [ "$LINT_SCRIPT" != '"lint": "phpcs"' ] || [ -n "$LINT_BARE" ]; then
+    echo "The lint is widened or silenced (INV-13):"
+    [ -n "$LINT_WIDENED" ] && echo "phpcs.xml: $LINT_WIDENED"
+    [ "$LINT_SHAPE" != "$LINT_SHAPE_WANT" ] && echo "phpcs.xml rules/files/testVersion: $LINT_SHAPE"
+    [ "$LINT_RULESETS" != "1" ] && echo "rulesets at the root: $LINT_RULESETS (phpcs.xml only)"
+    [ "$LINT_SCRIPT" != '"lint": "phpcs"' ] && echo "composer.json lint script: ${LINT_SCRIPT:-missing}"
+    [ -n "$LINT_BARE" ] && echo "an annotation with no sniff or no reason: $LINT_BARE"
+    exit 1
+fi
+
 # v5.0.0 core-trim: PER-FILE METHOD PINS. This table is the home for every
 # "this file must not declare this method again" rule — add a row here rather
 # than a new grep block. Each entry keeps its own rationale above it.
