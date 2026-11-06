@@ -527,7 +527,7 @@ final class NTDST_RelationField
             $params,
         );
         // phpcs:enable WordPress.DB.PreparedSQL.InterpolatedNotPrepared
-        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- $sql is the $wpdb->prepare() result above; no WP API expresses a LIKE over serialized meta, and an edit-screen reverse lookup must read live rows.
+        // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- $sql is the $wpdb->prepare() result above. Direct because WP_Query's meta_query LIKE wraps % on both sides, so the anchored JSON patterns cannot be stated, and it would take N keys x 5 OR-joined clauses for one DISTINCT statement; uncached because an edit-screen reverse lookup must read live rows.
         $candidates = $wpdb->get_results($sql) ?: [];
 
         // Exact verification — guards against a LIKE false positive (ID 6

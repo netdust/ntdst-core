@@ -1859,7 +1859,7 @@ class NTDST_Data_Model
         }
 
         global $wpdb;
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- the cold-cache fallback behind core's post_meta cache read above; prepared with %d; caching it here would be a second cache core does not invalidate (T04).
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- the cold-cache fallback behind core's post_meta cache read above; prepared with %d. Not cached, by T04's rule (docblock above): the layer stores nothing of its own and leaves WordPress's caches as WordPress primes them, so update_meta_cache('post', [$post_id]) is deliberately not called.
         $results = $wpdb->get_results($wpdb->prepare(
             "SELECT meta_key, meta_value FROM {$wpdb->postmeta} WHERE post_id = %d",
             $post_id,
@@ -1929,7 +1929,7 @@ class NTDST_Data_Model
         }
 
         global $wpdb;
-        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- the cold-cache fallback behind core's {$taxonomy}_relationships cache read above; prepared with %d; caching it here would be a second cache core does not invalidate (T04).
+        // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- the cold-cache fallback behind core's {$taxonomy}_relationships cache read above; prepared with %d. Not cached, by T04's rule (docblock above): the layer stores nothing of its own and leaves WordPress's caches as WordPress primes them, so update_object_term_cache([$post_id], $post_type) is deliberately not called.
         $results = $wpdb->get_results($wpdb->prepare(
             "SELECT t.term_id, t.name, t.slug, tt.taxonomy
              FROM {$wpdb->term_relationships} tr
