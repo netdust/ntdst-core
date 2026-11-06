@@ -298,14 +298,13 @@ class NTDST_Pages
                 return;
             }
 
-            // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $result is a consumer callback's return and may carry a URL :param; safe by condition: WP >= 6.4: wp_trigger_error() kses-filters the message (residual: WP < 6.4 with WP_DEBUG_DISPLAY; raw on purpose, A3 5a32ae1).
+            // phpcs:disable WordPress.Security.EscapeOutput.OutputNotEscaped -- $route['pattern'] is the developer's path() declaration; $result is esc_html()'d below.
             _doing_it_wrong(
                 __CLASS__ . '::path',
-                // Raw: _doing_it_wrong() runs wp_kses_post() on the message
-                // itself, and every other call site in this package hands it
-                // the raw string. Escaping first double-escapes the one path
-                // the developer has to recognise (A3).
-                'the route for "' . $route['pattern'] . '" returned "' . $result
+                // $result may carry a URL :param, so it is escaped. WordPress's
+                // wp_kses() (notice allow-list: a[href], br, code, em, strong)
+                // keeps valid entities, so a plain path still reads as itself.
+                'the route for "' . $route['pattern'] . '" returned "' . esc_html($result)
                     . '", which is not a file that exists. Build the path with '
                     . 'NTDST_Template_Loader::page() / ::locate(), which return null when the template is missing.',
                 '5.0.0',

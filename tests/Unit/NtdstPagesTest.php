@@ -372,13 +372,14 @@ final class NtdstPagesTest extends TestCase
         $this->assertNull($this->templateIncludeFilter());
     }
 
-    public function testABadTemplatePathIsNamedRawInTheWarning(): void
+    public function testABadTemplatePathIsNamedEscapedInTheWarning(): void
     {
-        // A3. The path in the message is a value the CALLBACK produced — and
-        // it is handed over RAW. _doing_it_wrong() runs wp_kses_post() on the
-        // message itself before it prints, so escaping first double-escapes
-        // the one string the developer has to recognise. Every other
-        // _doing_it_wrong() in this package passes its raw string too.
+        // The path is a value the CALLBACK produced, and a callback may build
+        // it from a URL :param, so it is escaped. WordPress runs the message
+        // through wp_kses() with the notice allow-list (a[href], br, code, em,
+        // strong), which keeps valid entities: a plain path reads unchanged,
+        // and only a path holding <>&"' shows entities. (Replaces A3's raw rule,
+        // core-lint-gate review, Stefan 2026-11-06.)
         $GLOBALS['wp_query'] = new class {
             public function set_404(): void {}
         };
@@ -389,12 +390,12 @@ final class NtdstPagesTest extends TestCase
         $this->dispatch($pages, 0, 'GET', ['slug' => 'ace-of-cups']);
 
         $this->assertNotSame([], $this->wrong);
+        $this->assertStringNotContainsString('<script>', $this->wrong[0][1], 'a callback value reaches the warning escaped.');
         $this->assertStringContainsString(
-            '/no/such/<script>x</script>.php',
+            '/no/such/&lt;script&gt;x&lt;/script&gt;.php',
             $this->wrong[0][1],
-            'the message names the path the callback returned; WordPress escapes it.',
+            'the message still names the path the callback returned, escaped once.',
         );
-        $this->assertStringNotContainsString('&lt;script&gt;', $this->wrong[0][1]);
     }
 
     /** What templateFrom() says for the same fault, read back from the template filter. */

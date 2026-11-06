@@ -89,6 +89,8 @@ final class DataModelWhereGroupTest extends TestCase
             static fn($args, $defaults = []) => array_merge((array) $defaults, (array) $args),
         );
         Functions\when('is_wp_error')->alias(static fn($v) => $v instanceof WP_Error);
+        // A refused relation is named in the message, escaped.
+        Functions\when('esc_html')->alias(static fn($t) => htmlspecialchars((string) $t, ENT_QUOTES));
     }
 
     protected function tearDown(): void

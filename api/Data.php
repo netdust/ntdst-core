@@ -1136,9 +1136,9 @@ class NTDST_Data_Model
         $scope = $this->scopes[$name] ?? NTDST_Data_Manager::getScope($name);
 
         if (!is_callable($scope)) {
-            // phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- $name is the caller's argument and may carry request input a consumer forwards; safe by condition: shown only with display_errors on, and escaped unless html_errors is off (residual).
+            // phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- the caller's $name is esc_html()'d; $this->post_type is the model's registered name.
             throw new InvalidArgumentException(
-                "Unknown query scope '{$name}' on '{$this->post_type}'. Declare it in the "
+                "Unknown query scope '" . esc_html($name) . "' on '{$this->post_type}'. Declare it in the "
                 . "model's 'scopes' config, or register it globally via "
                 . 'NTDST_Data_Manager::addScope().',
             );
@@ -1214,9 +1214,9 @@ class NTDST_Data_Model
                 // Other core fields - WP_Query doesn't support != for these
                 // Throw exception to fail loudly rather than silently returning wrong results
                 $this->query_args = [];
-                // phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- $field is the caller's argument and may carry request input a consumer forwards; safe by condition: shown only with display_errors on, and escaped unless html_errors is off (residual).
+                // phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- $field is esc_html()'d (it is also one of $core_fields above).
                 throw new \InvalidArgumentException(
-                    "whereNot() does not support negation for core field '{$field}'. "
+                    "whereNot() does not support negation for core field '" . esc_html($field) . "'. "
                     . "Supported fields: post_status, post_author, post_parent. "
                     . "For other fields, use a custom meta field or filter results in PHP.",
                 );
@@ -1381,9 +1381,9 @@ class NTDST_Data_Model
         $relation = strtoupper($relation);
 
         if (!in_array($relation, ['AND', 'OR'], true)) {
-            // phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- $relation is the caller's argument and may carry request input a consumer forwards; safe by condition: shown only with display_errors on, and escaped unless html_errors is off (residual).
+            // phpcs:disable WordPress.Security.EscapeOutput.ExceptionNotEscaped -- the caller's $relation is esc_html()'d.
             throw new InvalidArgumentException(
-                "whereGroup() relation must be AND or OR, '{$relation}' given.",
+                "whereGroup() relation must be AND or OR, '" . esc_html($relation) . "' given.",
             );
             // phpcs:enable WordPress.Security.EscapeOutput.ExceptionNotEscaped
         }
